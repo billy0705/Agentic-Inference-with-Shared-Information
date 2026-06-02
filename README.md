@@ -8,17 +8,42 @@ The prototype intentionally does not use AutoGen.
 
 LangGraph is used for the workflow lifecycle:
 
-1. The orchestrator creates a plan and worker assignments.
-2. The multi-agent runtime starts concurrent workers.
-3. The synthesizer combines worker outputs and the event log into a final answer.
+1. The orchestrator classifies the task and creates a structured plan.
+2. Simple tasks route to a one-shot direct answer node.
+3. Multi-agent tasks start only the selected concurrent workers.
+4. The synthesizer combines worker outputs and the event log into a final answer.
 
 The graph shape is:
 
 ```text
-START -> orchestrator -> run_multi_agent_runtime -> synthesizer -> END
+START -> orchestrator -> direct_answer -> END
+                    \-> run_multi_agent_runtime -> synthesizer -> END
 ```
 
 This follows the orchestrator-worker style conceptually: the orchestrator assigns work, workers execute concurrently, and the final node synthesizes results.
+
+## Dynamic Orchestration
+
+The orchestrator no longer always starts every agent. It classifies the task as one of:
+
+- `simple_qa`
+- `calculation`
+- `coding_project`
+- `debugging_task`
+- `research_project`
+- `writing_task`
+- `architecture_design`
+- `unknown`
+
+The plan includes `mode`, `task_type`, `reason`, and `assignments`. If `mode` is `direct`, the graph skips worker startup. If `mode` is `multi_agent`, the runtime constructs only the assigned agents from `AGENT_REGISTRY`.
+
+Examples:
+
+- Simple Q&A: direct answer, no agents.
+- Calculation: `SolverAgent`, `VerifierAgent`.
+- Coding project: `ResearchAgent`, `CodingAgent`, optionally `CriticAgent`.
+- Debugging task: `CodingAgent`, `CriticAgent`.
+- Research project: `ResearchAgent`, optionally `CriticAgent`.
 
 ## Why Ollama and qwen3:4b
 
@@ -40,7 +65,7 @@ uv run python -m multi_agent_sync --model llama3.2 "Build a prototype chess webs
 
 Each agent has its own assigned subtask and runs several local LLM steps. After each step, it may publish a useful finding. Other agents subscribe to the event streamer and can include those findings in later prompts.
 
-Example flow:
+Example multi-agent flow:
 
 1. `ResearchAgent` publishes that real-time chess needs move synchronization.
 2. `CodingAgent` receives that event during its own run and may use it in a later step.
@@ -99,11 +124,13 @@ Redis Streams or NATS can follow the same pattern: map `event_type` to a stream/
 
 ## Agents
 
-The prototype includes three workers:
+The prototype includes five possible workers:
 
 - `ResearchAgent`: investigates architecture, assumptions, options, and constraints.
 - `CodingAgent`: plans modules, APIs, dependencies, and implementation shape.
 - `CriticAgent`: reviews findings for risks, race conditions, missing cases, and safety issues.
+- `SolverAgent`: solves math, science, physics, calculation, and direct reasoning problems.
+- `VerifierAgent`: checks numerical correctness, unit conversion, assumptions, contradictions, and overclaiming.
 
 Each agent:
 
@@ -116,18 +143,46 @@ Each agent:
 - limits observed events with `max_events_per_agent`
 - publishes `agent_started`, findings or critiques, and `agent_done`
 
+## Traces
+
+`TraceLogger` is separate from `EventStreamer`.
+
+`EventStreamer` is for runtime communication between agents. `TraceLogger` is for debugging and experiment analysis. It records each agent step with:
+
+- inbox events available to the step
+- full prompt
+- raw LLM response
+- parsed output
+- events published by that step
+- timing data
+
+Full prompts and raw responses are not published to the event stream.
+
+## Run Artifacts
+
+Each CLI run saves artifacts under:
+
+```text
+runs/<timestamp>/
+  task.txt
+  final_answer.md
+  event_log.jsonl
+  agent_traces.json
+  orchestrator_plan.json
+```
+
 ## Console Streaming
 
 The console streamer subscribes to all events and prints them while the run is active:
 
 ```text
 [0000.10] [task_started] coordinator: Build a prototype chess website
-[0001.20] [plan_created] orchestrator: Created 3 subtasks
+[0001.20] [plan_created] orchestrator: mode=multi_agent, task_type=coding_project, selected_agents=ResearchAgent,CodingAgent,CriticAgent
 [0001.30] [agent_started] ResearchAgent: Researching architecture choices
 [0002.10] [finding] ResearchAgent: Real-time chess needs move synchronization
 [0002.30] [message_received] CodingAgent: received finding from ResearchAgent
 [0003.50] [critique] CriticAgent: Need server-side move validation
-[0005.00] [final_summary] Synthesizer: ...
+[0005.00] [final_summary] Synthesizer: Final answer generated.
 ```
 
 Events are not buffered until the end; they stream as subscribers receive them.
@@ -173,7 +228,7 @@ Tests use fake LLMs, so they do not require an Ollama server.
 - The streamer is in-memory and process-local.
 - There is no real Kafka, Redis Streams, or NATS integration yet.
 - There is no web UI.
-- The orchestrator uses a fixed three-agent assignment pattern.
+- The orchestrator classifier is deterministic and heuristic-based.
 - LLM output parsing is intentionally simple.
 - Terminal streaming is best-effort and depends on async callback scheduling.
 - The final CLI demo requires Ollama to be running and the selected model to be available locally.

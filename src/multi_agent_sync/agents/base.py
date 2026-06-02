@@ -17,6 +17,14 @@ class StepResult:
     confidence: float = 0.7
     local_notes: str = ""
 
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "summary": self.summary,
+            "share_finding": self.share_finding,
+            "confidence": self.confidence,
+            "local_notes": self.local_notes,
+        }
+
 
 @dataclass(kw_only=True)
 class BaseAgent:
@@ -27,8 +35,10 @@ class BaseAgent:
     assigned_subtask: str
     llm: Any
     event_streamer: EventStreamer
+    assignment: dict[str, Any] | None = None
+    trace_logger: Any | None = None
     max_steps: int = 3
-    max_runtime_seconds: float = 30.0
+    max_runtime_seconds: float = 180.0
     max_events_per_agent: int = 50
     step_delay_seconds: float = 0.2
     seen_event_ids: set[str] = field(default_factory=set)
@@ -38,6 +48,7 @@ class BaseAgent:
     local_output: str = ""
     is_done: bool = False
     _subscribed: bool = False
+    _last_step_trace_data: dict[str, Any] = field(default_factory=dict)
 
     def subscribe(self) -> None:
         if self._subscribed:
@@ -75,6 +86,8 @@ class BaseAgent:
 
     async def run(self) -> str:
         self.subscribe()
+        if self.trace_logger is not None:
+            self.trace_logger.start_agent(self.name, self.assignment or self._default_assignment())
         started_at = time.monotonic()
         await self.publish_event("agent_started", self.assigned_subtask)
 
@@ -88,24 +101,42 @@ class BaseAgent:
                 self.local_notes.append(result.summary)
             if result.local_notes:
                 self.local_notes.append(result.local_notes)
+            published_events: list[AgentEvent] = []
             if result.share_finding:
-                await self.publish_finding(result.share_finding, confidence=result.confidence, step_index=step_index)
+                published_events.append(
+                    await self.publish_finding(result.share_finding, confidence=result.confidence, step_index=step_index)
+                )
+            self._log_step_trace(step_index, result, published_events)
             await self.event_streamer.drain(timeout=0.5)
             await asyncio.sleep(self.step_delay_seconds)
 
         self.local_output = "\n".join(self.local_notes).strip()
         self.is_done = True
         await self.publish_done(self.local_output)
+        if self.trace_logger is not None:
+            self.trace_logger.finish_agent(self.name, self.local_output)
         return self.local_output
 
     async def run_step(self, step_index: int) -> StepResult:
-        prompt = await self.build_prompt(step_index)
+        started_at = time.time()
+        relevant_events = await self.get_relevant_events(limit=8)
+        prompt = await self.build_prompt(step_index, relevant_events=relevant_events)
         response = await self.llm.ainvoke(prompt)
         content = getattr(response, "content", str(response))
-        return self.parse_step_response(content)
+        result = self.parse_step_response(content)
+        ended_at = time.time()
+        self._last_step_trace_data = {
+            "inbox_events": relevant_events,
+            "prompt": prompt,
+            "raw_response": content,
+            "started_at": started_at,
+            "ended_at": ended_at,
+        }
+        return result
 
-    async def build_prompt(self, step_index: int) -> str:
-        relevant_events = await self.get_relevant_events(limit=8)
+    async def build_prompt(self, step_index: int, relevant_events: list[AgentEvent] | None = None) -> str:
+        if relevant_events is None:
+            relevant_events = await self.get_relevant_events(limit=8)
         event_lines = [
             f"- [{event.event_type}] {event.source}: {event.content}"
             for event in relevant_events
@@ -227,4 +258,26 @@ LOCAL_NOTES:
             share_finding="\n".join(sections["SHARE_FINDING"]).strip(),
             confidence=confidence,
             local_notes="\n".join(sections["LOCAL_NOTES"]).strip(),
+        )
+
+    def _default_assignment(self) -> dict[str, Any]:
+        return {
+            "agent_name": self.name,
+            "task": self.assigned_subtask,
+            "max_steps": self.max_steps,
+        }
+
+    def _log_step_trace(self, step_index: int, result: StepResult, published_events: list[AgentEvent]) -> None:
+        if self.trace_logger is None:
+            return
+        self.trace_logger.log_step(
+            agent_name=self.name,
+            step=step_index,
+            inbox_events=self._last_step_trace_data.get("inbox_events", []),
+            prompt=self._last_step_trace_data.get("prompt", ""),
+            raw_response=self._last_step_trace_data.get("raw_response", ""),
+            parsed_output=result.as_dict(),
+            published_events=published_events,
+            started_at=self._last_step_trace_data.get("started_at", time.time()),
+            ended_at=self._last_step_trace_data.get("ended_at", time.time()),
         )
