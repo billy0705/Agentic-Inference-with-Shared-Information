@@ -8,6 +8,7 @@ from multi_agent_sync.agents.critic_agent import CriticAgent
 from multi_agent_sync.agents.research_agent import ResearchAgent
 from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
+from multi_agent_sync.tracing.trace import TraceLogger
 
 
 @dataclass
@@ -90,15 +91,18 @@ async def test_agents_publish_receive_and_complete_under_timeout():
 @pytest.mark.asyncio
 async def test_agent_ignores_own_events_and_duplicate_event_ids():
     streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
     agent = ResearchAgent(
         run_id="run-duplicates",
         task="Build a prototype chess website",
         assigned_subtask="Research architecture",
         llm=FakeLLM(),
         event_streamer=streamer,
+        trace_logger=trace_logger,
         max_steps=1,
         max_events_per_agent=5,
     )
+    trace_logger.start_agent(agent.name, {"agent_name": agent.name})
 
     own_event = AgentEvent(run_id="run-duplicates", source="ResearchAgent", event_type="finding", content="Own finding")
     external_event = AgentEvent(run_id="run-duplicates", source="CodingAgent", event_type="finding", content="External finding")
@@ -109,17 +113,27 @@ async def test_agent_ignores_own_events_and_duplicate_event_ids():
 
     assert agent.observed_events == [external_event]
     assert agent.seen_event_ids == {external_event.event_id}
+    receipts = trace_logger.export()["ResearchAgent"]["event_receipts"]
+    assert [receipt["ignored_reason"] for receipt in receipts] == [
+        "self_event",
+        None,
+        "duplicate_event",
+    ]
+    assert receipts[1]["accepted"] is True
+    assert receipts[1]["inbox_size_after"] == 1
 
 
 @pytest.mark.asyncio
 async def test_agent_stops_processing_events_after_done():
     streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
     agent = ResearchAgent(
         run_id="run-after-done",
         task="Build a prototype chess website",
         assigned_subtask="Research architecture",
         llm=FakeLLM(),
         event_streamer=streamer,
+        trace_logger=trace_logger,
         max_steps=1,
         step_delay_seconds=0,
     )
@@ -129,3 +143,7 @@ async def test_agent_stops_processing_events_after_done():
     await agent.handle_event(late_event)
 
     assert late_event not in agent.observed_events
+    receipt = trace_logger.export()["ResearchAgent"]["event_receipts"][-1]
+    assert receipt["event_id"] == late_event.event_id
+    assert receipt["accepted"] is False
+    assert receipt["ignored_reason"] == "agent_done"

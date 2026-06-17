@@ -13,6 +13,7 @@ class GraphState(TypedDict):
     task_type: str
     reason: str
     plan: list[str]
+    selected_agents: list[dict[str, Any]]
     assignments: list[dict[str, Any]]
     orchestrator_plan: dict[str, Any]
     event_log: list[AgentEvent]

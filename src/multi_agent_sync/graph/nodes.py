@@ -7,16 +7,18 @@ from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph.state import GraphState
 from multi_agent_sync.llm import get_llm
-from multi_agent_sync.orchestrator.orchestrator import create_orchestrator_plan
+from multi_agent_sync.orchestrator.orchestrator import create_model_based_plan, selected_agents_to_assignments
 from multi_agent_sync.tracing.trace import TraceLogger
 
 
 async def orchestrator_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
     task = state["task"]
-    orchestrator_plan = create_orchestrator_plan(task)
-    assignments = orchestrator_plan["assignments"]
-    selected_agents = ",".join(assignment["agent_name"] for assignment in assignments) if assignments else "none"
+    llm = state.get("llm") or get_llm()
+    orchestrator_plan = await create_model_based_plan(task, llm, AGENT_REGISTRY)
+    selected_agent_specs = orchestrator_plan["selected_agents"]
+    assignments = selected_agents_to_assignments(orchestrator_plan, max_steps=state.get("max_steps_per_agent", 3))
+    selected_agents = ",".join(agent["name"] for agent in selected_agent_specs) if selected_agent_specs else "none"
 
     await streamer.publish(
         AgentEvent(
@@ -46,14 +48,15 @@ async def orchestrator_node(state: GraphState) -> GraphState:
         "mode": orchestrator_plan["mode"],
         "task_type": orchestrator_plan["task_type"],
         "reason": orchestrator_plan["reason"],
-        "plan": [assignment["task"] for assignment in assignments],
+        "plan": [agent["subtask"] for agent in selected_agent_specs],
+        "selected_agents": selected_agent_specs,
         "assignments": assignments,
         "orchestrator_plan": orchestrator_plan,
     }
 
 
 def route_after_orchestrator(state: GraphState) -> str:
-    if state.get("mode") == "direct" or not state.get("assignments"):
+    if state.get("mode") == "direct" or not state.get("selected_agents"):
         return "direct_answer"
     return "run_multi_agent_runtime"
 
@@ -104,7 +107,8 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     trace_logger = state.get("trace_logger") or TraceLogger()
 
     agents = []
-    for assignment in state.get("assignments", []):
+    assignments = selected_agents_to_assignments(state["orchestrator_plan"], max_steps=max_steps)
+    for assignment in assignments:
         agent_name = assignment["agent_name"]
         agent_class = AGENT_REGISTRY.get(agent_name)
         if agent_class is None:
@@ -117,18 +121,20 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
                 )
             )
             continue
-        agents.append(
-            agent_class(
-                run_id=state["run_id"],
-                task=state["task"],
-                assigned_subtask=assignment["task"],
-                llm=llm,
-                event_streamer=streamer,
-                assignment=assignment,
-                trace_logger=trace_logger,
-                max_steps=assignment.get("max_steps", max_steps),
-            )
-        )
+        agent_kwargs = {
+            "run_id": state["run_id"],
+            "task": state["task"],
+            "assigned_subtask": assignment["task"],
+            "llm": llm,
+            "event_streamer": streamer,
+            "assignment": assignment,
+            "trace_logger": trace_logger,
+            "max_steps": assignment.get("max_steps", max_steps),
+        }
+        for reactive_field in ("reactive_steps_enabled", "max_reactive_steps", "reactive_event_types"):
+            if reactive_field in assignment:
+                agent_kwargs[reactive_field] = assignment[reactive_field]
+        agents.append(agent_class(**agent_kwargs))
 
     for agent in agents:
         agent.subscribe()

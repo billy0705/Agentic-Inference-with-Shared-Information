@@ -8,7 +8,7 @@ The prototype intentionally does not use AutoGen.
 
 LangGraph is used for the workflow lifecycle:
 
-1. The orchestrator classifies the task and creates a structured plan.
+1. The orchestrator asks the LLM to inspect the task and create a structured plan.
 2. Simple tasks route to a one-shot direct answer node.
 3. Multi-agent tasks start only the selected concurrent workers.
 4. The synthesizer combines worker outputs and the event log into a final answer.
@@ -22,43 +22,49 @@ START -> orchestrator -> direct_answer -> END
 
 This follows the orchestrator-worker style conceptually: the orchestrator assigns work, workers execute concurrently, and the final node synthesizes results.
 
-## Dynamic Orchestration
+## Model-Based Orchestration
 
-The orchestrator no longer always starts every agent. It classifies the task as one of:
+The orchestrator no longer uses a fixed keyword classifier or a fixed task-type-to-agent mapping. It asks the configured LLM to return a strict JSON plan with:
 
-- `simple_qa`
-- `calculation`
-- `coding_project`
-- `debugging_task`
-- `research_project`
-- `writing_task`
-- `architecture_design`
-- `unknown`
+- `mode`: `direct` or `multi_agent`
+- `task_type`: a short free-text label generated for this task
+- `task_summary`
+- `reason`
+- `selected_agents`: a small list of registered agents with concrete subtasks
+- `collaboration_protocol`: event types to share and whether reactive steps are enabled
 
-The plan includes `mode`, `task_type`, `reason`, and `assignments`. If `mode` is `direct`, the graph skips worker startup. If `mode` is `multi_agent`, the runtime constructs only the assigned agents from `AGENT_REGISTRY`.
+If `mode` is `direct`, the graph skips worker startup. If `mode` is `multi_agent`, the runtime constructs only the agents listed in `selected_agents`, and every selected name must exist in `AGENT_REGISTRY`.
+
+The orchestrator validates model output before runtime execution:
+
+- invented agent names are removed
+- `ArchitectAgent` is never required or selected
+- direct mode always has no selected agents
+- multi-agent plans with no valid workers fall back to a small deterministic agent set
+- selected agents are limited to at most four
 
 Examples:
 
 - Simple Q&A: direct answer, no agents.
 - Calculation: `SolverAgent`, `VerifierAgent`.
-- Coding project: `ResearchAgent`, `CodingAgent`, optionally `CriticAgent`.
-- Debugging task: `CodingAgent`, `CriticAgent`.
-- Research project: `ResearchAgent`, optionally `CriticAgent`.
+- Coding or debugging task: usually `CodingAgent`, `CriticAgent`, and `VerifierAgent`.
+- Research or comparison task: usually `ResearchAgent`, `SolverAgent`, and `CriticAgent`.
+- Philosophy, proof, or reasoning task: usually `SolverAgent`, `CriticAgent`, and sometimes `VerifierAgent`.
 
-## Why Ollama and qwen3:4b
+## Model Providers
 
-The demo uses Ollama through `langchain-ollama` so inference stays local. The default model is `qwen3:4b`, which keeps the prototype lightweight enough for local experiments while still giving agents multiple reasoning steps.
+The default provider is an OpenAI-compatible API endpoint at `http://localhost:8000/v1` using `langchain-openai`. The default API model is `openai/gpt-oss-120b`, or `OPENAI_MODEL` when set.
 
-Override the model with either:
+Use a different API model with:
 
 ```bash
-OLLAMA_MODEL=llama3.2 uv run python -m multi_agent_sync "Build a prototype chess website"
+uv run python -m multi_agent_sync --model openai/gpt-oss-120b "Build a prototype chess website"
 ```
 
-or:
+Use a local Ollama model instead with:
 
 ```bash
-uv run python -m multi_agent_sync --model llama3.2 "Build a prototype chess website"
+uv run python -m multi_agent_sync --local-model --model llama3.2 "Build a prototype chess website"
 ```
 
 ## Internal Finding Synchronization
@@ -177,7 +183,7 @@ The console streamer subscribes to all events and prints them while the run is a
 
 ```text
 [0000.10] [task_started] coordinator: Build a prototype chess website
-[0001.20] [plan_created] orchestrator: mode=multi_agent, task_type=coding_project, selected_agents=ResearchAgent,CodingAgent,CriticAgent
+[0001.20] [plan_created] orchestrator: mode=multi_agent, task_type=software prototype task, selected_agents=ResearchAgent,CodingAgent,CriticAgent
 [0001.30] [agent_started] ResearchAgent: Researching architecture choices
 [0002.10] [finding] ResearchAgent: Real-time chess needs move synchronization
 [0002.30] [message_received] CodingAgent: received finding from ResearchAgent
@@ -212,7 +218,7 @@ uv run python -m multi_agent_sync "Build a prototype chess website"
 Optional arguments:
 
 ```bash
-uv run python -m multi_agent_sync --model qwen3:4b --max-steps 3 --no-color "Build a prototype chess website"
+uv run python -m multi_agent_sync --local-model --model qwen3:4b --max-steps 3 --no-color "Build a prototype chess website"
 ```
 
 Run tests:
@@ -228,7 +234,6 @@ Tests use fake LLMs, so they do not require an Ollama server.
 - The streamer is in-memory and process-local.
 - There is no real Kafka, Redis Streams, or NATS integration yet.
 - There is no web UI.
-- The orchestrator classifier is deterministic and heuristic-based.
-- LLM output parsing is intentionally simple.
+- The orchestrator depends on the configured LLM and falls back deterministically when the model plan is invalid.
 - Terminal streaming is best-effort and depends on async callback scheduling.
-- The final CLI demo requires Ollama to be running and the selected model to be available locally.
+- The final CLI demo requires the selected model provider to be running.

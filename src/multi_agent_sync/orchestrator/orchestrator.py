@@ -1,155 +1,338 @@
 from __future__ import annotations
 
+import json
+import re
+from collections.abc import Mapping
+from typing import Any, Literal, TypedDict
 
-TASK_TYPES = {
-    "simple_qa",
-    "calculation",
-    "coding_project",
-    "debugging_task",
-    "research_project",
-    "writing_task",
-    "architecture_design",
-    "unknown",
+
+Mode = Literal["direct", "multi_agent"]
+
+
+class SelectedAgent(TypedDict):
+    name: str
+    subtask: str
+    expected_output: str
+
+
+class CollaborationProtocol(TypedDict):
+    event_types_to_share: list[str]
+    reactive_steps: bool
+    notes: str
+
+
+class OrchestratorPlan(TypedDict):
+    mode: Mode
+    task_type: str
+    task_summary: str
+    reason: str
+    selected_agents: list[SelectedAgent]
+    collaboration_protocol: CollaborationProtocol
+
+
+AGENT_DESCRIPTIONS = {
+    "ResearchAgent": "Best for background research, assumptions, constraints, domain context, comparisons, possible viewpoints, and information gathering.",
+    "SolverAgent": "Best for mathematical reasoning, logical reasoning, philosophy questions, abstract analysis, proofs, general problem solving, and non-code analytical tasks.",
+    "CodingAgent": "Best for implementation plans, code structure, concrete patches, debugging, software errors, APIs, tests, and executable prototypes.",
+    "CriticAgent": "Best for finding weaknesses, missing assumptions, counterarguments, risks, contradictions, edge cases, and alternative interpretations.",
+    "VerifierAgent": "Best for checking correctness, validating calculations, checking consistency, testing logic, and confirming that the final solution satisfies the original task.",
 }
 
+DEFAULT_EVENT_TYPES = ["finding", "critique", "warning"]
+MAX_SELECTED_AGENTS = 4
 
-def classify_task(task: str) -> str:
-    normalized = task.lower()
+CODE_KEYWORDS = ("code", "programming", "bug", "error", "pytest", "function", "api", "implementation", "repository")
+RESEARCH_KEYWORDS = ("research", "comparison", "compare", "literature", "recent work", "background", "evidence")
+REASONING_KEYWORDS = ("math", "calculate", "calculation", "proof", "prove", "theorem", "logic", "philosophy", "reasoning", "argument", "theory")
 
-    debugging_keywords = ("debug", "bug", "traceback", "failing", "failure", "error", "exception", "pytest")
-    coding_keywords = (
-        "build",
-        "implement",
-        "code",
-        "prototype",
-        "website",
-        "api",
-        "module",
-        "software",
-        "app",
-        "cli",
-        "package",
+
+async def create_model_based_plan(task: str, llm: Any, available_agents: Mapping[str, Any]) -> OrchestratorPlan:
+    prompt = build_orchestrator_prompt(task, available_agents)
+    try:
+        response = await llm.ainvoke(prompt)
+        content = getattr(response, "content", str(response))
+        raw_plan = extract_json_object(content)
+    except Exception as exc:
+        return create_fallback_plan(task, available_agents, reason=f"Model orchestrator failed or returned invalid JSON: {exc}")
+
+    return validate_orchestrator_plan(raw_plan, task, available_agents)
+
+
+async def create_orchestrator_plan(task: str, llm: Any, available_agents: Mapping[str, Any]) -> OrchestratorPlan:
+    return await create_model_based_plan(task, llm, available_agents)
+
+
+def build_orchestrator_prompt(task: str, available_agents: Mapping[str, Any]) -> str:
+    agent_lines = "\n".join(
+        f"{index}. {name}\n    {AGENT_DESCRIPTIONS.get(name, 'Registered worker agent.')}"
+        for index, name in enumerate(available_agents, start=1)
     )
-    architecture_keywords = ("architecture", "design the system", "system design", "microservice", "multi-tenant", "scalable")
-    calculation_keywords = (
-        "calculate",
-        "compute",
-        "solve",
-        "equation",
-        "math",
-        "physics",
-        "force",
-        "acceleration",
-        "velocity",
-        "threshold",
-    )
-    research_keywords = ("research", "investigate", "compare", "survey", "tradeoff", "trade-off", "literature")
-    writing_keywords = ("write", "draft", "compose", "email", "announcement", "blog", "essay", "copy")
-    simple_qa_prefixes = ("what is", "who is", "when is", "where is", "define", "explain")
+    allowed_names = " | ".join(available_agents)
+    return f"""
+You are the model-based orchestrator for a local LangGraph multi-agent system.
 
-    if any(keyword in normalized for keyword in debugging_keywords):
-        return "debugging_task"
-    if any(keyword in normalized for keyword in architecture_keywords):
-        return "architecture_design"
-    if any(keyword in normalized for keyword in calculation_keywords) or _contains_numbers_and_operator(normalized):
-        return "calculation"
-    if normalized.startswith(simple_qa_prefixes) or "which one of the following" in normalized:
-        return "simple_qa"
-    if any(keyword in normalized for keyword in coding_keywords):
-        return "coding_project"
-    if any(keyword in normalized for keyword in research_keywords):
-        return "research_project"
-    if any(keyword in normalized for keyword in writing_keywords):
-        return "writing_task"
-    return "unknown"
+Your job is to inspect the user task, decide whether it needs a direct answer or a multi-agent run, and assign subtasks to a small set of registered agents.
+
+Available agents:
+
+{agent_lines}
+
+Rules:
+
+* Select only from the available agents.
+* Do not invent new agents.
+* Do not select ArchitectAgent.
+* Prefer 2 to 4 agents for most multi-agent tasks.
+* Use direct mode for simple factual, conversational, or very small tasks.
+* Use multi_agent mode when the task requires decomposition, implementation, critique, verification, research, formal reasoning, multiple perspectives, or careful synthesis.
+* task_type must be a short free-text label. Do not use "unknown" unless the task is truly impossible to understand.
+* Each selected agent must receive a concrete subtask.
+* CriticAgent must not be selected alone.
+* CodingAgent should only be selected when code, debugging, implementation, APIs, tests, or software design are relevant.
+* SolverAgent should be selected for math, logic, philosophy, abstract reasoning, and general problem solving.
+* ResearchAgent should be selected when background knowledge, comparison, assumptions, domain context, or external-style evidence is useful.
+* VerifierAgent should be selected when correctness, consistency, calculations, constraints, or final validation matter.
+
+Return only valid JSON with this exact schema:
+{{
+  "mode": "direct" | "multi_agent",
+  "task_type": "short free-text label",
+  "task_summary": "one sentence summary",
+  "reason": "why this route was selected",
+  "selected_agents": [
+    {{
+      "name": "{allowed_names}",
+      "subtask": "specific subtask for this agent",
+      "expected_output": "what this agent should produce"
+    }}
+  ],
+  "collaboration_protocol": {{
+    "event_types_to_share": ["finding", "critique", "warning"],
+    "reactive_steps": true,
+    "notes": "how agents should use each other's messages"
+  }}
+}}
+
+User task:
+{task}
+""".strip()
 
 
-def create_orchestrator_plan(task: str) -> dict:
-    task_type = classify_task(task)
+def extract_json_object(content: str) -> dict[str, Any]:
+    stripped = content.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped)
 
-    if task_type == "simple_qa":
-        return _direct_plan(task_type, "The task looks answerable with one direct LLM response.")
-    if task_type == "writing_task":
-        return _direct_plan(task_type, "The task is a writing request that does not require runtime agent synchronization.")
-    if task_type == "calculation":
-        return {
-            "mode": "multi_agent",
-            "task_type": task_type,
-            "reason": "Calculation/reasoning tasks benefit from a solver and an independent verifier.",
-            "assignments": [
-                {
-                    "agent_name": "SolverAgent",
-                    "task": "Solve the calculation or reasoning problem step by step at summary level.",
-                    "max_steps": 2,
-                },
-                {
-                    "agent_name": "VerifierAgent",
-                    "task": "Check numerical correctness, units, assumptions, and overclaiming.",
-                    "max_steps": 1,
-                },
-            ],
-        }
-    if task_type == "debugging_task":
-        return {
-            "mode": "multi_agent",
-            "task_type": task_type,
-            "reason": "Debugging needs implementation analysis plus critique of risks and missing cases.",
-            "assignments": [
-                {"agent_name": "CodingAgent", "task": f"Analyze the debugging task and propose a fix path: {task}", "max_steps": 3},
-                {"agent_name": "CriticAgent", "task": "Review the debugging plan for risks and missing verification.", "max_steps": 2},
-            ],
-        }
-    if task_type in {"coding_project", "architecture_design"}:
-        return {
-            "mode": "multi_agent",
-            "task_type": task_type,
-            "reason": "Software and architecture tasks need research, implementation planning, and critique.",
-            "assignments": [
-                {"agent_name": "ResearchAgent", "task": f"Research architecture choices and assumptions for: {task}", "max_steps": 3},
-                {"agent_name": "CodingAgent", "task": f"Plan executable modules, APIs, and implementation steps for: {task}", "max_steps": 3},
-                {"agent_name": "CriticAgent", "task": "Review the plan for risks, race conditions, missing cases, and safety issues.", "max_steps": 2},
-            ],
-        }
-    if task_type == "research_project":
-        return {
-            "mode": "multi_agent",
-            "task_type": task_type,
-            "reason": "Open-ended research benefits from a research worker and a critical reviewer.",
-            "assignments": [
-                {"agent_name": "ResearchAgent", "task": f"Investigate background, options, and constraints for: {task}", "max_steps": 3},
-                {"agent_name": "CriticAgent", "task": "Review the research findings for gaps and weak assumptions.", "max_steps": 2},
-            ],
-        }
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", stripped):
+            try:
+                value, _ = decoder.raw_decode(stripped[match.start() :])
+                break
+            except json.JSONDecodeError:
+                continue
+        else:
+            raise
+
+    if not isinstance(value, dict):
+        raise ValueError("orchestrator response must be a JSON object")
+    return value
+
+
+def validate_orchestrator_plan(raw_plan: Mapping[str, Any], task: str, available_agents: Mapping[str, Any]) -> OrchestratorPlan:
+    mode = raw_plan.get("mode")
+    if mode not in {"direct", "multi_agent"}:
+        return create_fallback_plan(task, available_agents, reason="Model orchestrator returned an invalid mode.")
+
+    task_type = _clean_text(raw_plan.get("task_type")) or infer_fallback_task_type(task)
+    if task_type.lower() == "unknown" and task.strip():
+        task_type = infer_fallback_task_type(task)
+    task_summary = _clean_text(raw_plan.get("task_summary")) or f"Handle the user task: {task}"
+    reason = _clean_text(raw_plan.get("reason")) or "The model orchestrator selected this route."
+    collaboration_protocol = normalize_collaboration_protocol(raw_plan.get("collaboration_protocol"))
+
+    selected_agents = normalize_selected_agents(raw_plan.get("selected_agents"), available_agents)
+    if mode == "direct":
+        selected_agents = []
+    elif not selected_agents or _is_critic_alone(selected_agents):
+        return create_fallback_plan(task, available_agents, reason="Model orchestrator did not select a valid multi-agent pool.")
+
+    return {
+        "mode": mode,
+        "task_type": task_type,
+        "task_summary": task_summary,
+        "reason": reason,
+        "selected_agents": selected_agents[:MAX_SELECTED_AGENTS],
+        "collaboration_protocol": collaboration_protocol,
+    }
+
+
+def normalize_selected_agents(value: Any, available_agents: Mapping[str, Any]) -> list[SelectedAgent]:
+    if not isinstance(value, list):
+        return []
+
+    selected_agents: list[SelectedAgent] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        name = _clean_text(item.get("name"))
+        if name not in available_agents or name in seen:
+            continue
+        selected_agents.append(
+            {
+                "name": name,
+                "subtask": _clean_text(item.get("subtask")) or f"Contribute as {name} to the user task.",
+                "expected_output": _clean_text(item.get("expected_output")) or "Concise findings for final synthesis.",
+            }
+        )
+        seen.add(name)
+        if len(selected_agents) == MAX_SELECTED_AGENTS:
+            break
+    return selected_agents
+
+
+def normalize_collaboration_protocol(value: Any) -> CollaborationProtocol:
+    if not isinstance(value, Mapping):
+        return default_collaboration_protocol()
+
+    raw_event_types = value.get("event_types_to_share")
+    event_types = []
+    if isinstance(raw_event_types, list):
+        event_types = [event_type for event_type in raw_event_types if isinstance(event_type, str) and event_type.strip()]
+    if not event_types:
+        event_types = list(DEFAULT_EVENT_TYPES)
+    reactive_steps = value.get("reactive_steps")
+    if not isinstance(reactive_steps, bool):
+        reactive_steps = True
+
+    return {
+        "event_types_to_share": event_types[:5],
+        "reactive_steps": reactive_steps,
+        "notes": _clean_text(value.get("notes")) or "Agents should share useful findings, critiques, and warnings for final synthesis.",
+    }
+
+
+def create_fallback_plan(task: str, available_agents: Mapping[str, Any], reason: str | None = None) -> OrchestratorPlan:
+    task_type = infer_fallback_task_type(task)
+    selected_names = fallback_agent_names(task)
+    selected_names = [name for name in selected_names if name in available_agents][:MAX_SELECTED_AGENTS]
+    if not selected_names:
+        selected_names = [name for name in ("SolverAgent", "CriticAgent") if name in available_agents]
+    if selected_names == ["CriticAgent"] and "SolverAgent" in available_agents:
+        selected_names.insert(0, "SolverAgent")
 
     return {
         "mode": "multi_agent",
-        "task_type": "unknown",
-        "reason": "The task type is unclear, so use a small research-and-critique setup.",
-        "assignments": [
-            {"agent_name": "ResearchAgent", "task": f"Clarify assumptions and possible approaches for: {task}", "max_steps": 2},
-            {"agent_name": "CriticAgent", "task": "Identify risks, missing information, and uncertainty.", "max_steps": 1},
+        "task_type": task_type,
+        "task_summary": f"Handle the user task: {task}",
+        "reason": reason or "Using deterministic fallback routing because model orchestration was unavailable or invalid.",
+        "selected_agents": [
+            {
+                "name": name,
+                "subtask": fallback_subtask(name, task),
+                "expected_output": fallback_expected_output(name),
+            }
+            for name in selected_names
         ],
+        "collaboration_protocol": default_collaboration_protocol(),
     }
+
+
+def fallback_agent_names(task: str) -> list[str]:
+    normalized = task.lower()
+    if any(keyword in normalized for keyword in CODE_KEYWORDS):
+        return ["CodingAgent", "CriticAgent", "VerifierAgent"]
+    if any(keyword in normalized for keyword in RESEARCH_KEYWORDS):
+        return ["ResearchAgent", "SolverAgent", "CriticAgent"]
+    if any(keyword in normalized for keyword in REASONING_KEYWORDS):
+        return ["SolverAgent", "CriticAgent", "VerifierAgent"]
+    return ["SolverAgent", "CriticAgent"]
+
+
+def infer_fallback_task_type(task: str) -> str:
+    normalized = task.lower()
+    if any(keyword in normalized for keyword in CODE_KEYWORDS):
+        return "software or debugging task"
+    if any(keyword in normalized for keyword in RESEARCH_KEYWORDS):
+        return "research and comparison task"
+    if any(keyword in normalized for keyword in REASONING_KEYWORDS):
+        return "reasoning and verification task"
+    if not task.strip():
+        return "unknown"
+    return "general reasoning task"
+
+
+def fallback_subtask(agent_name: str, task: str) -> str:
+    if agent_name == "ResearchAgent":
+        return f"Identify background context, assumptions, comparisons, and useful evidence for: {task}"
+    if agent_name == "CodingAgent":
+        return f"Analyze the software task and propose concrete implementation, debugging, API, or test steps for: {task}"
+    if agent_name == "CriticAgent":
+        return "Identify weaknesses, missing assumptions, risks, counterarguments, and edge cases in the emerging answer."
+    if agent_name == "VerifierAgent":
+        return "Validate correctness, consistency, calculations, constraints, and final-answer fit against the user task."
+    return f"Solve or analyze the core problem carefully and share concise reasoning findings for: {task}"
+
+
+def fallback_expected_output(agent_name: str) -> str:
+    if agent_name == "ResearchAgent":
+        return "Concise context, assumptions, options, and evidence."
+    if agent_name == "CodingAgent":
+        return "Concrete implementation or debugging plan with relevant tests."
+    if agent_name == "CriticAgent":
+        return "Weaknesses, edge cases, counterarguments, and risks."
+    if agent_name == "VerifierAgent":
+        return "Correctness checks, validation notes, and any corrections."
+    return "Reasoned solution steps and important findings."
+
+
+def selected_agents_to_assignments(plan: OrchestratorPlan, max_steps: int = 3) -> list[dict[str, Any]]:
+    protocol = plan["collaboration_protocol"]
+    return [
+        {
+            "agent_name": agent["name"],
+            "task": agent["subtask"],
+            "expected_output": agent["expected_output"],
+            "max_steps": max_steps,
+            "reactive_steps_enabled": protocol["reactive_steps"],
+            "max_reactive_steps": 1,
+            "reactive_event_types": protocol["event_types_to_share"],
+        }
+        for agent in plan["selected_agents"]
+    ]
 
 
 def create_plan(task: str) -> list[str]:
-    return [assignment["task"] for assignment in create_orchestrator_plan(task)["assignments"]]
+    from multi_agent_sync.agents.registry import AGENT_REGISTRY
+
+    return [agent["subtask"] for agent in create_fallback_plan(task, AGENT_REGISTRY).get("selected_agents", [])]
 
 
-def create_assignments(task: str) -> list[dict]:
-    return create_orchestrator_plan(task)["assignments"]
+def create_assignments(task: str) -> list[dict[str, Any]]:
+    from multi_agent_sync.agents.registry import AGENT_REGISTRY
+
+    return selected_agents_to_assignments(create_fallback_plan(task, AGENT_REGISTRY))
 
 
-def _direct_plan(task_type: str, reason: str) -> dict:
+def classify_task(task: str) -> str:
+    return infer_fallback_task_type(task)
+
+
+def default_collaboration_protocol() -> CollaborationProtocol:
     return {
-        "mode": "direct",
-        "task_type": task_type,
-        "reason": reason,
-        "assignments": [],
+        "event_types_to_share": list(DEFAULT_EVENT_TYPES),
+        "reactive_steps": True,
+        "notes": "Agents should share findings, critiques, and warnings, then react to useful messages from other agents when available.",
     }
 
 
-def _contains_numbers_and_operator(task: str) -> bool:
-    has_digit = any(character.isdigit() for character in task)
-    has_operator = any(operator in task for operator in ("+", "-", "*", "/", "="))
-    return has_digit and has_operator
+def _clean_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _is_critic_alone(selected_agents: list[SelectedAgent]) -> bool:
+    return len(selected_agents) == 1 and selected_agents[0]["name"] == "CriticAgent"

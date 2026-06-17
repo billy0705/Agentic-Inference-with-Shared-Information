@@ -52,6 +52,7 @@ async def run_workflow(
         "task_type": "",
         "reason": "",
         "plan": [],
+        "selected_agents": [],
         "assignments": [],
         "orchestrator_plan": {},
         "event_log": [],

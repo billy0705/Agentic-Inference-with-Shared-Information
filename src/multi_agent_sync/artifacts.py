@@ -7,6 +7,7 @@ from typing import Any
 
 from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.graph.state import GraphState
+from multi_agent_sync.sync_report import build_sync_report
 
 
 def save_run_artifacts(state: GraphState, root_dir: str | Path = "runs") -> Path:
@@ -18,6 +19,8 @@ def save_run_artifacts(state: GraphState, root_dir: str | Path = "runs") -> Path
     _write_event_log(run_dir / "event_log.jsonl", state.get("event_log", []))
     (run_dir / "agent_traces.json").write_text(json.dumps(state.get("agent_traces", {}), indent=2))
     (run_dir / "orchestrator_plan.json").write_text(json.dumps(state.get("orchestrator_plan", {}), indent=2))
+    sync_report = build_sync_report(state.get("event_log", []), state.get("agent_traces", {}))
+    (run_dir / "sync_report.json").write_text(json.dumps(sync_report, indent=2))
 
     return run_dir
 
