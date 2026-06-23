@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from multi_agent_sync.evaluation.types import BenchmarkSpec
+from multi_agent_sync.prompts import render_prompt
 
 
 DATASET_NAME = "Idavidrein/gpqa"
@@ -49,24 +50,11 @@ def build_prompt(row: dict[str, Any], rng: random.Random) -> tuple[str, str]:
         if kind == "correct":
             correct_label = label
 
-    prompt = f"""
-You are answering a difficult graduate-level science multiple-choice question.
-
-Choose exactly one option: A, B, C, or D.
-
-Question:
-{question}
-
-Options:
-{chr(10).join(option_lines)}
-
-Important:
-- Think carefully.
-- Your final answer must be exactly one of A, B, C, or D.
-- At the end, write the final answer in this exact format:
-
-Final Answer: <A/B/C/D>
-""".strip()
+    prompt = render_prompt(
+        "evaluation/gpqa_question.j2",
+        question=question,
+        option_lines=option_lines,
+    )
     return prompt, correct_label
 
 

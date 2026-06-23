@@ -5,6 +5,8 @@ import re
 from collections.abc import Mapping
 from typing import Any, Literal, TypedDict
 
+from multi_agent_sync.prompts import render_prompt
+
 
 Mode = Literal["direct", "multi_agent"]
 
@@ -68,55 +70,12 @@ def build_orchestrator_prompt(task: str, available_agents: Mapping[str, Any]) ->
         for index, name in enumerate(available_agents, start=1)
     )
     allowed_names = " | ".join(available_agents)
-    return f"""
-You are the model-based orchestrator for a local LangGraph multi-agent system.
-
-Your job is to inspect the user task, decide whether it needs a direct answer or a multi-agent run, and assign subtasks to a small set of registered agents.
-Reasoning: high
-
-Available agents:
-
-{agent_lines}
-
-Rules:
-
-* Select only from the available agents.
-* Do not invent new agents.
-* Do not select ArchitectAgent.
-* Prefer 2 to 4 agents for most multi-agent tasks.
-* Use direct mode for simple factual, conversational, or very small tasks.
-* Use multi_agent mode when the task requires decomposition, implementation, critique, verification, research, formal reasoning, multiple perspectives, or careful synthesis.
-* task_type must be a short free-text label. Do not use "unknown" unless the task is truly impossible to understand.
-* Each selected agent must receive a concrete subtask.
-* CriticAgent must not be selected alone.
-* CodingAgent should only be selected when code, debugging, implementation, APIs, tests, or software design are relevant.
-* SolverAgent should be selected for math, logic, philosophy, abstract reasoning, and general problem solving.
-* ResearchAgent should be selected when background knowledge, comparison, assumptions, domain context, or external-style evidence is useful.
-* VerifierAgent should be selected when correctness, consistency, calculations, constraints, or final validation matter.
-
-Return only valid JSON with this exact schema:
-{{
-  "mode": "direct" | "multi_agent",
-  "task_type": "short free-text label",
-  "task_summary": "one sentence summary",
-  "reason": "why this route was selected",
-  "selected_agents": [
-    {{
-      "name": "{allowed_names}",
-      "subtask": "specific subtask for this agent",
-      "expected_output": "what this agent should produce"
-    }}
-  ],
-  "collaboration_protocol": {{
-    "event_types_to_share": ["finding", "critique", "warning"],
-    "reactive_steps": true,
-    "notes": "how agents should use each other's messages"
-  }}
-}}
-
-User task:
-{task}
-""".strip()
+    return render_prompt(
+        "orchestrator/model_plan.j2",
+        task=task,
+        agent_lines=agent_lines,
+        allowed_names=allowed_names,
+    )
 
 
 def extract_json_object(content: str) -> dict[str, Any]:

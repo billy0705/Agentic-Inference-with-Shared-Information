@@ -8,6 +8,7 @@ from typing import Any
 
 from multi_agent_sync.events.event import AgentEvent, EventType
 from multi_agent_sync.events.streamer import EventStreamer
+from multi_agent_sync.prompts import render_prompt
 
 
 @dataclass
@@ -251,52 +252,19 @@ class BaseAgent:
         ]
         notes = "\n".join(f"- {note}" for note in self.local_notes[-8:]) or "- None yet."
         events = "\n".join(event_lines) or "- No relevant external findings yet."
-        reactive_context = ""
-        if is_reactive:
-            reactive_context = f"""
-
-Reactive context:
-You are running a reactive follow-up step because you received important new events after or during your previous reasoning step.
-Re-evaluate or update your previous conclusion using these events.
-Reactive reason: {reactive_reason or "important_unused_events_received"}
-""".rstrip()
-        return f"""
-You are {self.name}.
-
-Overall user task:
-{self.task}
-
-Agent role:
-{self.role}
-
-Assigned subtask:
-{self.assigned_subtask}
-{reactive_context}
-
-Current step:
-{step_index} of {self.max_steps}
-
-Local notes so far:
-{notes}
-
-Recent relevant events from other agents:
-{events}
-
-Respond with concise summaries only. Do not reveal private chain-of-thought.
-Use this exact format:
-
-SUMMARY:
-<brief reasoning summary>
-
-SHARE_FINDING:
-<one finding useful to other agents, or leave blank>
-
-CONFIDENCE:
-<number from 0.0 to 1.0>
-
-LOCAL_NOTES:
-<short private working notes summary for later steps>
-""".strip()
+        return render_prompt(
+            "agents/step.j2",
+            agent_name=self.name,
+            task=self.task,
+            role=self.role,
+            assigned_subtask=self.assigned_subtask,
+            is_reactive=is_reactive,
+            reactive_reason=reactive_reason or "important_unused_events_received",
+            step_index=step_index,
+            max_steps=self.max_steps,
+            notes=notes,
+            events=events,
+        )
 
     async def publish_event(
         self,

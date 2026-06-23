@@ -8,6 +8,7 @@ from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph.state import GraphState
 from multi_agent_sync.llm import get_llm
 from multi_agent_sync.orchestrator.orchestrator import create_model_based_plan, selected_agents_to_assignments
+from multi_agent_sync.prompts import render_prompt
 from multi_agent_sync.tracing.trace import TraceLogger
 
 
@@ -64,15 +65,7 @@ def route_after_orchestrator(state: GraphState) -> str:
 async def direct_answer_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
     llm = state.get("llm") or get_llm()
-    prompt = f"""
-Answer the user task directly with one concise response.
-
-User task:
-{state["task"]}
-
-If the task asks you to choose from provided options but the options are missing,
-explicitly say that the options are missing and that you cannot choose one of them.
-""".strip()
+    prompt = render_prompt("graph/direct_answer.j2", task=state["task"])
     try:
         response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=state.get("synthesis_timeout", 60.0))
         final_answer = getattr(response, "content", str(response)).strip()
@@ -184,20 +177,12 @@ async def synthesizer_node(state: GraphState) -> GraphState:
         if event.event_type in {"finding", "warning", "critique", "agent_done"}
     )
     output_lines = "\n".join(f"- {name}: {output}" for name, output in state.get("agent_outputs", {}).items())
-    prompt = f"""
-You are the Synthesizer for a LangGraph multi-agent prototype.
-
-Create the final answer for this user task:
-{state["task"]}
-
-Agent outputs:
-{output_lines or "- No agent outputs collected."}
-
-Runtime event log:
-{event_lines or "- No runtime events collected."}
-
-Write a concise final answer that combines the useful findings, implementation direction, and critique.
-""".strip()
+    prompt = render_prompt(
+        "graph/synthesizer.j2",
+        task=state["task"],
+        output_lines=output_lines,
+        event_lines=event_lines,
+    )
     try:
         response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=state.get("synthesis_timeout", 60.0))
         final_answer = getattr(response, "content", str(response)).strip()

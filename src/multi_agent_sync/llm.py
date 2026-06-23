@@ -14,6 +14,7 @@ def get_llm(model: str | None = None, openai: bool = True) -> Any:
             base_url="http://localhost:8000/v1",
             api_key="EMPTY",
             temperature=0,
+            max_completion_tokens=4096
         )
     else:
         llm = ChatOllama(
