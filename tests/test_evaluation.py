@@ -8,6 +8,14 @@ from multi_agent_sync.evaluation import runner
 
 
 def test_parse_methods_accepts_comma_separated_methods():
+    assert runner.parse_methods("multiagent_streaming,multiagent_no_streaming,plain_llm") == [
+        "multiagent_streaming",
+        "multiagent_no_streaming",
+        "plain_llm",
+    ]
+
+
+def test_parse_methods_keeps_multiagent_alias_for_streaming():
     assert runner.parse_methods("multiagent,plain_llm") == ["multiagent", "plain_llm"]
 
 
@@ -18,11 +26,20 @@ def test_parse_methods_rejects_unknown_method():
 
 def test_parser_accepts_simple_benchmark_command_shape():
     args = evaluation.build_parser().parse_args(
-        ["--benchmark", "gpqa", "--methods", "multiagent,plain_llm", "--limit", "10", "--data-file", "gpqa.csv"]
+        [
+            "--benchmark",
+            "gpqa",
+            "--methods",
+            "multiagent_streaming,multiagent_no_streaming,plain_llm",
+            "--limit",
+            "10",
+            "--data-file",
+            "gpqa.csv",
+        ]
     )
 
     assert args.benchmark == "gpqa"
-    assert args.methods == "multiagent,plain_llm"
+    assert args.methods == "multiagent_streaming,multiagent_no_streaming,plain_llm"
     assert args.limit == 10
     assert args.data_file == "gpqa.csv"
 

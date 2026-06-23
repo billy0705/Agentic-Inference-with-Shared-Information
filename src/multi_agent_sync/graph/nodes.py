@@ -104,6 +104,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
     llm = state.get("llm") or get_llm()
     max_steps = state.get("max_steps_per_agent", 3)
+    enable_agent_message_streaming = state.get("enable_agent_message_streaming", True)
     trace_logger = state.get("trace_logger") or TraceLogger()
 
     agents = []
@@ -130,6 +131,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             "assignment": assignment,
             "trace_logger": trace_logger,
             "max_steps": assignment.get("max_steps", max_steps),
+            "enable_message_streaming": enable_agent_message_streaming,
         }
         for reactive_field in ("reactive_steps_enabled", "max_reactive_steps", "reactive_event_types"):
             if reactive_field in assignment:

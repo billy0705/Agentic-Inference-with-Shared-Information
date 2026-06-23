@@ -231,18 +231,18 @@ Tests use fake LLMs, so they do not require an Ollama server.
 
 ## Evaluation
 
-Run GPQA-Diamond against both the multi-agent workflow and a direct LLM baseline:
+Run GPQA-Diamond against the multi-agent workflow with agent-to-agent message streaming, the same workflow without agent-to-agent message streaming, and a direct LLM baseline:
 
 ```bash
-uv run evaluation --benchmark gpqa --methods multiagent,plain_llm --limit 10
+uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
 ```
 
-The benchmark writes per-question results to `output/gpqa_diamond_results.csv` by default and prints accuracy plus invalid-answer rate for each method. Use `--output result.csv` to write `output/result.csv`, or `--output-dir other-output` to change the results directory. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the default OpenAI-compatible API provider.
+The benchmark writes per-question results to `output/gpqa_diamond_results.csv` by default and prints accuracy plus invalid-answer rate for each method. `multiagent` remains as a legacy alias for `multiagent_streaming`. Use `--output result.csv` to write `output/result.csv`, or `--output-dir other-output` to change the results directory. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the default OpenAI-compatible API provider.
 
 GPQA on Hugging Face is gated. Authenticate with an account that has dataset access before running the Hub-backed benchmark, or set `HF_TOKEN` for the process. If you already have a local GPQA-style file, bypass Hugging Face with:
 
 ```bash
-uv run evaluation --benchmark gpqa --methods multiagent,plain_llm --limit 10 --data-file /path/to/gpqa.csv
+uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/gpqa.csv
 ```
 
 Local `.csv`, `.jsonl`, and `.ndjson` files must include `Question`, `Correct Answer`, `Incorrect Answer 1`, `Incorrect Answer 2`, and `Incorrect Answer 3`.

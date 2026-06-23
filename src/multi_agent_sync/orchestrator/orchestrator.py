@@ -72,6 +72,7 @@ def build_orchestrator_prompt(task: str, available_agents: Mapping[str, Any]) ->
 You are the model-based orchestrator for a local LangGraph multi-agent system.
 
 Your job is to inspect the user task, decide whether it needs a direct answer or a multi-agent run, and assign subtasks to a small set of registered agents.
+Reasoning: high
 
 Available agents:
 

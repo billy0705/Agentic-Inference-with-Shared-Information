@@ -229,6 +229,28 @@ async def test_late_solver_finding_is_traced_and_used_by_reactive_verifier_step(
 
 
 @pytest.mark.asyncio
+async def test_agent_message_streaming_can_be_disabled():
+    state = await run_workflow(
+        task="Calculate 2 + 2.",
+        llm=LateFindingLLM(),
+        max_steps_per_agent=1,
+        total_runtime_timeout=5,
+        stream_to_console=False,
+        enable_agent_message_streaming=False,
+    )
+
+    verifier_trace = state["agent_traces"]["VerifierAgent"]
+
+    assert not [
+        receipt
+        for receipt in verifier_trace["event_receipts"]
+        if receipt["source"] == "SolverAgent" and receipt["event_type"] == "finding"
+    ]
+    assert not [step for step in verifier_trace["steps"] if step["is_reactive"]]
+    assert not any(event.event_type == "message_received" for event in state["event_log"])
+
+
+@pytest.mark.asyncio
 async def test_agent_traces_include_prompt_response_parsed_output_and_published_events():
     state = await run_workflow(
         task="Calculate 2 + 2.",

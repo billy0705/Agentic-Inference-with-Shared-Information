@@ -38,6 +38,7 @@ async def run_workflow(
     max_steps_per_agent: int = 3,
     total_runtime_timeout: float = 600.0,
     synthesis_timeout: float = 60.0,
+    enable_agent_message_streaming: bool = True,
     stream_to_console: bool = True,
     no_color: bool = False,
 ) -> GraphState:
@@ -63,6 +64,7 @@ async def run_workflow(
         "max_steps_per_agent": max_steps_per_agent,
         "total_runtime_timeout": total_runtime_timeout,
         "synthesis_timeout": synthesis_timeout,
+        "enable_agent_message_streaming": enable_agent_message_streaming,
         "stream_to_console": stream_to_console,
         "no_color": no_color,
     }

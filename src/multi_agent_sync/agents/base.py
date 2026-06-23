@@ -41,6 +41,7 @@ class BaseAgent:
     max_runtime_seconds: float = 180.0
     max_events_per_agent: int = 50
     step_delay_seconds: float = 0.2
+    enable_message_streaming: bool = True
     reactive_steps_enabled: bool = True
     max_reactive_steps: int = 1
     reactive_event_types: set[str] = field(default_factory=lambda: {"finding", "critique", "warning"})
@@ -56,6 +57,8 @@ class BaseAgent:
     _last_step_trace_data: dict[str, Any] = field(default_factory=dict)
 
     def subscribe(self) -> None:
+        if not self.enable_message_streaming:
+            return
         if self._subscribed:
             return
         for event_type in ("finding", "warning", "critique", "question"):

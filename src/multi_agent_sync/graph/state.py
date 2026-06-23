@@ -26,5 +26,6 @@ class GraphState(TypedDict):
     max_steps_per_agent: NotRequired[int]
     total_runtime_timeout: NotRequired[float]
     synthesis_timeout: NotRequired[float]
+    enable_agent_message_streaming: NotRequired[bool]
     stream_to_console: NotRequired[bool]
     no_color: NotRequired[bool]

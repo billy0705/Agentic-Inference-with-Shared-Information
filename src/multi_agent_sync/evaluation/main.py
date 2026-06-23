@@ -13,6 +13,7 @@ from multi_agent_sync.llm import get_llm
 
 DEFAULT_LIMIT = 10
 RANDOM_SEED = 42
+DEFAULT_METHODS = "multiagent_streaming,multiagent_no_streaming,plain_llm"
 
 
 def get_benchmarks() -> dict[str, BenchmarkSpec]:
@@ -26,8 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--benchmark", default="gpqa", choices=sorted(benchmarks), help="Benchmark to run.")
     parser.add_argument(
         "--methods",
-        default="multiagent,plain_llm",
-        help="Comma-separated methods to compare. Supported: multiagent, plain_llm.",
+        default=DEFAULT_METHODS,
+        help=(
+            "Comma-separated methods to compare. Supported: multiagent_streaming, "
+            "multiagent_no_streaming, plain_llm. Legacy alias: multiagent."
+        ),
     )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Use 0 for full split.")
     parser.add_argument("--output-dir", default=str(runner.DEFAULT_OUTPUT_DIR), help="Directory for benchmark result CSV files.")

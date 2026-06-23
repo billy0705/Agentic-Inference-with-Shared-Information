@@ -11,7 +11,7 @@ from multi_agent_sync.graph.workflow import run_workflow
 
 
 DEFAULT_OUTPUT_DIR = Path("output")
-VALID_METHODS = {"multiagent", "plain_llm"}
+VALID_METHODS = {"multiagent", "multiagent_streaming", "multiagent_no_streaming", "plain_llm"}
 
 
 def parse_methods(methods: str) -> list[str]:
@@ -47,13 +47,20 @@ async def run_plain_llm(prompt: str, llm: Any) -> tuple[str, int]:
     return getattr(response, "content", str(response)), 0
 
 
-async def run_multiagent(prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int]:
+async def run_multiagent(
+    prompt: str,
+    llm: Any,
+    args: argparse.Namespace,
+    *,
+    enable_agent_message_streaming: bool = True,
+) -> tuple[str, int]:
     state = await run_workflow(
         task=prompt,
         llm=llm,
         max_steps_per_agent=args.max_steps,
         total_runtime_timeout=args.total_runtime_timeout,
         synthesis_timeout=args.synthesis_timeout,
+        enable_agent_message_streaming=enable_agent_message_streaming,
         stream_to_console=False,
         no_color=True,
     )
@@ -63,8 +70,10 @@ async def run_multiagent(prompt: str, llm: Any, args: argparse.Namespace) -> tup
 async def run_method(method: str, prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int]:
     if method == "plain_llm":
         return await run_plain_llm(prompt, llm)
-    if method == "multiagent":
-        return await run_multiagent(prompt, llm, args)
+    if method in {"multiagent", "multiagent_streaming"}:
+        return await run_multiagent(prompt, llm, args, enable_agent_message_streaming=True)
+    if method == "multiagent_no_streaming":
+        return await run_multiagent(prompt, llm, args, enable_agent_message_streaming=False)
     raise ValueError(f"Unknown method: {method}")
 
 
