@@ -1,12 +1,13 @@
 import csv
 import json
+import random
 import types
 from dataclasses import dataclass
 
 import pytest
 
 from multi_agent_sync.evaluation import main as evaluation
-from multi_agent_sync.evaluation import gpqa
+from multi_agent_sync.evaluation import gpqa, gsm8k, mmlu_pro
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 
@@ -69,6 +70,38 @@ def test_parser_accepts_simple_benchmark_command_shape():
     assert args.methods == "multiagent_streaming,multiagent_no_streaming,plain_llm"
     assert args.limit == 10
     assert args.data_file == "gpqa.csv"
+
+
+def test_parser_accepts_gsm8k_benchmark():
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "gsm8k",
+            "--methods",
+            "plain_llm",
+            "--limit",
+            "10",
+        ]
+    )
+
+    assert args.benchmark == "gsm8k"
+    assert "gsm8k" in evaluation.get_benchmarks()
+
+
+def test_parser_accepts_mmlu_pro_benchmark():
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "mmlu_pro",
+            "--methods",
+            "plain_llm",
+            "--limit",
+            "10",
+        ]
+    )
+
+    assert args.benchmark == "mmlu_pro"
+    assert "mmlu_pro" in evaluation.get_benchmarks()
 
 
 def test_json_trace_saving_is_enabled_by_default():
@@ -228,6 +261,7 @@ async def test_run_evaluation_writes_unique_csv_and_json_trace_by_default(monkey
     assert summary["summary"]["plain_llm"]["avg_total_tokens"] == 3.0
     assert summary["method_averages"]["plain_llm"] == {
         "correct_avg": 1.0,
+        "invalid_avg": 0.0,
         "time_avg_seconds": 0.1,
         "total_token_avg": 3.0,
     }
@@ -309,6 +343,24 @@ def test_default_output_path_uses_run_id_to_avoid_overwriting():
     )
 
 
+def test_gsm8k_default_output_path_uses_run_id_to_avoid_overwriting():
+    benchmark = gsm8k.build_benchmark()
+    args = evaluation.build_parser().parse_args(["--benchmark", "gsm8k"])
+
+    assert runner.resolve_output_path(benchmark, args, run_id="run-123") == (
+        runner.DEFAULT_OUTPUT_DIR / "gsm8k_results_run-123.csv"
+    )
+
+
+def test_mmlu_pro_default_output_path_uses_run_id_to_avoid_overwriting():
+    benchmark = mmlu_pro.build_benchmark()
+    args = evaluation.build_parser().parse_args(["--benchmark", "mmlu_pro"])
+
+    assert runner.resolve_output_path(benchmark, args, run_id="run-123") == (
+        runner.DEFAULT_OUTPUT_DIR / "mmlu_pro_results_run-123.csv"
+    )
+
+
 def test_output_filename_is_written_inside_output_folder():
     benchmark = gpqa.build_benchmark()
     args = evaluation.build_parser().parse_args(["--benchmark", "gpqa", "--output", "result.csv"])
@@ -320,6 +372,115 @@ def test_gpqa_owns_answer_extraction():
     benchmark = gpqa.build_benchmark()
 
     assert benchmark.extract_answer("Final Answer: C") == "C"
+
+
+def test_gsm8k_build_prompt_extracts_gold_answer_from_dataset_rationale():
+    prompt, gold = gsm8k.build_prompt(
+        {
+            "question": "Weng earns $12 an hour for babysitting. Yesterday, she did 50 minutes. How much did she earn?",
+            "answer": "Weng earns 12/60 = $<<12/60=0.2>>0.2 per minute. #### $10.00",
+        },
+        random.Random(0),
+    )
+
+    assert gold == "10"
+    assert "Weng earns $12 an hour" in prompt
+    assert "Final Answer: <number>" in prompt
+
+
+@pytest.mark.parametrize(
+    ("raw_output", "expected"),
+    [
+        ("Final Answer: 10", "10"),
+        ("Final answer: $10.00", "10"),
+        ("The answer is 10.0.", "10"),
+        ("#### 1,234", "1234"),
+        ("Reasoning mentions 3 and 7. Final Answer: 10", "10"),
+    ],
+)
+def test_gsm8k_extract_answer_normalizes_equivalent_numbers(raw_output, expected):
+    benchmark = gsm8k.build_benchmark()
+
+    assert benchmark.extract_answer(raw_output) == expected
+
+
+def test_gsm8k_extract_answer_uses_last_number_as_fallback():
+    benchmark = gsm8k.build_benchmark()
+
+    assert benchmark.extract_answer("First compute 12 / 6 = 2. Then add 8 to get 10.") == "10"
+
+
+def test_gsm8k_question_context_uses_lowercase_dataset_fields():
+    context = runner.build_question_context(
+        {
+            "question": "How many clips did Natalia sell?",
+            "answer": "Natalia sold 48+24 = <<48+24=72>>72 clips. #### 72",
+        }
+    )
+
+    assert context == {
+        "question": "How many clips did Natalia sell?",
+        "options": {},
+        "gold_answer": "72",
+    }
+
+
+def test_mmlu_pro_build_prompt_preserves_dataset_option_order_and_gold_letter():
+    prompt, gold = mmlu_pro.build_prompt(
+        {
+            "question": "Which statement is true?",
+            "options": ["Option A", "Option B", "Option C", "Option D", "Option E", "Option F", "Option G", "Option H", "Option I", "Option J"],
+            "answer": "H",
+            "answer_index": 7,
+            "category": "math",
+        },
+        random.Random(0),
+    )
+
+    assert gold == "H"
+    assert "A. Option A" in prompt
+    assert "H. Option H" in prompt
+    assert "J. Option J" in prompt
+    assert "Final Answer: <A/B/C/D/E/F/G/H/I/J>" in prompt
+
+
+@pytest.mark.parametrize(
+    ("raw_output", "expected"),
+    [
+        ("Final Answer: H", "H"),
+        ("Final answer: (H)", "H"),
+        ("The answer is option H.", "H"),
+        ("Answer: j", "J"),
+        ("(C)", "C"),
+    ],
+)
+def test_mmlu_pro_extract_answer_accepts_a_through_j(raw_output, expected):
+    benchmark = mmlu_pro.build_benchmark()
+
+    assert benchmark.extract_answer(raw_output) == expected
+
+
+def test_mmlu_pro_extract_answer_rejects_invalid_or_ambiguous_text():
+    benchmark = mmlu_pro.build_benchmark()
+
+    assert benchmark.extract_answer("Final Answer: K") is None
+    assert benchmark.extract_answer("I do not know.") is None
+
+
+def test_mmlu_pro_question_context_uses_options_list():
+    context = runner.build_question_context(
+        {
+            "question": "Which option is correct?",
+            "options": ["First", "Second", "Third"],
+            "answer": "B",
+        }
+    )
+
+    assert context == {
+        "question": "Which option is correct?",
+        "options": {"A": "First", "B": "Second", "C": "Third"},
+        "gold_answer": "B",
+    }
 
 
 def test_summarize_results_groups_accuracy_by_method():
@@ -520,6 +681,130 @@ def test_load_local_gpqa_csv_rows(tmp_path):
             "Incorrect Answer 3": "Wrong 3",
         }
     ]
+
+
+def test_load_local_gsm8k_jsonl_rows(tmp_path):
+    path = tmp_path / "gsm8k.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "question": "How many clips did Natalia sell?",
+                "answer": "Natalia sold 48+24 = <<48+24=72>>72 clips. #### 72",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = gsm8k.load_local_gsm8k_rows(path, limit=1)
+
+    assert rows == [
+        {
+            "question": "How many clips did Natalia sell?",
+            "answer": "Natalia sold 48+24 = <<48+24=72>>72 clips. #### 72",
+        }
+    ]
+
+
+def test_load_local_gsm8k_rows_validates_required_fields(tmp_path):
+    path = tmp_path / "gsm8k.jsonl"
+    path.write_text(json.dumps({"question": "Missing answer"}) + "\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="missing required field"):
+        gsm8k.load_local_gsm8k_rows(path)
+
+
+def test_load_gsm8k_dataset_uses_openai_main_test_split(monkeypatch):
+    captured = {}
+
+    class FakeDataset(list):
+        def select(self, selected_range):
+            return FakeDataset([self[index] for index in selected_range])
+
+    def fake_load_dataset(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeDataset(
+            [
+                {"question": "Question 1?", "answer": "#### 1"},
+                {"question": "Question 2?", "answer": "#### 2"},
+            ]
+        )
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "datasets",
+        types.SimpleNamespace(load_dataset=fake_load_dataset),
+    )
+
+    rows = gsm8k.load_gsm8k_dataset(limit=1)
+
+    assert captured == {"args": ("openai/gsm8k", "main"), "kwargs": {"split": "test"}}
+    assert rows == [{"question": "Question 1?", "answer": "#### 1"}]
+
+
+def test_load_local_mmlu_pro_jsonl_rows(tmp_path):
+    path = tmp_path / "mmlu_pro.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "question": "Which option is correct?",
+                "options": ["A option", "B option", "C option", "D option", "E option", "F option", "G option", "H option", "I option", "J option"],
+                "answer": "B",
+                "answer_index": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = mmlu_pro.load_local_mmlu_pro_rows(path, limit=1)
+
+    assert rows == [
+        {
+            "question": "Which option is correct?",
+            "options": ["A option", "B option", "C option", "D option", "E option", "F option", "G option", "H option", "I option", "J option"],
+            "answer": "B",
+            "answer_index": 1,
+        }
+    ]
+
+
+def test_load_local_mmlu_pro_rows_validates_required_fields(tmp_path):
+    path = tmp_path / "mmlu_pro.jsonl"
+    path.write_text(json.dumps({"question": "Missing options and answer"}) + "\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="missing required field"):
+        mmlu_pro.load_local_mmlu_pro_rows(path)
+
+
+def test_load_mmlu_pro_dataset_uses_test_split_only(monkeypatch):
+    captured = {}
+
+    class FakeDataset(list):
+        def select(self, selected_range):
+            return FakeDataset([self[index] for index in selected_range])
+
+    def fake_load_dataset(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeDataset(
+            [
+                {"question": "Question 1?", "options": ["A"] * 10, "answer": "A", "answer_index": 0},
+                {"question": "Question 2?", "options": ["B"] * 10, "answer": "B", "answer_index": 1},
+            ]
+        )
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "datasets",
+        types.SimpleNamespace(load_dataset=fake_load_dataset),
+    )
+
+    rows = mmlu_pro.load_mmlu_pro_dataset(limit=1)
+
+    assert captured == {"args": ("TIGER-Lab/MMLU-Pro",), "kwargs": {"split": "test"}}
+    assert rows == [{"question": "Question 1?", "options": ["A"] * 10, "answer": "A", "answer_index": 0}]
 
 
 def test_load_gpqa_dataset_falls_back_to_default_local_file_when_hub_is_gated(monkeypatch, tmp_path):

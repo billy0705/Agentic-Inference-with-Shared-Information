@@ -246,6 +246,7 @@ def method_message_streaming(method: str) -> bool | None:
 
 
 def build_question_context(row: dict[str, Any]) -> dict[str, Any]:
+    question = row.get("Question") or row.get("question", "")
     incorrect_answers = [
         row[field]
         for field in ("Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")
@@ -256,10 +257,20 @@ def build_question_context(row: dict[str, Any]) -> dict[str, Any]:
         options["correct"] = row.get("Correct Answer")
     if incorrect_answers:
         options["incorrect"] = incorrect_answers
-    return {
-        "question": row.get("Question", ""),
+    if isinstance(row.get("options"), list):
+        labels = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        options = {label: option for label, option in zip(labels, row["options"], strict=False)}
+    context: dict[str, Any] = {
+        "question": question,
         "options": options,
     }
+    if row.get("answer"):
+        match = re.search(r"####\s*(?P<answer>[^\n]+)", str(row["answer"]))
+        if match:
+            context["gold_answer"] = match.group("answer").strip()
+        elif len(str(row["answer"]).strip()) == 1:
+            context["gold_answer"] = str(row["answer"]).strip().upper()
+    return context
 
 
 def build_multiagent_debug(method_trace: dict[str, Any]) -> dict[str, Any]:
@@ -522,6 +533,7 @@ def build_method_averages(summary: dict[str, dict[str, float | int]]) -> dict[st
     return {
         method: {
             "correct_avg": float(stats["accuracy"]),
+            "invalid_avg": float(stats["invalid_rate"]),
             "time_avg_seconds": float(stats["avg_elapsed_seconds"]),
             "total_token_avg": float(stats["avg_total_tokens"]),
         }

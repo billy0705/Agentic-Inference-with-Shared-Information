@@ -4,7 +4,7 @@ import random
 import pytest
 
 from multi_agent_sync.agents.research_agent import ResearchAgent
-from multi_agent_sync.evaluation import gpqa
+from multi_agent_sync.evaluation import gpqa, gsm8k, mmlu_pro
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph import nodes
 from multi_agent_sync.orchestrator import orchestrator
@@ -41,6 +41,43 @@ def test_gpqa_prompt_is_rendered_from_template():
     assert "Final Answer: <A/B/C/D>" in prompt
     assert "You are answering a difficult graduate-level science multiple-choice question." not in inspect.getsource(
         gpqa.build_prompt
+    )
+
+
+def test_gsm8k_prompt_is_rendered_from_template():
+    prompt, gold = gsm8k.build_prompt(
+        {
+            "question": "Natalia sold 48 clips in April and half as many in May. How many did she sell?",
+            "answer": "Natalia sold 48/2 = <<48/2=24>>24 in May. #### 72",
+        },
+        random.Random(0),
+    )
+
+    assert gold == "72"
+    assert "Natalia sold 48 clips" in prompt
+    assert "Final Answer: <number>" in prompt
+    assert "You are solving a grade-school math word problem." not in inspect.getsource(gsm8k.build_prompt)
+
+
+def test_mmlu_pro_prompt_is_rendered_from_template():
+    prompt, gold = mmlu_pro.build_prompt(
+        {
+            "question": "Which option is correct?",
+            "options": ["First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth", "Ninth", "Tenth"],
+            "answer": "J",
+            "answer_index": 9,
+            "category": "science",
+        },
+        random.Random(0),
+    )
+
+    assert gold == "J"
+    assert "Category: science" in prompt
+    assert "A. First" in prompt
+    assert "J. Tenth" in prompt
+    assert "Final Answer: <A/B/C/D/E/F/G/H/I/J>" in prompt
+    assert "You are answering a challenging multiple-choice question from MMLU-Pro." not in inspect.getsource(
+        mmlu_pro.build_prompt
     )
 
 

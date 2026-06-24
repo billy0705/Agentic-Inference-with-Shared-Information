@@ -255,6 +255,18 @@ Run GPQA-Diamond against the multi-agent workflow with agent-to-agent message st
 uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
 ```
 
+Run GSM8K test-set math word problems with the same methods:
+
+```bash
+uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+```
+
+Run MMLU-Pro test-set multiple-choice questions with the same methods:
+
+```bash
+uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+```
+
 To compare fixed subagents, dynamic subagents, and the direct baseline in one run:
 
 ```bash
@@ -280,6 +292,22 @@ uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_
 ```
 
 Local `.csv`, `.jsonl`, and `.ndjson` files must include `Question`, `Correct Answer`, `Incorrect Answer 1`, `Incorrect Answer 2`, and `Incorrect Answer 3`.
+
+GSM8K uses the public Hugging Face dataset `openai/gsm8k`, config `main`, split `test`. Rows contain `question` and `answer`; the gold answer is the final numeric value after the `####` marker in `answer`. The evaluator normalizes equivalent numeric formatting, so values like `10`, `10.0`, and `$10.00` score the same. To use a local GSM8K-shaped file:
+
+```bash
+uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/gsm8k.jsonl
+```
+
+Local GSM8K `.csv`, `.jsonl`, and `.ndjson` files must include `question` and `answer`.
+
+MMLU-Pro uses the public Hugging Face dataset `TIGER-Lab/MMLU-Pro`, split `test` only. Rows contain `question`, `options`, `answer`, and optionally `answer_index`, `category`, `cot_content`, `question_id`, and `src`. The evaluator keeps the dataset option order, labels the 10 options `A` through `J`, and scores against the `answer` letter. To use a local MMLU-Pro-shaped file:
+
+```bash
+uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/mmlu_pro.jsonl
+```
+
+Local MMLU-Pro `.csv`, `.jsonl`, and `.ndjson` files must include `question`, `options`, and `answer`. For CSV files, `options` must be a JSON list string.
 
 ## Current Limitations
 

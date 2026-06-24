@@ -6,7 +6,7 @@ import random
 import time
 from typing import Any
 
-from multi_agent_sync.evaluation import gpqa
+from multi_agent_sync.evaluation import gpqa, gsm8k, mmlu_pro
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
@@ -19,8 +19,12 @@ EVALUATION_MAX_TOKENS = 16384
 
 
 def get_benchmarks() -> dict[str, BenchmarkSpec]:
-    benchmark = gpqa.build_benchmark()
-    return {benchmark.name: benchmark}
+    benchmarks = [
+        gpqa.build_benchmark(),
+        gsm8k.build_benchmark(),
+        mmlu_pro.build_benchmark(),
+    ]
+    return {benchmark.name: benchmark for benchmark in benchmarks}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--data-file",
         default=None,
-        help="Optional local benchmark data file. For GPQA, use a GPQA-style CSV or JSONL file.",
+        help="Optional local benchmark data file. Use benchmark-shaped CSV, JSONL, or NDJSON rows.",
     )
     parser.add_argument(
         "--save-json-traces",
@@ -166,6 +170,7 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                         "settings": runner.build_method_settings(method, args),
                         "question": question_context["question"],
                         "options": question_context["options"],
+                        "gold_answer": question_context.get("gold_answer", gold),
                         "prompt": prompt,
                         "raw_output": raw_output,
                         "multiagent_debug": runner.build_multiagent_debug(method_trace),
