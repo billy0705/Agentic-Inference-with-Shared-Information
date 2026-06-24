@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import random
+import time
 from typing import Any
 
 from multi_agent_sync.evaluation import gpqa
@@ -64,19 +65,30 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
     methods = runner.parse_methods(args.methods)
     items = benchmark.load_items(args)
     rng = random.Random(args.seed)
-    llm = get_llm(args.model, openai=not args.local_model)
+    llm = get_llm(args.model, openai=not args.local_model, max_tokens=16384)
     output_path = runner.resolve_output_path(benchmark, args)
     results: list[dict[str, Any]] = []
 
     for idx, row in enumerate(runner.progress(items, desc=f"Benchmarking {benchmark.display_name}")):
         prompt, gold = benchmark.build_prompt(dict(row), rng)
         for method in methods:
+            started_at = time.perf_counter()
             try:
-                raw_output, returncode = await runner.run_method(method, prompt, llm, args)
+                run_result = await runner.run_method(method, prompt, llm, args)
+                raw_output = run_result.raw_output
+                returncode = run_result.returncode
+                elapsed_seconds = run_result.elapsed_seconds
+                prompt_tokens = run_result.prompt_tokens
+                completion_tokens = run_result.completion_tokens
+                total_tokens = run_result.total_tokens
                 error = ""
             except Exception as exc:
                 raw_output = ""
                 returncode = 1
+                elapsed_seconds = time.perf_counter() - started_at
+                prompt_tokens = None
+                completion_tokens = None
+                total_tokens = None
                 error = str(exc)
 
             pred = benchmark.extract_answer(raw_output)
@@ -89,6 +101,10 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "correct": pred == gold,
                 "returncode": returncode,
                 "error": error,
+                "elapsed_seconds": elapsed_seconds,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
                 "raw_output": raw_output,
             }
             results.append(result)
