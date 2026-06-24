@@ -8,7 +8,7 @@ from typing import Any, Literal, TypedDict
 from multi_agent_sync.prompts import render_prompt
 
 
-Mode = Literal["direct", "multi_agent"]
+Mode = Literal["multi_agent"]
 SubagentMode = Literal["fixed", "dynamic"]
 
 
@@ -138,11 +138,11 @@ def validate_orchestrator_plan(
     subagent_mode: SubagentMode = "fixed",
 ) -> OrchestratorPlan:
     mode = raw_plan.get("mode")
-    if mode not in {"direct", "multi_agent"}:
+    if mode != "multi_agent":
         return create_fallback_plan(
             task,
             available_agents,
-            reason="Model orchestrator returned an invalid mode.",
+            reason="Model orchestrator returned direct or invalid mode; direct mode is disabled.",
             subagent_mode=subagent_mode,
         )
 
@@ -158,9 +158,7 @@ def validate_orchestrator_plan(
         if subagent_mode == "dynamic"
         else normalize_selected_agents(raw_plan.get("selected_agents"), available_agents)
     )
-    if mode == "direct":
-        selected_agents = []
-    elif subagent_mode == "dynamic" and not is_valid_dynamic_agent_pool(selected_agents):
+    if subagent_mode == "dynamic" and not is_valid_dynamic_agent_pool(selected_agents):
         return create_fallback_plan(
             task,
             available_agents,
@@ -174,9 +172,11 @@ def validate_orchestrator_plan(
             reason="Model orchestrator did not select a valid multi-agent pool.",
             subagent_mode=subagent_mode,
         )
+    elif subagent_mode == "fixed":
+        selected_agents = ensure_fixed_review_agent(selected_agents, available_agents)
 
     return {
-        "mode": mode,
+        "mode": "multi_agent",
         "subagent_mode": subagent_mode,
         "task_type": task_type,
         "task_summary": task_summary,
@@ -209,6 +209,24 @@ def normalize_selected_agents(value: Any, available_agents: Mapping[str, Any]) -
         if len(selected_agents) == MAX_SELECTED_AGENTS:
             break
     return selected_agents
+
+
+def ensure_fixed_review_agent(selected_agents: list[SelectedAgent], available_agents: Mapping[str, Any]) -> list[SelectedAgent]:
+    if any(agent["name"] in {"CriticAgent", "VerifierAgent"} for agent in selected_agents):
+        return selected_agents
+
+    review_agent_name = "VerifierAgent" if "VerifierAgent" in available_agents else "CriticAgent"
+    if review_agent_name not in available_agents:
+        return selected_agents
+
+    review_agent: SelectedAgent = {
+        "name": review_agent_name,
+        "subtask": fallback_subtask(review_agent_name, ""),
+        "expected_output": fallback_expected_output(review_agent_name),
+    }
+    if len(selected_agents) < MAX_SELECTED_AGENTS:
+        return [*selected_agents, review_agent]
+    return [*selected_agents[:-1], review_agent]
 
 
 def normalize_dynamic_selected_agents(value: Any) -> list[SelectedAgent]:

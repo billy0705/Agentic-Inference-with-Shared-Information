@@ -44,6 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional local benchmark data file. For GPQA, use a GPQA-style CSV or JSONL file.",
     )
+    parser.add_argument(
+        "--save-json-traces",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Save per-example JSON traces and run config artifacts. Enabled by default; use --no-save-json-traces to disable.",
+    )
     parser.add_argument("--model", default=None, help="Model name to pass to the selected provider.")
     parser.add_argument(
         "--local-model",
@@ -68,13 +74,36 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
     items = benchmark.load_items(args)
     rng = random.Random(args.seed)
     llm = get_llm(args.model, openai=not args.local_model, max_tokens=EVALUATION_MAX_TOKENS)
-    output_path = runner.resolve_output_path(benchmark, args)
+    run_id = runner.create_run_id()
+    output_path = runner.resolve_output_path(benchmark, args, run_id=run_id)
+    run_config = runner.build_run_config(benchmark, args, methods, run_id=run_id, output_path=output_path)
+    if args.save_json_traces:
+        runner.write_json_file(runner.resolve_json_trace_root(args, run_id) / "run_config.json", run_config)
     results: list[dict[str, Any]] = []
 
+    def flush_incremental_artifacts() -> None:
+        runner.write_results_csv(output_path, results)
+        trace_root = runner.resolve_json_trace_root(args, run_id)
+        runner.write_correctness_matrix_csv(trace_root, results, methods)
+        summary = runner.summarize_results(results)
+        if args.save_json_traces:
+            runner.write_json_file(
+                trace_root / "summary.json",
+                {
+                    "run_config": run_config,
+                    "summary": summary,
+                    "method_averages": runner.build_method_averages(summary),
+                    "results": results,
+                },
+            )
+
     for idx, row in enumerate(runner.progress(items, desc=f"Benchmarking {benchmark.display_name}")):
-        prompt, gold = benchmark.build_prompt(dict(row), rng)
+        row_dict = dict(row)
+        prompt, gold = benchmark.build_prompt(row_dict, rng)
+        question_context = runner.build_question_context(row_dict)
         for method in methods:
             started_at = time.perf_counter()
+            method_trace: dict[str, Any] = {}
             try:
                 run_result = await runner.run_method(method, prompt, llm, args)
                 raw_output = run_result.raw_output
@@ -83,6 +112,7 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                 prompt_tokens = run_result.prompt_tokens
                 completion_tokens = run_result.completion_tokens
                 total_tokens = run_result.total_tokens
+                method_trace = run_result.trace or {}
                 error = ""
             except Exception as exc:
                 raw_output = ""
@@ -92,6 +122,7 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                 completion_tokens = None
                 total_tokens = None
                 error = str(exc)
+                method_trace = {"error": error}
 
             pred = benchmark.extract_answer(raw_output)
             result = {
@@ -108,12 +139,45 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
                 "raw_output": raw_output,
+                "json_trace_path": "",
             }
+            if args.save_json_traces:
+                trace_path = runner.resolve_example_trace_path(args, run_id, idx, method)
+                result["json_trace_path"] = str(trace_path)
+                runner.write_json_file(
+                    trace_path,
+                    {
+                        "run_id": run_id,
+                        "benchmark": benchmark.name,
+                        "benchmark_display_name": benchmark.display_name,
+                        "method": method,
+                        "index": idx,
+                        "gold": gold,
+                        "pred": pred,
+                        "correct": pred == gold,
+                        "returncode": returncode,
+                        "error": error,
+                        "elapsed_seconds": elapsed_seconds,
+                        "token_usage": {
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": total_tokens,
+                        },
+                        "settings": runner.build_method_settings(method, args),
+                        "question": question_context["question"],
+                        "options": question_context["options"],
+                        "prompt": prompt,
+                        "raw_output": raw_output,
+                        "multiagent_debug": runner.build_multiagent_debug(method_trace),
+                        "method_trace": method_trace,
+                    },
+                )
             results.append(result)
+            flush_incremental_artifacts()
             runner.print_result(result)
 
-    runner.write_results_csv(output_path, results)
-    runner.print_summary(benchmark, runner.summarize_results(results), output_path)
+    summary = runner.summarize_results(results)
+    runner.print_summary(benchmark, summary, output_path)
     return results
 
 

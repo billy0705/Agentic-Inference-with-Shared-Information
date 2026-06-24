@@ -224,7 +224,7 @@ async def test_langgraph_workflow_runs_from_start_to_end():
 
 
 @pytest.mark.asyncio
-async def test_direct_route_skips_agent_runtime():
+async def test_direct_orchestrator_response_falls_back_to_multi_agent_runtime():
     state = await run_workflow(
         task="What is an API?",
         llm=FakeLLM(),
@@ -232,14 +232,14 @@ async def test_direct_route_skips_agent_runtime():
         stream_to_console=False,
     )
 
-    assert state["mode"] == "direct"
-    assert state["assignments"] == []
-    assert state["agent_outputs"] == {}
-    assert state["agent_traces"] == {}
-    assert state["final_answer"] == "A direct answer from one LLM call."
+    assert state["mode"] == "multi_agent"
+    assert set(state["agent_outputs"]) == {"CodingAgent", "CriticAgent", "VerifierAgent"}
+    assert state["agent_traces"]
+    assert state["final_answer"] == "A concise final plan that combines research, coding, and critique outputs."
     assert any(
         event.event_type == "plan_created"
-        and "mode=direct, task_type=simple factual question, selected_agents=none" in event.content
+        and "mode=multi_agent" in event.content
+        and "selected_agents=CodingAgent,CriticAgent,VerifierAgent" in event.content
         for event in state["event_log"]
     )
 

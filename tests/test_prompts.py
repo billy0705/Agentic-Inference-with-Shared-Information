@@ -79,5 +79,6 @@ def test_orchestrator_prompt_is_rendered_from_template():
 
     assert "You are the model-based orchestrator for a local LangGraph multi-agent system." in prompt
     assert "Build a chess app" in prompt
-    assert '"mode": "direct" | "multi_agent"' in prompt
+    assert '"mode": "multi_agent"' in prompt
+    assert "direct mode" not in prompt.lower()
     assert "You are the model-based orchestrator" not in inspect.getsource(orchestrator.build_orchestrator_prompt)

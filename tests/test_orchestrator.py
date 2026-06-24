@@ -24,7 +24,7 @@ def agent_names(plan: dict) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_simple_task_routes_to_direct_mode():
+async def test_direct_mode_is_not_allowed_and_falls_back_to_multi_agent():
     llm = StaticLLM(
         """
         {
@@ -50,9 +50,41 @@ async def test_simple_task_routes_to_direct_mode():
 
     plan = await create_model_based_plan("What is an API?", llm, AGENT_REGISTRY)
 
-    assert plan["mode"] == "direct"
-    assert plan["task_type"] == "simple factual question"
-    assert plan["selected_agents"] == []
+    assert plan["mode"] == "multi_agent"
+    assert plan["subagent_mode"] == "fixed"
+    assert len(plan["selected_agents"]) >= 2
+    assert {"CriticAgent", "VerifierAgent"} & set(agent_names(plan))
+
+
+@pytest.mark.asyncio
+async def test_fixed_multi_agent_plan_adds_verifier_when_critic_or_verifier_is_missing():
+    llm = StaticLLM(
+        """
+        {
+          "mode": "multi_agent",
+          "task_type": "reasoning task",
+          "task_summary": "The user asks for reasoning.",
+          "reason": "The task needs solver work.",
+          "selected_agents": [
+            {
+              "name": "SolverAgent",
+              "subtask": "Solve the task.",
+              "expected_output": "A concise answer."
+            }
+          ],
+          "collaboration_protocol": {
+            "event_types_to_share": ["finding", "critique", "warning"],
+            "reactive_steps": true,
+            "notes": "Share findings."
+          }
+        }
+        """
+    )
+
+    plan = await create_model_based_plan("Reason about this question.", llm, AGENT_REGISTRY)
+
+    assert plan["mode"] == "multi_agent"
+    assert agent_names(plan) == ["SolverAgent", "VerifierAgent"]
 
 
 @pytest.mark.asyncio

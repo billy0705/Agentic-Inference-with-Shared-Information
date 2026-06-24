@@ -9,15 +9,14 @@ The prototype intentionally does not use AutoGen.
 LangGraph is used for the workflow lifecycle:
 
 1. The orchestrator asks the LLM to inspect the task and create a structured plan.
-2. Simple tasks route to a one-shot direct answer node.
-3. Multi-agent tasks start only the selected concurrent workers.
+2. The orchestrator always creates a multi-agent plan.
+3. The runtime starts only the selected concurrent workers.
 4. The synthesizer combines worker outputs and the event log into a final answer.
 
 The graph shape is:
 
 ```text
-START -> orchestrator -> direct_answer -> END
-                    \-> run_multi_agent_runtime -> synthesizer -> END
+START -> orchestrator -> run_multi_agent_runtime -> synthesizer -> END
 ```
 
 This follows the orchestrator-worker style conceptually: the orchestrator assigns work, workers execute concurrently, and the final node synthesizes results.
@@ -26,7 +25,7 @@ This follows the orchestrator-worker style conceptually: the orchestrator assign
 
 The orchestrator no longer uses a fixed keyword classifier or a fixed task-type-to-agent mapping. It asks the configured LLM to return a strict JSON plan with:
 
-- `mode`: `direct` or `multi_agent`
+- `mode`: `multi_agent`
 - `subagent_mode`: `fixed` or `dynamic`
 - `task_type`: a short free-text label generated for this task
 - `task_summary`
@@ -34,7 +33,7 @@ The orchestrator no longer uses a fixed keyword classifier or a fixed task-type-
 - `selected_agents`: a small list of registered agents with concrete subtasks
 - `collaboration_protocol`: event types to share and whether reactive steps are enabled
 
-If `mode` is `direct`, the graph skips worker startup. If `mode` is `multi_agent`, the runtime constructs only the agents listed in `selected_agents`. In fixed mode, every selected name must exist in `AGENT_REGISTRY`.
+The runtime constructs only the agents listed in `selected_agents`. In fixed mode, every selected name must exist in `AGENT_REGISTRY`, and every plan includes `CriticAgent` or `VerifierAgent`.
 
 By default the runtime uses fixed subagents:
 
@@ -56,13 +55,15 @@ The orchestrator validates model output before runtime execution:
 
 - invented agent names are removed
 - `ArchitectAgent` is never required or selected
-- direct mode always has no selected agents
+- direct mode is disabled and falls back to a deterministic multi-agent plan
 - multi-agent plans with no valid workers fall back to a small deterministic agent set
+- fixed multi-agent plans always include `CriticAgent` or `VerifierAgent`
+- dynamic multi-agent plans always include a critical debate subagent
 - selected agents are limited to at most four
 
 Examples:
 
-- Simple Q&A: direct answer, no agents.
+- Simple Q&A: a small multi-agent set with critique or verification.
 - Calculation: `SolverAgent`, `VerifierAgent`.
 - Coding or debugging task: usually `CodingAgent`, `CriticAgent`, and `VerifierAgent`.
 - Research or comparison task: usually `ResearchAgent`, `SolverAgent`, and `CriticAgent`.
@@ -260,7 +261,17 @@ To compare fixed subagents, dynamic subagents, and the direct baseline in one ru
 uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,multiagent_dynamic_streaming,multiagent_dynamic_no_streaming,plain_llm --limit 10
 ```
 
-The benchmark writes per-question results to `output/gpqa_diamond_results.csv` by default and prints accuracy plus invalid-answer rate for each method. `multiagent` remains as a legacy alias for fixed `multiagent_streaming`. Use `--output result.csv` to write `output/result.csv`, or `--output-dir other-output` to change the results directory. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the default OpenAI-compatible API provider.
+The benchmark writes per-question CSV results with a unique run id in the filename, such as `output/gpqa_diamond_results_20260624T130000Z_ab12cd34.csv`, and prints accuracy, invalid-answer rate, total tokens, average tokens, total time, and average time for each method. The results CSV, summary JSON, and correctness matrix CSV are updated after each completed question-method run, so partial progress is inspectable while a benchmark is still running. `multiagent` remains as a legacy alias for fixed `multiagent_streaming`. Use `--output result.csv` to write `output/result.csv`, or `--output-dir other-output` to change the results directory. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the default OpenAI-compatible API provider.
+
+The correctness matrix is written inside the run trace folder as `output/json_traces/<run_id>/correctness.csv`. Rows are task ids, columns are method names, and each cell is `T`, `F`, or blank if that method has not finished that task yet.
+
+JSON traces are saved by default under `output/json_traces/<run_id>/`. Each per-example method trace stores the resolved model name, settings, question, answer choices, prompt, raw output, token usage, selected subagents, messages sent by agents, a compact workflow, and the full method trace. It does not duplicate the entire benchmark row. Use `--no-save-json-traces` to disable JSON artifacts.
+
+To compare where methods disagree after a run:
+
+```bash
+uv run python scripts/compare_eval_traces.py output/json_traces/<run_id>
+```
 
 GPQA on Hugging Face is gated. If the Hub-backed load fails because the dataset requires authentication, the evaluator automatically falls back to `data/gpqa_diamond.csv` when that file exists. Authenticate with an account that has dataset access, set `HF_TOKEN`, or pass your own local GPQA-style file with:
 
