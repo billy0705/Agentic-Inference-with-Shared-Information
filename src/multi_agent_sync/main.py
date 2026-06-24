@@ -22,6 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent.")
     parser.add_argument(
+        "--subagent-mode",
+        choices=("fixed", "dynamic"),
+        default="fixed",
+        help="Use fixed registered agents or dynamic Orchestrator-defined subagents.",
+    )
+    parser.add_argument(
         "--total-runtime-timeout",
         type=float,
         default=600.0,
@@ -43,6 +49,7 @@ async def async_main(args: argparse.Namespace) -> None:
     state = await run_workflow(
         task=task,
         llm=llm,
+        subagent_mode=args.subagent_mode,
         max_steps_per_agent=args.max_steps,
         total_runtime_timeout=args.total_runtime_timeout,
         stream_to_console=True,

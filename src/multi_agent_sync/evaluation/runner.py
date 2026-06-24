@@ -13,7 +13,14 @@ from multi_agent_sync.graph.workflow import run_workflow
 
 
 DEFAULT_OUTPUT_DIR = Path("output")
-VALID_METHODS = {"multiagent", "multiagent_streaming", "multiagent_no_streaming", "plain_llm"}
+VALID_METHODS = {
+    "multiagent",
+    "multiagent_streaming",
+    "multiagent_no_streaming",
+    "multiagent_dynamic_streaming",
+    "multiagent_dynamic_no_streaming",
+    "plain_llm",
+}
 
 
 @dataclass
@@ -136,10 +143,12 @@ async def run_multiagent(
     args: argparse.Namespace,
     *,
     enable_agent_message_streaming: bool = True,
+    subagent_mode: str = "fixed",
 ) -> tuple[str, int]:
     state = await run_workflow(
         task=prompt,
         llm=llm,
+        subagent_mode=subagent_mode,
         max_steps_per_agent=args.max_steps,
         total_runtime_timeout=args.total_runtime_timeout,
         synthesis_timeout=args.synthesis_timeout,
@@ -156,9 +165,37 @@ async def run_method(method: str, prompt: str, llm: Any, args: argparse.Namespac
     if method == "plain_llm":
         raw_output, returncode = await run_plain_llm(prompt, metered_llm)
     elif method in {"multiagent", "multiagent_streaming"}:
-        raw_output, returncode = await run_multiagent(prompt, metered_llm, args, enable_agent_message_streaming=True)
+        raw_output, returncode = await run_multiagent(
+            prompt,
+            metered_llm,
+            args,
+            enable_agent_message_streaming=True,
+            subagent_mode="fixed",
+        )
     elif method == "multiagent_no_streaming":
-        raw_output, returncode = await run_multiagent(prompt, metered_llm, args, enable_agent_message_streaming=False)
+        raw_output, returncode = await run_multiagent(
+            prompt,
+            metered_llm,
+            args,
+            enable_agent_message_streaming=False,
+            subagent_mode="fixed",
+        )
+    elif method == "multiagent_dynamic_streaming":
+        raw_output, returncode = await run_multiagent(
+            prompt,
+            metered_llm,
+            args,
+            enable_agent_message_streaming=True,
+            subagent_mode="dynamic",
+        )
+    elif method == "multiagent_dynamic_no_streaming":
+        raw_output, returncode = await run_multiagent(
+            prompt,
+            metered_llm,
+            args,
+            enable_agent_message_streaming=False,
+            subagent_mode="dynamic",
+        )
     else:
         raise ValueError(f"Unknown method: {method}")
 

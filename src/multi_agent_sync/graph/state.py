@@ -10,6 +10,7 @@ class GraphState(TypedDict):
     task: str
     run_id: str
     mode: str
+    subagent_mode: str
     task_type: str
     reason: str
     plan: list[str]

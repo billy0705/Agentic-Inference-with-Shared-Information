@@ -4,6 +4,7 @@ import pytest
 
 from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
+from multi_agent_sync.streaming import console
 
 
 @pytest.mark.asyncio
@@ -99,3 +100,17 @@ async def test_drain_does_not_hang_when_handler_is_slow_or_bad():
     await streamer.drain(timeout=0.2)
 
     assert not completed.is_set()
+
+
+def test_console_event_format_shows_source_to_target_route():
+    event = AgentEvent(
+        run_id="run-1",
+        source="ImplementationPlanner",
+        target="CriticalDebateAgent",
+        event_type="finding",
+        content="Runtime should instantiate DynamicAgent.",
+    )
+
+    rendered = console.format_console_event(event, elapsed=1.25)
+
+    assert "[0001.25] [finding] ImplementationPlanner -> CriticalDebateAgent: Runtime should instantiate DynamicAgent." == rendered

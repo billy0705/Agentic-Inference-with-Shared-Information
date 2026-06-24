@@ -5,6 +5,23 @@ Overall user task:
 
 Agent role:
 {{ role }}
+{% if description %}
+
+Agent description:
+{{ description }}
+{% endif %}
+{% if rules %}
+
+Agent rules:
+{% for rule in rules %}
+- {{ rule }}
+{% endfor %}
+{% endif %}
+{% if critical_debate %}
+
+Critical debate responsibility:
+Challenge assumptions, identify contradictions, and share critiques that other agents and the Synthesizer should consider.
+{% endif %}
 
 Assigned subtask:
 {{ assigned_subtask }}

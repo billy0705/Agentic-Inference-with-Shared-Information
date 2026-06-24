@@ -28,6 +28,69 @@ class FakeLLM:
         )
 
 
+class DynamicFakeLLM:
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if "dynamic subagent orchestrator" in prompt:
+            return FakeResponse(
+                """
+                {
+                  "mode": "multi_agent",
+                  "task_type": "dynamic software task",
+                  "task_summary": "The user asks for dynamic workers.",
+                  "reason": "The task needs specialized planning and critical debate.",
+                  "selected_agents": [
+                    {
+                      "name": "Implementation Planner",
+                      "role": "Plans the code changes.",
+                      "description": "Identifies files, tests, and integration points.",
+                      "rules": ["Share implementation findings."],
+                      "subtask": "Plan the implementation details.",
+                      "expected_output": "Implementation guidance.",
+                      "critical_debate": false
+                    },
+                    {
+                      "name": "Critical Debate Agent",
+                      "role": "Challenges the plan.",
+                      "description": "Finds missing assumptions and edge cases.",
+                      "rules": ["Publish critique events."],
+                      "subtask": "Critique the implementation plan.",
+                      "expected_output": "Critiques and risks.",
+                      "critical_debate": true
+                    }
+                  ],
+                  "collaboration_protocol": {
+                    "event_types_to_share": ["finding", "critique", "warning"],
+                    "reactive_steps": true,
+                    "notes": "Use each other's findings."
+                  }
+                }
+                """
+            )
+        if "You are CriticalDebateAgent" in prompt:
+            assert "Finds missing assumptions and edge cases." in prompt
+            assert "Publish critique events." in prompt
+            return FakeResponse(
+                "SUMMARY:\nCritical debate found a risk.\n"
+                "SHARE_FINDING:\nThe dynamic plan needs compatibility checks.\n"
+                "CONFIDENCE:\n0.85\n"
+                "LOCAL_NOTES:\nCritique complete."
+            )
+        if "You are ImplementationPlanner" in prompt:
+            assert "Identifies files, tests, and integration points." in prompt
+            assert "Share implementation findings." in prompt
+            return FakeResponse(
+                "SUMMARY:\nImplementation plan created.\n"
+                "SHARE_FINDING:\nRuntime should instantiate DynamicAgent.\n"
+                "CONFIDENCE:\n0.8\n"
+                "LOCAL_NOTES:\nPlanner complete."
+            )
+        if "Synthesizer" in prompt:
+            assert "ImplementationPlanner" in prompt
+            assert "CriticalDebateAgent" in prompt
+            return FakeResponse("Synthesized dynamic-agent answer.")
+        return FakeResponse("Unexpected prompt")
+
+
 class HangingSynthesizerLLM(FakeLLM):
     async def ainvoke(self, prompt: str) -> FakeResponse:
         if "Synthesizer" in prompt:
@@ -196,6 +259,25 @@ async def test_calculation_runtime_constructs_only_solver_and_verifier_agents():
     assert set(state["agent_outputs"]) == {"SolverAgent", "VerifierAgent"}
     assert "CodingAgent" not in state["agent_outputs"]
     assert set(state["agent_traces"]) == {"SolverAgent", "VerifierAgent"}
+
+
+@pytest.mark.asyncio
+async def test_dynamic_workflow_constructs_free_named_agents_and_synthesizes_outputs():
+    state = await run_workflow(
+        task="Implement dynamic subagents.",
+        llm=DynamicFakeLLM(),
+        max_steps_per_agent=1,
+        total_runtime_timeout=5,
+        stream_to_console=False,
+        subagent_mode="dynamic",
+    )
+
+    assert state["subagent_mode"] == "dynamic"
+    assert set(state["agent_outputs"]) == {"ImplementationPlanner", "CriticalDebateAgent"}
+    assert state["selected_agents"][0]["description"] == "Identifies files, tests, and integration points."
+    assert state["selected_agents"][1]["critical_debate"] is True
+    assert any(event.event_type == "critique" and event.source == "CriticalDebateAgent" for event in state["event_log"])
+    assert state["final_answer"] == "Synthesized dynamic-agent answer."
 
 
 @pytest.mark.asyncio

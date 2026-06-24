@@ -9,12 +9,17 @@ from multi_agent_sync.prompts import render_prompt
 
 
 Mode = Literal["direct", "multi_agent"]
+SubagentMode = Literal["fixed", "dynamic"]
 
 
-class SelectedAgent(TypedDict):
+class SelectedAgent(TypedDict, total=False):
     name: str
     subtask: str
     expected_output: str
+    role: str
+    description: str
+    rules: list[str]
+    critical_debate: bool
 
 
 class CollaborationProtocol(TypedDict):
@@ -25,6 +30,7 @@ class CollaborationProtocol(TypedDict):
 
 class OrchestratorPlan(TypedDict):
     mode: Mode
+    subagent_mode: SubagentMode
     task_type: str
     task_summary: str
     reason: str
@@ -48,20 +54,39 @@ RESEARCH_KEYWORDS = ("research", "comparison", "compare", "literature", "recent 
 REASONING_KEYWORDS = ("math", "calculate", "calculation", "proof", "prove", "theorem", "logic", "philosophy", "reasoning", "argument", "theory")
 
 
-async def create_model_based_plan(task: str, llm: Any, available_agents: Mapping[str, Any]) -> OrchestratorPlan:
-    prompt = build_orchestrator_prompt(task, available_agents)
+async def create_model_based_plan(
+    task: str,
+    llm: Any,
+    available_agents: Mapping[str, Any],
+    subagent_mode: SubagentMode = "fixed",
+) -> OrchestratorPlan:
+    prompt = (
+        build_dynamic_orchestrator_prompt(task)
+        if subagent_mode == "dynamic"
+        else build_orchestrator_prompt(task, available_agents)
+    )
     try:
         response = await llm.ainvoke(prompt)
         content = getattr(response, "content", str(response))
         raw_plan = extract_json_object(content)
     except Exception as exc:
-        return create_fallback_plan(task, available_agents, reason=f"Model orchestrator failed or returned invalid JSON: {exc}")
+        return create_fallback_plan(
+            task,
+            available_agents,
+            reason=f"Model orchestrator failed or returned invalid JSON: {exc}",
+            subagent_mode=subagent_mode,
+        )
 
-    return validate_orchestrator_plan(raw_plan, task, available_agents)
+    return validate_orchestrator_plan(raw_plan, task, available_agents, subagent_mode=subagent_mode)
 
 
-async def create_orchestrator_plan(task: str, llm: Any, available_agents: Mapping[str, Any]) -> OrchestratorPlan:
-    return await create_model_based_plan(task, llm, available_agents)
+async def create_orchestrator_plan(
+    task: str,
+    llm: Any,
+    available_agents: Mapping[str, Any],
+    subagent_mode: SubagentMode = "fixed",
+) -> OrchestratorPlan:
+    return await create_model_based_plan(task, llm, available_agents, subagent_mode=subagent_mode)
 
 
 def build_orchestrator_prompt(task: str, available_agents: Mapping[str, Any]) -> str:
@@ -76,6 +101,10 @@ def build_orchestrator_prompt(task: str, available_agents: Mapping[str, Any]) ->
         agent_lines=agent_lines,
         allowed_names=allowed_names,
     )
+
+
+def build_dynamic_orchestrator_prompt(task: str) -> str:
+    return render_prompt("orchestrator/dynamic_model_plan.j2", task=task)
 
 
 def extract_json_object(content: str) -> dict[str, Any]:
@@ -102,10 +131,20 @@ def extract_json_object(content: str) -> dict[str, Any]:
     return value
 
 
-def validate_orchestrator_plan(raw_plan: Mapping[str, Any], task: str, available_agents: Mapping[str, Any]) -> OrchestratorPlan:
+def validate_orchestrator_plan(
+    raw_plan: Mapping[str, Any],
+    task: str,
+    available_agents: Mapping[str, Any],
+    subagent_mode: SubagentMode = "fixed",
+) -> OrchestratorPlan:
     mode = raw_plan.get("mode")
     if mode not in {"direct", "multi_agent"}:
-        return create_fallback_plan(task, available_agents, reason="Model orchestrator returned an invalid mode.")
+        return create_fallback_plan(
+            task,
+            available_agents,
+            reason="Model orchestrator returned an invalid mode.",
+            subagent_mode=subagent_mode,
+        )
 
     task_type = _clean_text(raw_plan.get("task_type")) or infer_fallback_task_type(task)
     if task_type.lower() == "unknown" and task.strip():
@@ -114,14 +153,31 @@ def validate_orchestrator_plan(raw_plan: Mapping[str, Any], task: str, available
     reason = _clean_text(raw_plan.get("reason")) or "The model orchestrator selected this route."
     collaboration_protocol = normalize_collaboration_protocol(raw_plan.get("collaboration_protocol"))
 
-    selected_agents = normalize_selected_agents(raw_plan.get("selected_agents"), available_agents)
+    selected_agents = (
+        normalize_dynamic_selected_agents(raw_plan.get("selected_agents"))
+        if subagent_mode == "dynamic"
+        else normalize_selected_agents(raw_plan.get("selected_agents"), available_agents)
+    )
     if mode == "direct":
         selected_agents = []
-    elif not selected_agents or _is_critic_alone(selected_agents):
-        return create_fallback_plan(task, available_agents, reason="Model orchestrator did not select a valid multi-agent pool.")
+    elif subagent_mode == "dynamic" and not is_valid_dynamic_agent_pool(selected_agents):
+        return create_fallback_plan(
+            task,
+            available_agents,
+            reason="Model orchestrator did not select a valid dynamic multi-agent pool.",
+            subagent_mode=subagent_mode,
+        )
+    elif subagent_mode == "fixed" and (not selected_agents or _is_critic_alone(selected_agents)):
+        return create_fallback_plan(
+            task,
+            available_agents,
+            reason="Model orchestrator did not select a valid multi-agent pool.",
+            subagent_mode=subagent_mode,
+        )
 
     return {
         "mode": mode,
+        "subagent_mode": subagent_mode,
         "task_type": task_type,
         "task_summary": task_summary,
         "reason": reason,
@@ -155,6 +211,61 @@ def normalize_selected_agents(value: Any, available_agents: Mapping[str, Any]) -
     return selected_agents
 
 
+def normalize_dynamic_selected_agents(value: Any) -> list[SelectedAgent]:
+    if not isinstance(value, list):
+        return []
+
+    selected_agents: list[SelectedAgent] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        name = sanitize_dynamic_agent_name(item.get("name"))
+        if not name or name in seen:
+            continue
+        rules = normalize_rules(item.get("rules"))
+        critical_debate = bool(item.get("critical_debate"))
+        selected_agents.append(
+            {
+                "name": name,
+                "role": _clean_text(item.get("role")) or dynamic_default_role(critical_debate),
+                "description": _clean_text(item.get("description")) or dynamic_default_description(critical_debate),
+                "rules": rules or dynamic_default_rules(critical_debate),
+                "subtask": _clean_text(item.get("subtask")) or dynamic_default_subtask(name, critical_debate),
+                "expected_output": _clean_text(item.get("expected_output")) or dynamic_default_expected_output(critical_debate),
+                "critical_debate": critical_debate,
+            }
+        )
+        seen.add(name)
+        if len(selected_agents) == MAX_SELECTED_AGENTS:
+            break
+    return selected_agents
+
+
+def sanitize_dynamic_agent_name(value: Any) -> str:
+    raw_name = _clean_text(value)
+    if not raw_name:
+        return ""
+    tokens = re.findall(r"[A-Za-z0-9]+", raw_name)
+    if not tokens:
+        return ""
+    name = "".join(token[:1].upper() + token[1:] for token in tokens)
+    if not name[0].isalpha():
+        name = f"Agent{name}"
+    return name[:64]
+
+
+def normalize_rules(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    rules = [_clean_text(rule) for rule in value]
+    return [rule for rule in rules if rule][:8]
+
+
+def is_valid_dynamic_agent_pool(selected_agents: list[SelectedAgent]) -> bool:
+    return len(selected_agents) >= 2 and any(agent.get("critical_debate") for agent in selected_agents)
+
+
 def normalize_collaboration_protocol(value: Any) -> CollaborationProtocol:
     if not isinstance(value, Mapping):
         return default_collaboration_protocol()
@@ -176,7 +287,15 @@ def normalize_collaboration_protocol(value: Any) -> CollaborationProtocol:
     }
 
 
-def create_fallback_plan(task: str, available_agents: Mapping[str, Any], reason: str | None = None) -> OrchestratorPlan:
+def create_fallback_plan(
+    task: str,
+    available_agents: Mapping[str, Any],
+    reason: str | None = None,
+    subagent_mode: SubagentMode = "fixed",
+) -> OrchestratorPlan:
+    if subagent_mode == "dynamic":
+        return create_dynamic_fallback_plan(task, reason=reason)
+
     task_type = infer_fallback_task_type(task)
     selected_names = fallback_agent_names(task)
     selected_names = [name for name in selected_names if name in available_agents][:MAX_SELECTED_AGENTS]
@@ -187,6 +306,7 @@ def create_fallback_plan(task: str, available_agents: Mapping[str, Any], reason:
 
     return {
         "mode": "multi_agent",
+        "subagent_mode": "fixed",
         "task_type": task_type,
         "task_summary": f"Handle the user task: {task}",
         "reason": reason or "Using deterministic fallback routing because model orchestration was unavailable or invalid.",
@@ -200,6 +320,73 @@ def create_fallback_plan(task: str, available_agents: Mapping[str, Any], reason:
         ],
         "collaboration_protocol": default_collaboration_protocol(),
     }
+
+
+def create_dynamic_fallback_plan(task: str, reason: str | None = None) -> OrchestratorPlan:
+    return {
+        "mode": "multi_agent",
+        "subagent_mode": "dynamic",
+        "task_type": infer_fallback_task_type(task),
+        "task_summary": f"Handle the user task with dynamic subagents: {task}",
+        "reason": reason or "Using deterministic dynamic fallback because model orchestration was unavailable or invalid.",
+        "selected_agents": [
+            {
+                "name": "TaskWorker",
+                "role": dynamic_default_role(False),
+                "description": dynamic_default_description(False),
+                "rules": dynamic_default_rules(False),
+                "subtask": dynamic_default_subtask("TaskWorker", False),
+                "expected_output": dynamic_default_expected_output(False),
+                "critical_debate": False,
+            },
+            {
+                "name": "CriticalDebateAgent",
+                "role": dynamic_default_role(True),
+                "description": dynamic_default_description(True),
+                "rules": dynamic_default_rules(True),
+                "subtask": dynamic_default_subtask("CriticalDebateAgent", True),
+                "expected_output": dynamic_default_expected_output(True),
+                "critical_debate": True,
+            },
+        ],
+        "collaboration_protocol": default_collaboration_protocol(),
+    }
+
+
+def dynamic_default_role(critical_debate: bool) -> str:
+    if critical_debate:
+        return "Challenges assumptions, debates weak points, and identifies risks in other agents' findings."
+    return "Works on the core task and shares concise findings for final synthesis."
+
+
+def dynamic_default_description(critical_debate: bool) -> str:
+    if critical_debate:
+        return "A critical debate subagent that finds contradictions, missing cases, and overconfident claims."
+    return "A dynamic task subagent created by the Orchestrator for this specific user request."
+
+
+def dynamic_default_rules(critical_debate: bool) -> list[str]:
+    if critical_debate:
+        return [
+            "Challenge assumptions and weak reasoning from other agents.",
+            "Publish critique events when risks, contradictions, or missing cases are found.",
+        ]
+    return [
+        "Focus on the assigned subtask.",
+        "Share findings useful to other subagents and final synthesis.",
+    ]
+
+
+def dynamic_default_subtask(agent_name: str, critical_debate: bool) -> str:
+    if critical_debate:
+        return "Critically debate the emerging answer, challenge assumptions, and identify risks."
+    return f"Contribute as {agent_name} to the user task and share useful findings."
+
+
+def dynamic_default_expected_output(critical_debate: bool) -> str:
+    if critical_debate:
+        return "Critiques, risks, counterarguments, missing cases, and corrections."
+    return "Concise task findings and recommendations for final synthesis."
 
 
 def fallback_agent_names(task: str) -> list[str]:
@@ -261,6 +448,10 @@ def selected_agents_to_assignments(plan: OrchestratorPlan, max_steps: int = 3) -
             "reactive_steps_enabled": protocol["reactive_steps"],
             "max_reactive_steps": 1,
             "reactive_event_types": protocol["event_types_to_share"],
+            "role": agent.get("role", ""),
+            "description": agent.get("description", ""),
+            "rules": agent.get("rules", []),
+            "critical_debate": agent.get("critical_debate", False),
         }
         for agent in plan["selected_agents"]
     ]

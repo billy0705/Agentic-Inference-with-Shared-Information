@@ -27,13 +27,30 @@ This follows the orchestrator-worker style conceptually: the orchestrator assign
 The orchestrator no longer uses a fixed keyword classifier or a fixed task-type-to-agent mapping. It asks the configured LLM to return a strict JSON plan with:
 
 - `mode`: `direct` or `multi_agent`
+- `subagent_mode`: `fixed` or `dynamic`
 - `task_type`: a short free-text label generated for this task
 - `task_summary`
 - `reason`
 - `selected_agents`: a small list of registered agents with concrete subtasks
 - `collaboration_protocol`: event types to share and whether reactive steps are enabled
 
-If `mode` is `direct`, the graph skips worker startup. If `mode` is `multi_agent`, the runtime constructs only the agents listed in `selected_agents`, and every selected name must exist in `AGENT_REGISTRY`.
+If `mode` is `direct`, the graph skips worker startup. If `mode` is `multi_agent`, the runtime constructs only the agents listed in `selected_agents`. In fixed mode, every selected name must exist in `AGENT_REGISTRY`.
+
+By default the runtime uses fixed subagents:
+
+```bash
+uv run python -m multi_agent_sync --subagent-mode fixed "Build a prototype chess website"
+```
+
+Dynamic subagents can be enabled with:
+
+```bash
+uv run python -m multi_agent_sync --subagent-mode dynamic "Build a prototype chess website"
+```
+
+In dynamic mode, the Orchestrator freely names and describes the subagents for the current task. Each dynamic subagent can include a role, description, rules, concrete subtask, expected output, and `critical_debate` flag. Dynamic multi-agent plans must include at least two subagents and at least one critical debate subagent. Invalid dynamic model output falls back to `TaskWorker` and `CriticalDebateAgent`.
+
+The console stream prints the dynamic subagent plan and shows live message routing as `source -> target`, including `broadcast` events.
 
 The orchestrator validates model output before runtime execution:
 
@@ -237,9 +254,15 @@ Run GPQA-Diamond against the multi-agent workflow with agent-to-agent message st
 uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
 ```
 
-The benchmark writes per-question results to `output/gpqa_diamond_results.csv` by default and prints accuracy plus invalid-answer rate for each method. `multiagent` remains as a legacy alias for `multiagent_streaming`. Use `--output result.csv` to write `output/result.csv`, or `--output-dir other-output` to change the results directory. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the default OpenAI-compatible API provider.
+To compare fixed subagents, dynamic subagents, and the direct baseline in one run:
 
-GPQA on Hugging Face is gated. Authenticate with an account that has dataset access before running the Hub-backed benchmark, or set `HF_TOKEN` for the process. If you already have a local GPQA-style file, bypass Hugging Face with:
+```bash
+uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,multiagent_dynamic_streaming,multiagent_dynamic_no_streaming,plain_llm --limit 10
+```
+
+The benchmark writes per-question results to `output/gpqa_diamond_results.csv` by default and prints accuracy plus invalid-answer rate for each method. `multiagent` remains as a legacy alias for fixed `multiagent_streaming`. Use `--output result.csv` to write `output/result.csv`, or `--output-dir other-output` to change the results directory. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the default OpenAI-compatible API provider.
+
+GPQA on Hugging Face is gated. If the Hub-backed load fails because the dataset requires authentication, the evaluator automatically falls back to `data/gpqa_diamond.csv` when that file exists. Authenticate with an account that has dataset access, set `HF_TOKEN`, or pass your own local GPQA-style file with:
 
 ```bash
 uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/gpqa.csv

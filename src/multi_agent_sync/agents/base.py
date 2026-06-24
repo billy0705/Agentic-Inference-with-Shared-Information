@@ -37,6 +37,9 @@ class BaseAgent:
     llm: Any
     event_streamer: EventStreamer
     assignment: dict[str, Any] | None = None
+    description: str = ""
+    rules: list[str] = field(default_factory=list)
+    critical_debate: bool = False
     trace_logger: Any | None = None
     max_steps: int = 3
     max_runtime_seconds: float = 180.0
@@ -257,6 +260,9 @@ class BaseAgent:
             agent_name=self.name,
             task=self.task,
             role=self.role,
+            description=self.description,
+            rules=self.rules,
+            critical_debate=self.critical_debate,
             assigned_subtask=self.assigned_subtask,
             is_reactive=is_reactive,
             reactive_reason=reactive_reason or "important_unused_events_received",

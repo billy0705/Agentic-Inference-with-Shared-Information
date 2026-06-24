@@ -247,3 +247,100 @@ async def test_selected_agents_are_always_from_registry_and_never_architect():
     assert len(plan["selected_agents"]) <= 4
     assert set(agent_names(plan)) <= set(AGENT_REGISTRY)
     assert "ArchitectAgent" not in agent_names(plan)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_mode_accepts_orchestrator_named_agents_with_rules():
+    llm = StaticLLM(
+        """
+        {
+          "mode": "multi_agent",
+          "task_type": "dynamic implementation review",
+          "task_summary": "The user asks for a dynamic multi-agent design.",
+          "reason": "The task needs a generated worker and critical debate.",
+          "selected_agents": [
+            {
+              "name": "Implementation Planner",
+              "role": "Plans concrete implementation work.",
+              "description": "Focuses on files, tests, runtime flow, and compatibility.",
+              "rules": ["Share actionable findings.", "Keep fixed mode compatible."],
+              "subtask": "Design the runtime implementation.",
+              "expected_output": "Implementation steps and risks.",
+              "critical_debate": false
+            },
+            {
+              "name": "Critical Debate Agent",
+              "role": "Challenges the implementation plan.",
+              "description": "Finds contradictions, missing cases, and weak assumptions.",
+              "rules": ["Publish critique events.", "Challenge overconfident claims."],
+              "subtask": "Debate and critique the plan.",
+              "expected_output": "Critiques and corrections.",
+              "critical_debate": true
+            }
+          ],
+          "collaboration_protocol": {
+            "event_types_to_share": ["finding", "critique", "warning"],
+            "reactive_steps": true,
+            "notes": "Generated agents should share findings and critiques."
+          }
+        }
+        """
+    )
+
+    plan = await create_model_based_plan(
+        "Implement dynamic subagents.",
+        llm,
+        AGENT_REGISTRY,
+        subagent_mode="dynamic",
+    )
+
+    assert plan["mode"] == "multi_agent"
+    assert plan["subagent_mode"] == "dynamic"
+    assert agent_names(plan) == ["ImplementationPlanner", "CriticalDebateAgent"]
+    assert plan["selected_agents"][0]["role"] == "Plans concrete implementation work."
+    assert plan["selected_agents"][0]["description"] == "Focuses on files, tests, runtime flow, and compatibility."
+    assert plan["selected_agents"][0]["rules"] == ["Share actionable findings.", "Keep fixed mode compatible."]
+    assert plan["selected_agents"][1]["critical_debate"] is True
+
+
+@pytest.mark.asyncio
+async def test_dynamic_mode_invalid_multi_agent_plan_falls_back_to_worker_and_critical_debate():
+    llm = StaticLLM(
+        """
+        {
+          "mode": "multi_agent",
+          "task_type": "invalid dynamic plan",
+          "task_summary": "The user asks for dynamic agents.",
+          "reason": "The model returned too few dynamic agents.",
+          "selected_agents": [
+            {
+              "name": "",
+              "role": "",
+              "description": "",
+              "rules": [],
+              "subtask": "",
+              "expected_output": "",
+              "critical_debate": false
+            }
+          ],
+          "collaboration_protocol": {
+            "event_types_to_share": ["finding"],
+            "reactive_steps": true,
+            "notes": "Share findings."
+          }
+        }
+        """
+    )
+
+    plan = await create_model_based_plan(
+        "Implement dynamic subagents.",
+        llm,
+        AGENT_REGISTRY,
+        subagent_mode="dynamic",
+    )
+
+    assert plan["mode"] == "multi_agent"
+    assert plan["subagent_mode"] == "dynamic"
+    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent"]
+    assert len(plan["selected_agents"]) >= 2
+    assert any(agent["critical_debate"] for agent in plan["selected_agents"])

@@ -51,3 +51,22 @@ async def test_async_main_can_use_local_model(monkeypatch, tmp_path):
     await cli.async_main(args)
 
     assert captured_llm_kwargs == {"model": "llama3.2", "openai": False}
+
+
+@pytest.mark.asyncio
+async def test_async_main_passes_dynamic_subagent_mode_to_workflow(monkeypatch, tmp_path):
+    captured_kwargs = {}
+
+    async def fake_run_workflow(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"final_answer": "Done."}
+
+    monkeypatch.setattr(cli, "get_llm", lambda model=None, openai=True: "fake-llm")
+    monkeypatch.setattr(cli, "run_workflow", fake_run_workflow)
+    monkeypatch.setattr(cli, "save_run_artifacts", lambda state, root_dir: tmp_path / "run")
+
+    args = cli.build_parser().parse_args(["--subagent-mode", "dynamic", "Calculate", "2+2"])
+
+    await cli.async_main(args)
+
+    assert captured_kwargs["subagent_mode"] == "dynamic"

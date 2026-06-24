@@ -15,6 +15,7 @@ from multi_agent_sync.llm import get_llm
 DEFAULT_LIMIT = 10
 RANDOM_SEED = 42
 DEFAULT_METHODS = "multiagent_streaming,multiagent_no_streaming,plain_llm"
+EVALUATION_MAX_TOKENS = 16384
 
 
 def get_benchmarks() -> dict[str, BenchmarkSpec]:
@@ -31,7 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_METHODS,
         help=(
             "Comma-separated methods to compare. Supported: multiagent_streaming, "
-            "multiagent_no_streaming, plain_llm. Legacy alias: multiagent."
+            "multiagent_no_streaming, multiagent_dynamic_streaming, "
+            "multiagent_dynamic_no_streaming, plain_llm. Legacy alias: multiagent."
         ),
     )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Use 0 for full split.")
@@ -65,7 +67,7 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
     methods = runner.parse_methods(args.methods)
     items = benchmark.load_items(args)
     rng = random.Random(args.seed)
-    llm = get_llm(args.model, openai=not args.local_model, max_tokens=16384)
+    llm = get_llm(args.model, openai=not args.local_model, max_tokens=EVALUATION_MAX_TOKENS)
     output_path = runner.resolve_output_path(benchmark, args)
     results: list[dict[str, Any]] = []
 

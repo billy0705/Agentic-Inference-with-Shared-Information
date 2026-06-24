@@ -35,6 +35,7 @@ def build_workflow():
 async def run_workflow(
     task: str,
     llm: Any | None = None,
+    subagent_mode: str = "fixed",
     max_steps_per_agent: int = 3,
     total_runtime_timeout: float = 600.0,
     synthesis_timeout: float = 60.0,
@@ -50,6 +51,7 @@ async def run_workflow(
         "task": task,
         "run_id": str(uuid4()),
         "mode": "",
+        "subagent_mode": subagent_mode,
         "task_type": "",
         "reason": "",
         "plan": [],

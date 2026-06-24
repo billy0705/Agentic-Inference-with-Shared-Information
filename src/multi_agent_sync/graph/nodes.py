@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from multi_agent_sync.agents.registry import AGENT_REGISTRY
+from multi_agent_sync.agents.dynamic_agent import DynamicAgent
 from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph.state import GraphState
@@ -16,7 +17,8 @@ async def orchestrator_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
     task = state["task"]
     llm = state.get("llm") or get_llm()
-    orchestrator_plan = await create_model_based_plan(task, llm, AGENT_REGISTRY)
+    subagent_mode = state.get("subagent_mode", "fixed")
+    orchestrator_plan = await create_model_based_plan(task, llm, AGENT_REGISTRY, subagent_mode=subagent_mode)
     selected_agent_specs = orchestrator_plan["selected_agents"]
     assignments = selected_agents_to_assignments(orchestrator_plan, max_steps=state.get("max_steps_per_agent", 3))
     selected_agents = ",".join(agent["name"] for agent in selected_agent_specs) if selected_agent_specs else "none"
@@ -47,6 +49,7 @@ async def orchestrator_node(state: GraphState) -> GraphState:
         **state,
         "event_streamer": streamer,
         "mode": orchestrator_plan["mode"],
+        "subagent_mode": orchestrator_plan["subagent_mode"],
         "task_type": orchestrator_plan["task_type"],
         "reason": orchestrator_plan["reason"],
         "plan": [agent["subtask"] for agent in selected_agent_specs],
@@ -99,12 +102,13 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     max_steps = state.get("max_steps_per_agent", 3)
     enable_agent_message_streaming = state.get("enable_agent_message_streaming", True)
     trace_logger = state.get("trace_logger") or TraceLogger()
+    subagent_mode = state.get("subagent_mode", "fixed")
 
     agents = []
     assignments = selected_agents_to_assignments(state["orchestrator_plan"], max_steps=max_steps)
     for assignment in assignments:
         agent_name = assignment["agent_name"]
-        agent_class = AGENT_REGISTRY.get(agent_name)
+        agent_class = DynamicAgent if subagent_mode == "dynamic" else AGENT_REGISTRY.get(agent_name)
         if agent_class is None:
             await streamer.publish(
                 AgentEvent(
@@ -126,6 +130,16 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             "max_steps": assignment.get("max_steps", max_steps),
             "enable_message_streaming": enable_agent_message_streaming,
         }
+        if subagent_mode == "dynamic":
+            agent_kwargs.update(
+                {
+                    "name": agent_name,
+                    "role": assignment.get("role") or "Dynamic task subagent.",
+                    "description": assignment.get("description", ""),
+                    "rules": assignment.get("rules", []),
+                    "critical_debate": assignment.get("critical_debate", False),
+                }
+            )
         for reactive_field in ("reactive_steps_enabled", "max_reactive_steps", "reactive_event_types"):
             if reactive_field in assignment:
                 agent_kwargs[reactive_field] = assignment[reactive_field]

@@ -15,6 +15,7 @@ from multi_agent_sync.prompts import render_prompt
 DATASET_NAME = "Idavidrein/gpqa"
 SUBSET_NAME = "gpqa_diamond"
 DEFAULT_OUTPUT_CSV = "gpqa_diamond_results.csv"
+DEFAULT_LOCAL_DATA_FILE = Path("data/gpqa_diamond.csv")
 
 
 def build_benchmark() -> BenchmarkSpec:
@@ -94,6 +95,8 @@ def load_gpqa_dataset(limit: int | None, data_file: str | None = None) -> list[d
     except Exception as exc:
         message = str(exc).lower()
         if "gated" in message or "authenticated" in message:
+            if DEFAULT_LOCAL_DATA_FILE.exists():
+                return load_local_gpqa_rows(DEFAULT_LOCAL_DATA_FILE, limit=limit)
             raise RuntimeError(build_dataset_access_error(exc)) from exc
         raise
 
