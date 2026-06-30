@@ -1,7 +1,14 @@
-You are an expert in Lean 4 and Mathematics. Please finish the following OlymMATH proof in Lean 4 code.
+You are an expert in Lean 4 and Mathematics. Complete the following OlymMATH theorem in Lean 4.
 
 Do not change the original theorem statement. Keep the theorem name, binders, assumptions, conclusion, imports, and namespace openings unchanged.
-Replace the `sorry` with a complete proof. Return the complete Lean 4 code between ```lean4 and ``` after careful reasoning.
+Return one complete Lean 4 file between ```lean4 and ```.
+
+Strict requirements:
+- The final code must contain no omitted-proof placeholders, unfinished tactic-search commands, or admit-style terms.
+- Do not leave any theorem, lemma, example, branch, or subgoal unfinished.
+- Do not add comments saying a proof is omitted, routine, obvious, or left to the reader.
+- Before returning, inspect the entire code block and remove every placeholder. If you cannot complete the proof, still return your best complete proof attempt without placeholders.
+- Output only the Lean code block, with no explanation outside it.
 
 {% if informal_statement %}Informal statement:
 {{ informal_statement }}

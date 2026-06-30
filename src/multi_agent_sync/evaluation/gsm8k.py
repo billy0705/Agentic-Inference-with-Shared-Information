@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from multi_agent_sync.evaluation.dataset_files import load_or_download_rows
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt
 
@@ -17,7 +18,7 @@ DATASET_NAME = "openai/gsm8k"
 SUBSET_NAME = "main"
 SPLIT_NAME = "test"
 DEFAULT_OUTPUT_CSV = "gsm8k_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/gsm8k_test.jsonl")
+DEFAULT_LOCAL_DATA_FILE = Path("data/gsm8k/gsm8k_test.jsonl")
 NUMBER_PATTERN = r"(?:[-+]?\s*[$€£]?\s*(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+))"
 
 
@@ -102,23 +103,23 @@ def normalize_number(value: str) -> str | None:
 
 def load_gsm8k_dataset(limit: int | None, data_file: str | None = None) -> list[dict[str, Any]] | Any:
     if data_file:
+        print(f"Using local benchmark data file: {data_file}")
         return load_local_gsm8k_rows(Path(data_file), limit=limit)
 
+    return load_or_download_rows(
+        DEFAULT_LOCAL_DATA_FILE,
+        load_local_rows=load_local_gsm8k_rows,
+        download_rows=download_gsm8k_rows,
+        limit=limit,
+    )
+
+
+def download_gsm8k_rows() -> Any:
     try:
         from datasets import load_dataset
     except ModuleNotFoundError as exc:
         raise RuntimeError("Missing optional dependency 'datasets'. Install it with: uv add datasets") from exc
-
-    try:
-        dataset = load_dataset(DATASET_NAME, SUBSET_NAME, split=SPLIT_NAME)
-    except Exception:
-        if DEFAULT_LOCAL_DATA_FILE.exists():
-            return load_local_gsm8k_rows(DEFAULT_LOCAL_DATA_FILE, limit=limit)
-        raise
-
-    if limit is not None and limit > 0:
-        dataset = dataset.select(range(min(limit, len(dataset))))
-    return dataset
+    return load_dataset(DATASET_NAME, SUBSET_NAME, split=SPLIT_NAME)
 
 
 def load_local_gsm8k_rows(path: Path, limit: int | None = None) -> list[dict[str, Any]]:

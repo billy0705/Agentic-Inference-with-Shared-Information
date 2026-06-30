@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from urllib.request import Request, urlopen
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from multi_agent_sync.llm import get_openai_base_url
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
 from multi_agent_sync.graph.workflow import run_workflow
 
@@ -133,16 +135,22 @@ def create_run_id() -> str:
 
 
 def resolve_output_path(benchmark: BenchmarkSpec, args: argparse.Namespace, run_id: str | None = None) -> Path:
-    output_dir = Path(args.output_dir)
+    if args.output is not None:
+        output_path = Path(args.output)
+        if output_path.is_absolute() or output_path.parent != Path("."):
+            return output_path
+
+    resolved_run_id = run_id or create_run_id()
+    output_root = resolve_run_output_root(benchmark.name, args, resolved_run_id)
     if args.output is None:
         default_output = Path(benchmark.default_output_filename)
-        suffix = default_output.suffix or ".csv"
-        return output_dir / f"{default_output.stem}_{run_id or create_run_id()}{suffix}"
+        return output_root / default_output.name
 
-    output_path = Path(args.output)
-    if output_path.is_absolute() or output_path.parent != Path("."):
-        return output_path
-    return output_dir / output_path
+    return output_root / Path(args.output)
+
+
+def resolve_run_output_root(benchmark_name: str, args: argparse.Namespace, run_id: str) -> Path:
+    return Path(args.output_dir) / safe_filename(benchmark_name) / resolve_model_output_name(args) / run_id
 
 
 def resolve_correctness_matrix_path(trace_root: Path) -> Path:
@@ -150,7 +158,7 @@ def resolve_correctness_matrix_path(trace_root: Path) -> Path:
 
 
 def resolve_json_trace_root(args: argparse.Namespace, run_id: str) -> Path:
-    return Path(args.output_dir) / "json_traces" / run_id
+    return resolve_run_output_root(args.benchmark, args, run_id)
 
 
 def resolve_example_trace_path(args: argparse.Namespace, run_id: str, index: int, method: str) -> Path:
@@ -160,6 +168,12 @@ def resolve_example_trace_path(args: argparse.Namespace, run_id: str, index: int
 def safe_filename(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip())
     return normalized.strip("._") or "trace"
+
+
+def resolve_model_output_name(args: argparse.Namespace) -> str:
+    resolved_model = resolve_model_name(args)
+    model_name = resolved_model.rstrip("/").rsplit("/", 1)[-1]
+    return safe_filename(model_name)
 
 
 def write_json_file(path: Path, payload: Any) -> None:
@@ -204,6 +218,7 @@ def build_run_config(
             "ma_proofbench_level": getattr(args, "ma_proofbench_level", None),
             "olymmath_subset": getattr(args, "olymmath_subset", None),
             "lean_timeout": getattr(args, "lean_timeout", None),
+            "lean_placeholder_retries": getattr(args, "lean_placeholder_retries", None),
             "kimina_host": getattr(args, "kimina_host", None),
             "kimina_port": getattr(args, "kimina_port", None),
             "kimina_max_workers": getattr(args, "kimina_max_workers", None),
@@ -228,6 +243,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "max_steps": args.max_steps,
         "attempts": getattr(args, "attempts", 1),
         "olymmath_subset": getattr(args, "olymmath_subset", None),
+        "lean_placeholder_retries": getattr(args, "lean_placeholder_retries", None),
         "kimina_host": getattr(args, "kimina_host", None),
         "kimina_port": getattr(args, "kimina_port", None),
         "kimina_max_workers": getattr(args, "kimina_max_workers", None),
@@ -237,12 +253,62 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
     }
 
 
+def should_retry_lean_placeholder(benchmark_name: str, score: BenchmarkScore) -> bool:
+    return benchmark_name == "olymmath_lean" and score.pred == "contains_sorry"
+
+
+def build_lean_placeholder_retry_prompt(original_prompt: str, attempt: int) -> str:
+    return (
+        f"{original_prompt}\n\n"
+        f"Previous attempt {attempt} was rejected because the Lean proof used an omitted-proof placeholder. "
+        "Produce a fresh complete Lean 4 solution. "
+        "Do not include omitted-proof placeholders, admit-style terms, or unfinished proof markers. "
+        "Output only the Lean code block."
+    )
+
+
 def resolve_model_name(args: argparse.Namespace) -> str:
-    if args.model:
+    cached = getattr(args, "resolved_model", None)
+    if cached:
+        return str(cached)
+    if args.model and args.model != "auto":
         return args.model
     if args.local_model:
         return os.getenv("OLLAMA_MODEL", "qwen3:4b")
-    return os.getenv("OPENAI_MODEL", "openai/gpt-oss-120b")
+    return resolve_auto_openai_model_name()
+
+
+def resolve_auto_openai_model_name() -> str:
+    fallback = os.getenv("OPENAI_MODEL", "openai/gpt-oss-120b")
+    base_url = get_openai_base_url()
+    timeout = float(os.getenv("OPENAI_MODEL_LOOKUP_TIMEOUT", "2"))
+    try:
+        request = Request(f"{base_url}/models", headers={"Accept": "application/json"})
+        with urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print(f"Could not auto-detect model from {base_url}/models ({exc}); using fallback model: {fallback}")
+        return fallback
+
+    model_id = first_model_id(payload)
+    if model_id is None:
+        print(f"No model id found in {base_url}/models response; using fallback model: {fallback}")
+        return fallback
+
+    print(f"Auto-detected model from API: {model_id}")
+    return model_id
+
+
+def first_model_id(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return None
+    for item in data:
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip():
+            return item["id"].strip()
+    return None
 
 
 def method_subagent_mode(method: str) -> str:

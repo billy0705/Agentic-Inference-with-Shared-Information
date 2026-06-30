@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from multi_agent_sync.evaluation import ma_proofbench
+from multi_agent_sync.evaluation.dataset_files import save_rows
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt
 
@@ -36,7 +37,7 @@ RAW_FILENAMES = {
     "zh-hard": "OlymMATH-ZH-HARD.jsonl",
     "lean": "OlymMATH-LEAN.jsonl",
 }
-DEFAULT_LOCAL_DATA_DIR = Path("data")
+DEFAULT_LOCAL_DATA_DIR = Path("data/OlymMATH")
 SUCCESS_GOLD = "lean_verifies"
 SUCCESS_PRED = "verified"
 FAILED_PRED = "failed"
@@ -93,12 +94,30 @@ def build_prompt(row: dict[str, Any], rng: random.Random) -> tuple[str, str]:
 def build_lean_prompt(row: dict[str, Any], rng: random.Random) -> tuple[str, str]:
     del rng
     formal_statement = str(row.get("formal_statement_raw") or row["formal_statement"])
+    prompt_statement = build_lean_prompt_statement(formal_statement)
     prompt = render_prompt(
         "evaluation/olymmath_lean_question.j2",
         informal_statement=row.get("en_informal") or row.get("zh_informal"),
-        formal_statement=formal_statement,
+        formal_statement=prompt_statement,
     )
     return prompt, SUCCESS_GOLD
+
+
+def build_lean_prompt_statement(formal_statement: str) -> str:
+    theorem_name = ma_proofbench.extract_theorem_name(formal_statement)
+    if theorem_name is not None:
+        signature = ma_proofbench.extract_theorem_signature(formal_statement, theorem_name)
+        if signature is not None:
+            header, _ = ma_proofbench.split_lean_header_and_body(formal_statement)
+            parts = [part for part in (header, f"{signature.strip()} := by") if part.strip()]
+            return "\n\n".join(parts)
+
+    lines = [
+        line
+        for line in formal_statement.splitlines()
+        if not ma_proofbench.contains_sorry(line)
+    ]
+    return "\n".join(lines).strip()
 
 
 def extract_answer(text: str) -> str | None:
@@ -196,24 +215,38 @@ def score_lean_response(row: dict[str, Any], raw_output: str, args: argparse.Nam
 def load_olymmath_dataset(subset: str, limit: int | None, data_file: str | None = None) -> list[dict[str, Any]] | Any:
     validate_subset(subset)
     if data_file:
+        print(f"Using local benchmark data file: {data_file}")
         return load_local_rows(Path(data_file), subset=subset, limit=limit)
+    fallback = DEFAULT_LOCAL_DATA_DIR / RAW_FILENAMES[subset]
+    if all_default_data_files_exist():
+        print(f"Using local OlymMATH data files from: {DEFAULT_LOCAL_DATA_DIR}")
+        return load_local_rows(fallback, subset=subset, limit=limit)
 
     try:
         from datasets import load_dataset
     except ModuleNotFoundError as exc:
         raise RuntimeError("Missing optional dependency 'datasets'. Install it with: uv add datasets") from exc
 
-    try:
-        dataset = load_dataset(DATASET_NAME, HF_SUBSET_NAMES[subset], split=SPLIT_NAME)
-    except Exception:
-        fallback = DEFAULT_LOCAL_DATA_DIR / RAW_FILENAMES[subset]
-        if fallback.exists():
-            return load_local_rows(fallback, subset=subset, limit=limit)
-        raise
+    download_missing_default_data_files(load_dataset)
+    return load_local_rows(fallback, subset=subset, limit=limit)
 
-    if limit is not None and limit > 0:
-        dataset = dataset.select(range(min(limit, len(dataset))))
-    return dataset
+
+def all_default_data_files_exist() -> bool:
+    return all((DEFAULT_LOCAL_DATA_DIR / filename).exists() for filename in RAW_FILENAMES.values())
+
+
+def download_missing_default_data_files(load_dataset: Any) -> None:
+    missing = [filename for filename in RAW_FILENAMES.values() if not (DEFAULT_LOCAL_DATA_DIR / filename).exists()]
+    if missing:
+        print(f"OlymMATH local data incomplete, downloading {len(missing)} missing file(s) into: {DEFAULT_LOCAL_DATA_DIR}")
+    for subset, filename in RAW_FILENAMES.items():
+        path = DEFAULT_LOCAL_DATA_DIR / filename
+        if path.exists():
+            continue
+        print(f"Downloading OlymMATH data file from Hugging Face: {path}")
+        rows = [dict(row) for row in load_dataset(DATASET_NAME, HF_SUBSET_NAMES[subset], split=SPLIT_NAME)]
+        save_rows(path, rows)
+        print(f"Saved benchmark data file: {path}")
 
 
 def load_local_rows(path: Path, subset: str, limit: int | None = None) -> list[dict[str, Any]]:

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from multi_agent_sync.evaluation.dataset_files import load_or_download_rows
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt
 
@@ -21,7 +22,7 @@ from multi_agent_sync.prompts import render_prompt
 DATASET_NAME = "openbmb/MA-ProofBench"
 SPLIT_NAME = "test"
 DEFAULT_OUTPUT_CSV = "ma_proofbench_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/ma_proofbench_test.jsonl")
+DEFAULT_LOCAL_DATA_FILE = Path("data/ma_proofbench/ma_proofbench_test.jsonl")
 SUCCESS_GOLD = "lean_verifies"
 SUCCESS_PRED = "verified"
 FAILED_PRED = "failed"
@@ -338,25 +339,23 @@ def load_ma_proofbench_dataset(
 ) -> list[dict[str, Any]] | Any:
     validate_level(level)
     if data_file:
+        print(f"Using local benchmark data file: {data_file}")
         return load_local_ma_proofbench_rows(Path(data_file), limit=limit, level=level)
 
+    return load_or_download_rows(
+        DEFAULT_LOCAL_DATA_FILE,
+        load_local_rows=lambda path, row_limit: load_local_ma_proofbench_rows(path, limit=row_limit, level=level),
+        download_rows=download_ma_proofbench_rows,
+        limit=limit,
+    )
+
+
+def download_ma_proofbench_rows() -> Any:
     try:
         from datasets import load_dataset
     except ModuleNotFoundError as exc:
         raise RuntimeError("Missing optional dependency 'datasets'. Install it with: uv add datasets") from exc
-
-    try:
-        dataset = load_dataset(DATASET_NAME, split=SPLIT_NAME)
-    except Exception:
-        if DEFAULT_LOCAL_DATA_FILE.exists():
-            return load_local_ma_proofbench_rows(DEFAULT_LOCAL_DATA_FILE, limit=limit, level=level)
-        raise
-
-    if level != "all":
-        dataset = dataset.filter(lambda row: row["split"] == level)
-    if limit is not None and limit > 0:
-        dataset = dataset.select(range(min(limit, len(dataset))))
-    return dataset
+    return load_dataset(DATASET_NAME, split=SPLIT_NAME)
 
 
 def load_local_ma_proofbench_rows(path: Path, limit: int | None = None, level: str = "all") -> list[dict[str, Any]]:

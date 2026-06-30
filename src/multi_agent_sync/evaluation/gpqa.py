@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from multi_agent_sync.evaluation.dataset_files import load_or_download_rows
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt
 
@@ -15,7 +16,7 @@ from multi_agent_sync.prompts import render_prompt
 DATASET_NAME = "Idavidrein/gpqa"
 SUBSET_NAME = "gpqa_diamond"
 DEFAULT_OUTPUT_CSV = "gpqa_diamond_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/gpqa_diamond.csv")
+DEFAULT_LOCAL_DATA_FILE = Path("data/gpqa/gpqa_diamond.csv")
 
 
 def build_benchmark() -> BenchmarkSpec:
@@ -83,26 +84,28 @@ def extract_answer(text: str) -> str | None:
 
 def load_gpqa_dataset(limit: int | None, data_file: str | None = None) -> list[dict[str, Any]] | Any:
     if data_file:
+        print(f"Using local benchmark data file: {data_file}")
         return load_local_gpqa_rows(Path(data_file), limit=limit)
 
-    try:
-        from datasets import load_dataset
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("Missing optional dependency 'datasets'. Install it with: uv add datasets") from exc
+    def download_rows() -> Any:
+        try:
+            from datasets import load_dataset
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("Missing optional dependency 'datasets'. Install it with: uv add datasets") from exc
+        return load_dataset(DATASET_NAME, SUBSET_NAME, split="train")
 
     try:
-        dataset = load_dataset(DATASET_NAME, SUBSET_NAME, split="train")
+        return load_or_download_rows(
+            DEFAULT_LOCAL_DATA_FILE,
+            load_local_rows=load_local_gpqa_rows,
+            download_rows=download_rows,
+            limit=limit,
+        )
     except Exception as exc:
         message = str(exc).lower()
         if "gated" in message or "authenticated" in message:
-            if DEFAULT_LOCAL_DATA_FILE.exists():
-                return load_local_gpqa_rows(DEFAULT_LOCAL_DATA_FILE, limit=limit)
             raise RuntimeError(build_dataset_access_error(exc)) from exc
         raise
-
-    if limit is not None and limit > 0:
-        dataset = dataset.select(range(min(limit, len(dataset))))
-    return dataset
 
 
 def load_local_gpqa_rows(path: Path, limit: int | None = None) -> list[dict[str, Any]]:

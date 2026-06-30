@@ -63,7 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Save per-example JSON traces and run config artifacts. Enabled by default; use --no-save-json-traces to disable.",
     )
-    parser.add_argument("--model", default=None, help="Model name to pass to the selected provider.")
+    parser.add_argument(
+        "--model",
+        default="auto",
+        help="Model name to pass to the selected provider. Defaults to auto for OpenAI-compatible evaluation.",
+    )
     parser.add_argument(
         "--ma-proofbench-level",
         choices=["all", "level1", "level2"],
@@ -81,6 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=60.0,
         help="Maximum Lean verifier runtime per MA-ProofBench candidate, in seconds.",
+    )
+    parser.add_argument(
+        "--lean-placeholder-retries",
+        type=int,
+        default=2,
+        help="Retries for OlymMATH-LEAN outputs rejected for omitted-proof placeholders.",
     )
     parser.add_argument(
         "--kimina-host",
@@ -121,7 +131,9 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
     methods = runner.parse_methods(args.methods)
     items = benchmark.load_items(args)
     rng = random.Random(args.seed)
-    llm = get_llm(args.model, openai=not args.local_model, max_tokens=EVALUATION_MAX_TOKENS)
+    resolved_model = runner.resolve_model_name(args)
+    setattr(args, "resolved_model", resolved_model)
+    llm = get_llm(resolved_model, openai=not args.local_model, max_tokens=EVALUATION_MAX_TOKENS)
     run_id = runner.create_run_id()
     output_path = runner.resolve_output_path(benchmark, args, run_id=run_id)
     run_config = runner.build_run_config(benchmark, args, methods, run_id=run_id, output_path=output_path)
@@ -152,34 +164,79 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
         for method in methods:
             started_at = time.perf_counter()
             method_trace: dict[str, Any] = {}
-            try:
-                run_result = await runner.run_method(method, prompt, llm, args)
-                raw_output = run_result.raw_output
-                returncode = run_result.returncode
-                elapsed_seconds = run_result.elapsed_seconds
-                prompt_tokens = run_result.prompt_tokens
-                completion_tokens = run_result.completion_tokens
-                total_tokens = run_result.total_tokens
-                method_trace = run_result.trace or {}
-                error = ""
-            except Exception as exc:
-                raw_output = ""
-                returncode = 1
-                elapsed_seconds = time.perf_counter() - started_at
-                prompt_tokens = None
-                completion_tokens = None
-                total_tokens = None
-                error = str(exc)
-                method_trace = {"error": error}
+            raw_output = ""
+            returncode = 1
+            elapsed_seconds = 0.0
+            prompt_tokens = None
+            completion_tokens = None
+            total_tokens = None
+            error = ""
+            score = None
+            lean_placeholder_retries: list[dict[str, Any]] = []
+            retry_limit = max(0, int(getattr(args, "lean_placeholder_retries", 0)))
+            current_prompt = prompt
 
-            score = runner.score_benchmark_response(benchmark, row_dict, raw_output, gold, args)
+            for attempt_index in range(retry_limit + 1):
+                attempt_started_at = time.perf_counter()
+                try:
+                    run_result = await runner.run_method(method, current_prompt, llm, args)
+                    raw_output = run_result.raw_output
+                    returncode = run_result.returncode
+                    elapsed_seconds += run_result.elapsed_seconds
+                    prompt_tokens = runner.add_optional_ints(prompt_tokens, run_result.prompt_tokens)
+                    completion_tokens = runner.add_optional_ints(completion_tokens, run_result.completion_tokens)
+                    total_tokens = runner.add_optional_ints(total_tokens, run_result.total_tokens)
+                    method_trace = run_result.trace or {}
+                    error = ""
+                except Exception as exc:
+                    raw_output = ""
+                    returncode = 1
+                    elapsed_seconds += time.perf_counter() - attempt_started_at
+                    prompt_tokens = None
+                    completion_tokens = None
+                    total_tokens = None
+                    error = str(exc)
+                    method_trace = {"error": error}
+
+                score = runner.score_benchmark_response(benchmark, row_dict, raw_output, gold, args)
+                if attempt_index >= retry_limit or not runner.should_retry_lean_placeholder(benchmark.name, score):
+                    break
+
+                retry_number = attempt_index + 1
+                print(
+                    f"OlymMATH-LEAN output for question {idx}, method {method} used an omitted-proof "
+                    f"placeholder; retrying {retry_number}/{retry_limit}."
+                )
+                lean_placeholder_retries.append(
+                    {
+                        "attempt": retry_number,
+                        "pred": score.pred,
+                        "correct": score.correct,
+                        "error": error or score.error,
+                        "raw_output": raw_output,
+                        "score_metadata": score.metadata,
+                        "method_trace": method_trace,
+                    }
+                )
+                current_prompt = runner.build_lean_placeholder_retry_prompt(prompt, retry_number)
+
+            if score is None:
+                score = runner.score_benchmark_response(benchmark, row_dict, raw_output, gold, args)
+
             result_error = error or score.error
+            result_pred = score.pred
+            result_metadata = dict(score.metadata)
+            artifact_method_trace = dict(method_trace)
+            if lean_placeholder_retries:
+                result_metadata["lean_placeholder_retries_used"] = len(lean_placeholder_retries)
+                result_metadata["lean_placeholder_retry_limit"] = retry_limit
+                artifact_method_trace["lean_placeholder_retries"] = lean_placeholder_retries
             result = {
                 "benchmark": benchmark.name,
                 "method": method,
                 "index": idx,
                 "gold": gold,
-                "pred": score.pred,
+                "pred": result_pred,
                 "correct": score.correct,
                 "returncode": returncode,
                 "error": result_error,
@@ -188,7 +245,7 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
                 "raw_output": raw_output,
-                "score_metadata": score.metadata,
+                "score_metadata": result_metadata,
                 "json_trace_path": "",
             }
             if args.save_json_traces:
@@ -203,7 +260,7 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                         "method": method,
                         "index": idx,
                         "gold": gold,
-                        "pred": score.pred,
+                        "pred": result_pred,
                         "correct": score.correct,
                         "returncode": returncode,
                         "error": result_error,
@@ -217,11 +274,11 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                         "question": question_context["question"],
                         "options": question_context["options"],
                         "gold_answer": question_context.get("gold_answer", gold),
-                        "score_metadata": score.metadata,
+                        "score_metadata": result_metadata,
                         "prompt": prompt,
                         "raw_output": raw_output,
-                        "multiagent_debug": runner.build_multiagent_debug(method_trace),
-                        "method_trace": method_trace,
+                        "multiagent_debug": runner.build_multiagent_debug(artifact_method_trace),
+                        "method_trace": artifact_method_trace,
                     },
                 )
             results.append(result)

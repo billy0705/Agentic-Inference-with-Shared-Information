@@ -71,7 +71,7 @@ Examples:
 
 ## Model Providers
 
-The default provider is an OpenAI-compatible API endpoint at `http://localhost:8000/v1` using `langchain-openai`. The default API model is `openai/gpt-oss-120b`, or `OPENAI_MODEL` when set.
+The default provider is an OpenAI-compatible API endpoint at `http://localhost:8000/v1` using `langchain-openai`. Set `OPENAI_BASE_URL` to use a different endpoint. The default API model is `openai/gpt-oss-120b`, or `OPENAI_MODEL` when set.
 
 Use a different API model with:
 
@@ -291,19 +291,21 @@ To compare fixed subagents, dynamic subagents, and the direct baseline in one ru
 uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,multiagent_dynamic_streaming,multiagent_dynamic_no_streaming,plain_llm --limit 10
 ```
 
-The benchmark writes per-question CSV results with a unique run id in the filename, such as `output/gpqa_diamond_results_20260624T130000Z_ab12cd34.csv`, and prints accuracy, invalid-answer rate, total tokens, average tokens, total time, and average time for each method. The results CSV, summary JSON, and correctness matrix CSV are updated after each completed question-method run, so partial progress is inspectable while a benchmark is still running. `multiagent` remains as a legacy alias for fixed `multiagent_streaming`. Use `--output result.csv` to write `output/result.csv`, or `--output-dir other-output` to change the results directory. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the default OpenAI-compatible API provider.
+The benchmark writes each run under `output/<benchmark>/<model>/<run_id>/`, such as `output/ma_proofbench/gpt-oss-120b/20260624T130000Z_ab12cd34/`. Provider prefixes are omitted from the model folder, so `google/gemma-4-26B-A4B-it` writes under `gemma-4-26B-A4B-it`. The run folder contains the per-question results CSV, summary JSON, correctness matrix CSV, run config, and per-example traces, and these artifacts are updated after each completed question-method run. `multiagent` remains as a legacy alias for fixed `multiagent_streaming`. Use `--output result.csv` to name the CSV inside the run folder, or `--output-dir other-output` to change the root directory.
 
-The correctness matrix is written inside the run trace folder as `output/json_traces/<run_id>/correctness.csv`. Rows are task ids, columns are method names, and each cell is `T`, `F`, or blank if that method has not finished that task yet.
+Evaluation defaults to `--model auto` for the OpenAI-compatible provider. In auto mode it queries `<OPENAI_BASE_URL or http://localhost:8000/v1>/models` and uses the first returned model id. If the endpoint is unavailable or returns no model ids, it falls back to `OPENAI_MODEL`, then `openai/gpt-oss-120b`. Pass `--model <model-id>` to skip auto-detection. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the OpenAI-compatible API provider.
 
-JSON traces are saved by default under `output/json_traces/<run_id>/`. Each per-example method trace stores the resolved model name, settings, question, answer choices, prompt, raw output, token usage, selected subagents, messages sent by agents, a compact workflow, and the full method trace. It does not duplicate the entire benchmark row. Use `--no-save-json-traces` to disable JSON artifacts.
+The correctness matrix is written inside the run folder as `correctness.csv`. Rows are task ids, columns are method names, and each cell is `T`, `F`, or blank if that method has not finished that task yet.
+
+JSON traces are saved by default under the run folder in `examples/`. Each per-example method trace stores the resolved model name, settings, question, answer choices, prompt, raw output, token usage, selected subagents, messages sent by agents, a compact workflow, and the full method trace. It does not duplicate the entire benchmark row. Use `--no-save-json-traces` to disable JSON artifacts.
 
 To compare where methods disagree after a run:
 
 ```bash
-uv run python scripts/compare_eval_traces.py output/json_traces/<run_id>
+uv run python scripts/compare_eval_traces.py output/<benchmark>/<model>/<run_id>
 ```
 
-GPQA on Hugging Face is gated. If the Hub-backed load fails because the dataset requires authentication, the evaluator automatically falls back to `data/gpqa_diamond.csv` when that file exists. Authenticate with an account that has dataset access, set `HF_TOKEN`, or pass your own local GPQA-style file with:
+GPQA on Hugging Face is gated. By default, the evaluator uses `data/gpqa/gpqa_diamond.csv` when that file exists; otherwise it tries Hugging Face and saves the downloaded file there for later runs. Authenticate with an account that has dataset access, set `HF_TOKEN`, or pass your own local GPQA-style file with:
 
 ```bash
 uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/gpqa.csv
@@ -311,7 +313,7 @@ uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_
 
 Local `.csv`, `.jsonl`, and `.ndjson` files must include `Question`, `Correct Answer`, `Incorrect Answer 1`, `Incorrect Answer 2`, and `Incorrect Answer 3`.
 
-GSM8K uses the public Hugging Face dataset `openai/gsm8k`, config `main`, split `test`. Rows contain `question` and `answer`; the gold answer is the final numeric value after the `####` marker in `answer`. The evaluator normalizes equivalent numeric formatting, so values like `10`, `10.0`, and `$10.00` score the same. To use a local GSM8K-shaped file:
+GSM8K uses the public Hugging Face dataset `openai/gsm8k`, config `main`, split `test`. By default, the evaluator uses `data/gsm8k/gsm8k_test.jsonl` when it exists; otherwise it downloads and saves that file there. Rows contain `question` and `answer`; the gold answer is the final numeric value after the `####` marker in `answer`. The evaluator normalizes equivalent numeric formatting, so values like `10`, `10.0`, and `$10.00` score the same. To use a local GSM8K-shaped file:
 
 ```bash
 uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/gsm8k.jsonl
@@ -319,7 +321,7 @@ uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no
 
 Local GSM8K `.csv`, `.jsonl`, and `.ndjson` files must include `question` and `answer`.
 
-MMLU-Pro uses the public Hugging Face dataset `TIGER-Lab/MMLU-Pro`, split `test` only. Rows contain `question`, `options`, `answer`, and optionally `answer_index`, `category`, `cot_content`, `question_id`, and `src`. The evaluator keeps the dataset option order, labels the available options from `A` through at most `J`, and scores against the `answer` letter. To use a local MMLU-Pro-shaped file:
+MMLU-Pro uses the public Hugging Face dataset `TIGER-Lab/MMLU-Pro`, split `test` only. By default, the evaluator uses `data/mmlu_pro/mmlu_pro_test.jsonl` when it exists; otherwise it downloads and saves that file there. Rows contain `question`, `options`, `answer`, and optionally `answer_index`, `category`, `cot_content`, `question_id`, and `src`. The evaluator keeps the dataset option order, labels the available options from `A` through at most `J`, and scores against the `answer` letter. To use a local MMLU-Pro-shaped file:
 
 ```bash
 uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/mmlu_pro.jsonl
@@ -327,7 +329,7 @@ uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent
 
 Local MMLU-Pro `.csv`, `.jsonl`, and `.ndjson` files must include `question`, `options`, and `answer`. For CSV files, `options` must be a JSON list string.
 
-MA-ProofBench uses the public Hugging Face dataset `openbmb/MA-ProofBench`, split `test`. Rows contain `id`, `split`, `informal_statement`, `formal_statement`, `header`, `topic`, `tag`, and `version`. The default level is `all`; use `--ma-proofbench-level level1` or `--ma-proofbench-level level2` to run one tier. The evaluator preserves dataset order and defaults to `--attempts 1`.
+MA-ProofBench uses the public Hugging Face dataset `openbmb/MA-ProofBench`, split `test`. By default, the evaluator uses `data/ma_proofbench/ma_proofbench_test.jsonl` when it exists; otherwise it downloads and saves that file there. Rows contain `id`, `split`, `informal_statement`, `formal_statement`, `header`, `topic`, `tag`, and `version`. The default level is `all`; use `--ma-proofbench-level level1` or `--ma-proofbench-level level2` to run one tier. The evaluator preserves dataset order and defaults to `--attempts 1`.
 
 MA-ProofBench scoring is verifier-based. The evaluator extracts the final Lean code block, merges the dataset `header`, rejects outputs containing `sorry`, checks that the target theorem statement was not changed, and then verifies the proof. A proof is correct only when verification reports a complete proof with no errors and no sorries.
 
@@ -359,7 +361,7 @@ OlymMATH uses the public Hugging Face dataset `RUC-AIBOX/OlymMATH`. The natural-
 
 The OlymMATH paper reports rule-based answer evaluation for EASY/HARD and formal verification for LEAN. It does not provide one universal natural-language solver prompt; for Lean, the appendix prompt is for generating formalizations during benchmark construction, while model evaluation uses theorem-proving model prompt templates. This repository therefore uses local prompts that match the benchmark contracts: final answer extraction for EASY/HARD, and complete Lean code generation for LEAN.
 
-OlymMATH-LEAN loads the upstream `OlymMATH-LEAN.jsonl` subset. Rows contain `unique_id`, `subject`, `formal_statement`, `formal_statement_raw`, `formal_proof`, `en_informal`, `zh_informal`, and natural-language proof fields. Scoring reuses the Lean verifier workflow: extract a Lean code block, reject `sorry`, ensure the theorem statement is unchanged, then verify with Kimina Lean Server. To use local OlymMATH files:
+OlymMATH-LEAN loads the upstream `OlymMATH-LEAN.jsonl` subset. By default, OlymMATH files are loaded from or downloaded into `data/OlymMATH/`, such as `data/OlymMATH/OlymMATH-EN-HARD.jsonl` and `data/OlymMATH/OlymMATH-LEAN.jsonl`; when any default OlymMATH file is missing, the evaluator downloads all missing OlymMATH default files in one pass. Rows contain `unique_id`, `subject`, `formal_statement`, `formal_statement_raw`, `formal_proof`, `en_informal`, `zh_informal`, and natural-language proof fields. Scoring reuses the Lean verifier workflow: extract a Lean code block, reject `sorry`, ensure the theorem statement is unchanged, then verify with Kimina Lean Server. To use local OlymMATH files:
 
 ```bash
 uv run evaluation --benchmark olymmath --olymmath-subset en-hard --methods plain_llm --limit 10 --data-file /path/to/OlymMATH-EN-HARD.jsonl

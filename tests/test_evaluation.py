@@ -10,7 +10,7 @@ import pytest
 from multi_agent_sync.evaluation import main as evaluation
 from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation import runner
-from multi_agent_sync.evaluation.types import BenchmarkSpec
+from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
 
 
 @dataclass
@@ -202,6 +202,7 @@ async def test_run_evaluation_sets_max_tokens_to_16384(monkeypatch, tmp_path):
     monkeypatch.setattr(evaluation, "get_llm", fake_get_llm)
     monkeypatch.setattr(runner, "run_method", fake_run_method)
     monkeypatch.setattr(runner, "progress", lambda items, desc: items)
+    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "openai/gpt-oss-120b")
 
     args = evaluation.build_parser().parse_args(
         ["--benchmark", "fake", "--methods", "plain_llm", "--output", str(tmp_path / "results.csv")]
@@ -209,7 +210,7 @@ async def test_run_evaluation_sets_max_tokens_to_16384(monkeypatch, tmp_path):
 
     await evaluation.run_evaluation(args)
 
-    assert captured_llm_kwargs == {"model": None, "openai": True, "max_tokens": 16384}
+    assert captured_llm_kwargs == {"model": "openai/gpt-oss-120b", "openai": True, "max_tokens": 16384}
 
 
 @pytest.mark.asyncio
@@ -261,16 +262,18 @@ async def test_run_evaluation_writes_unique_csv_and_json_trace_by_default(monkey
     monkeypatch.setattr(runner, "run_method", fake_run_method)
     monkeypatch.setattr(runner, "progress", lambda items, desc: items)
     monkeypatch.setattr(runner, "create_run_id", lambda: "run-test", raising=False)
+    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "openai/gpt-oss-120b")
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
 
     args = evaluation.build_parser().parse_args(["--benchmark", "fake", "--methods", "plain_llm", "--output-dir", str(tmp_path)])
 
     results = await evaluation.run_evaluation(args)
 
-    output_path = tmp_path / "fake_run-test.csv"
-    trace_path = tmp_path / "json_traces" / "run-test" / "examples" / "0000_plain_llm.json"
-    run_config_path = tmp_path / "json_traces" / "run-test" / "run_config.json"
-    summary_path = tmp_path / "json_traces" / "run-test" / "summary.json"
+    run_root = tmp_path / "fake" / "gpt-oss-120b" / "run-test"
+    output_path = run_root / "fake.csv"
+    trace_path = run_root / "examples" / "0000_plain_llm.json"
+    run_config_path = run_root / "run_config.json"
+    summary_path = run_root / "summary.json"
 
     assert output_path.exists()
     assert trace_path.exists()
@@ -332,9 +335,10 @@ async def test_run_evaluation_updates_results_summary_and_correctness_matrix_inc
 
     async def fake_run_method(method, prompt, llm, args):
         calls.append((method, prompt))
-        output_path = tmp_path / "fake_run-test.csv"
-        summary_path = tmp_path / "json_traces" / "run-test" / "summary.json"
-        matrix_path = tmp_path / "json_traces" / "run-test" / "correctness.csv"
+        run_root = tmp_path / "fake" / "gpt-oss-120b" / "run-test"
+        output_path = run_root / "fake.csv"
+        summary_path = run_root / "summary.json"
+        matrix_path = run_root / "correctness.csv"
         if len(calls) == 2:
             assert output_path.exists()
             assert summary_path.exists()
@@ -361,6 +365,7 @@ async def test_run_evaluation_updates_results_summary_and_correctness_matrix_inc
     monkeypatch.setattr(runner, "run_method", fake_run_method)
     monkeypatch.setattr(runner, "progress", lambda items, desc: items)
     monkeypatch.setattr(runner, "create_run_id", lambda: "run-test", raising=False)
+    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "openai/gpt-oss-120b")
 
     args = evaluation.build_parser().parse_args(
         [
@@ -375,59 +380,187 @@ async def test_run_evaluation_updates_results_summary_and_correctness_matrix_inc
 
     await evaluation.run_evaluation(args)
 
-    matrix_rows = list(csv.DictReader((tmp_path / "json_traces" / "run-test" / "correctness.csv").open(newline="", encoding="utf-8")))
+    matrix_rows = list(csv.DictReader((tmp_path / "fake" / "gpt-oss-120b" / "run-test" / "correctness.csv").open(newline="", encoding="utf-8")))
     assert matrix_rows == [
         {"task_id": "0", "plain_llm": "T", "multiagent_streaming": "F"},
         {"task_id": "1", "plain_llm": "T", "multiagent_streaming": "F"},
     ]
 
 
+@pytest.mark.asyncio
+async def test_olymmath_lean_retries_placeholder_output_and_keeps_raw_final_output(monkeypatch, tmp_path):
+    prompts: list[str] = []
+    bad_output = "```lean4\nimport Mathlib\n\ntheorem to_prove : True := by\n  sorry\n```"
+    good_output = "```lean4\nimport Mathlib\n\ntheorem to_prove : True := by\n  trivial\n```"
+
+    async def fake_run_method(method, prompt, llm, args):
+        prompts.append(prompt)
+        raw_output = bad_output if len(prompts) == 1 else good_output
+        return runner.RunResult(
+            raw_output=raw_output,
+            returncode=0,
+            elapsed_seconds=0.1,
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            trace={"prompt": prompt, "raw_output": raw_output},
+        )
+
+    def fake_score_response(row, raw_output, args):
+        if "sorry" in raw_output:
+            return BenchmarkScore(
+                pred="contains_sorry",
+                correct=False,
+                error="Generated Lean code contains a placeholder.",
+                metadata={"lean_code": raw_output},
+            )
+        return BenchmarkScore(pred="verified", correct=True, metadata={"lean_code": raw_output})
+
+    monkeypatch.setattr(evaluation, "get_llm", lambda model=None, openai=True, max_tokens=None: "fake-llm")
+    monkeypatch.setattr(runner, "run_method", fake_run_method)
+    monkeypatch.setattr(runner, "progress", lambda items, desc: items)
+    monkeypatch.setattr(runner, "create_run_id", lambda: "run-test", raising=False)
+    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "openai/gpt-oss-120b")
+
+    benchmark = BenchmarkSpec(
+        name="olymmath_lean",
+        display_name="OlymMATH-LEAN",
+        default_output_filename="olymmath_lean_results.csv",
+        load_items=lambda args: [{"question": "Prove true."}],
+        build_prompt=lambda row, rng: ("initial Lean prompt", "lean_verifies"),
+        extract_answer=lambda raw_output: None,
+        score_response=fake_score_response,
+    )
+    monkeypatch.setattr(evaluation, "get_benchmarks", lambda: {"olymmath_lean": benchmark})
+
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "olymmath_lean",
+            "--methods",
+            "plain_llm",
+            "--output-dir",
+            str(tmp_path),
+            "--lean-placeholder-retries",
+            "2",
+        ]
+    )
+
+    results = await evaluation.run_evaluation(args)
+
+    run_root = tmp_path / "olymmath_lean" / "gpt-oss-120b" / "run-test"
+    output_path = run_root / "olymmath_lean_results.csv"
+    trace_path = run_root / "examples" / "0000_plain_llm.json"
+    csv_text = output_path.read_text(encoding="utf-8")
+    trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+
+    assert len(prompts) == 2
+    assert "initial Lean prompt" in prompts[1]
+    assert "omitted-proof placeholders" in prompts[1]
+    assert "sorry" not in prompts[1].lower()
+    assert results[0]["pred"] == "verified"
+    assert results[0]["raw_output"] == good_output
+    assert good_output in csv_text
+    assert trace_payload["raw_output"] == good_output
+    assert trace_payload["method_trace"]["lean_placeholder_retries"][0]["raw_output"] == bad_output
+
+
 def test_default_output_path_uses_run_id_to_avoid_overwriting():
     benchmark = gpqa.build_benchmark()
-    args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
+    args = evaluation.build_parser().parse_args(["--benchmark", "gpqa", "--model", "openai/gpt-oss-120b"])
 
     assert runner.resolve_output_path(benchmark, args, run_id="run-123") == (
-        runner.DEFAULT_OUTPUT_DIR / "gpqa_diamond_results_run-123.csv"
+        runner.DEFAULT_OUTPUT_DIR / "gpqa" / "gpt-oss-120b" / "run-123" / "gpqa_diamond_results.csv"
     )
 
 
 def test_gsm8k_default_output_path_uses_run_id_to_avoid_overwriting():
     benchmark = gsm8k.build_benchmark()
-    args = evaluation.build_parser().parse_args(["--benchmark", "gsm8k"])
+    args = evaluation.build_parser().parse_args(["--benchmark", "gsm8k", "--model", "openai/gpt-oss-120b"])
 
     assert runner.resolve_output_path(benchmark, args, run_id="run-123") == (
-        runner.DEFAULT_OUTPUT_DIR / "gsm8k_results_run-123.csv"
+        runner.DEFAULT_OUTPUT_DIR / "gsm8k" / "gpt-oss-120b" / "run-123" / "gsm8k_results.csv"
     )
 
 
 def test_mmlu_pro_default_output_path_uses_run_id_to_avoid_overwriting():
     benchmark = mmlu_pro.build_benchmark()
-    args = evaluation.build_parser().parse_args(["--benchmark", "mmlu_pro"])
+    args = evaluation.build_parser().parse_args(["--benchmark", "mmlu_pro", "--model", "openai/gpt-oss-120b"])
 
     assert runner.resolve_output_path(benchmark, args, run_id="run-123") == (
-        runner.DEFAULT_OUTPUT_DIR / "mmlu_pro_results_run-123.csv"
+        runner.DEFAULT_OUTPUT_DIR / "mmlu_pro" / "gpt-oss-120b" / "run-123" / "mmlu_pro_results.csv"
     )
 
 
 def test_olymmath_default_output_paths_use_run_id_to_avoid_overwriting():
     benchmark = olymmath.build_benchmark()
     lean_benchmark = olymmath.build_lean_benchmark()
-    args = evaluation.build_parser().parse_args(["--benchmark", "olymmath"])
-    lean_args = evaluation.build_parser().parse_args(["--benchmark", "olymmath_lean"])
+    args = evaluation.build_parser().parse_args(["--benchmark", "olymmath", "--model", "openai/gpt-oss-120b"])
+    lean_args = evaluation.build_parser().parse_args(["--benchmark", "olymmath_lean", "--model", "openai/gpt-oss-120b"])
 
     assert runner.resolve_output_path(benchmark, args, run_id="run-123") == (
-        runner.DEFAULT_OUTPUT_DIR / "olymmath_results_run-123.csv"
+        runner.DEFAULT_OUTPUT_DIR / "olymmath" / "gpt-oss-120b" / "run-123" / "olymmath_results.csv"
     )
     assert runner.resolve_output_path(lean_benchmark, lean_args, run_id="run-123") == (
-        runner.DEFAULT_OUTPUT_DIR / "olymmath_lean_results_run-123.csv"
+        runner.DEFAULT_OUTPUT_DIR / "olymmath_lean" / "gpt-oss-120b" / "run-123" / "olymmath_lean_results.csv"
     )
 
 
 def test_output_filename_is_written_inside_output_folder():
     benchmark = gpqa.build_benchmark()
-    args = evaluation.build_parser().parse_args(["--benchmark", "gpqa", "--output", "result.csv"])
+    args = evaluation.build_parser().parse_args(["--benchmark", "gpqa", "--model", "openai/gpt-oss-120b", "--output", "result.csv"])
 
-    assert runner.resolve_output_path(benchmark, args) == runner.DEFAULT_OUTPUT_DIR / "result.csv"
+    assert runner.resolve_output_path(benchmark, args, run_id="run-123") == (
+        runner.DEFAULT_OUTPUT_DIR / "gpqa" / "gpt-oss-120b" / "run-123" / "result.csv"
+    )
+
+
+def test_model_output_folder_uses_last_provider_path_component():
+    benchmark = ma_proofbench.build_benchmark()
+    args = evaluation.build_parser().parse_args(
+        ["--benchmark", "ma_proofbench", "--model", "google/gemma-4-26B-A4B-it"]
+    )
+
+    assert runner.resolve_output_path(benchmark, args, run_id="run-123") == (
+        runner.DEFAULT_OUTPUT_DIR / "ma_proofbench" / "gemma-4-26B-A4B-it" / "run-123" / "ma_proofbench_results.csv"
+    )
+
+
+def test_auto_model_resolution_uses_first_api_model(monkeypatch):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({"data": [{"id": "google/gemma-4-26B-A4B-it"}]}).encode("utf-8")
+
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(runner, "urlopen", fake_urlopen)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:8000/v1")
+    monkeypatch.setenv("OPENAI_MODEL_LOOKUP_TIMEOUT", "0.5")
+
+    assert runner.resolve_auto_openai_model_name() == "google/gemma-4-26B-A4B-it"
+    assert captured == {"url": "http://localhost:8000/v1/models", "timeout": 0.5}
+
+
+def test_auto_model_resolution_falls_back_when_api_lookup_fails(monkeypatch, capsys):
+    def failing_urlopen(request, timeout):
+        raise OSError("server unavailable")
+
+    monkeypatch.setattr(runner, "urlopen", failing_urlopen)
+    monkeypatch.setenv("OPENAI_MODEL", "openai/fallback-model")
+
+    assert runner.resolve_auto_openai_model_name() == "openai/fallback-model"
+    assert "using fallback model: openai/fallback-model" in capsys.readouterr().out
 
 
 def test_gpqa_owns_answer_extraction():
@@ -701,6 +834,10 @@ def test_olymmath_lean_build_prompt_uses_formal_statement_raw():
     assert "Prove true." in prompt
     assert "theorem to_prove : True" in prompt
     assert "theorem to_prove : False" not in prompt
+    assert "theorem to_prove : True := by" in prompt
+    assert "sorry" not in prompt.lower()
+    assert "omitted-proof placeholders" in prompt
+    assert "Output only the Lean code block" in prompt
     assert "```lean4" in prompt
 
 
@@ -1260,8 +1397,9 @@ def test_load_local_gsm8k_rows_validates_required_fields(tmp_path):
         gsm8k.load_local_gsm8k_rows(path)
 
 
-def test_load_gsm8k_dataset_uses_openai_main_test_split(monkeypatch):
+def test_load_gsm8k_dataset_uses_openai_main_test_split(monkeypatch, tmp_path, capsys):
     captured = {}
+    cache_path = tmp_path / "gsm8k" / "gsm8k_test.jsonl"
 
     class FakeDataset(list):
         def select(self, selected_range):
@@ -1282,11 +1420,74 @@ def test_load_gsm8k_dataset_uses_openai_main_test_split(monkeypatch):
         "datasets",
         types.SimpleNamespace(load_dataset=fake_load_dataset),
     )
+    monkeypatch.setattr(gsm8k, "DEFAULT_LOCAL_DATA_FILE", cache_path, raising=False)
 
     rows = gsm8k.load_gsm8k_dataset(limit=1)
 
     assert captured == {"args": ("openai/gsm8k", "main"), "kwargs": {"split": "test"}}
     assert rows == [{"question": "Question 1?", "answer": "#### 1"}]
+    assert cache_path.exists()
+    output = capsys.readouterr().out
+    assert "downloading from Hugging Face" in output
+    assert "Saved benchmark data file" in output
+
+
+def test_load_gsm8k_dataset_uses_default_local_file_before_huggingface(monkeypatch, tmp_path, capsys):
+    cache_path = tmp_path / "gsm8k" / "gsm8k_test.jsonl"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({"question": "Cached?", "answer": "#### 4"}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(gsm8k, "DEFAULT_LOCAL_DATA_FILE", cache_path, raising=False)
+
+    rows = gsm8k.load_gsm8k_dataset(limit=1)
+
+    assert rows == [{"question": "Cached?", "answer": "#### 4"}]
+    assert "Using local benchmark data file" in capsys.readouterr().out
+
+
+def test_load_gpqa_dataset_downloads_and_saves_default_local_file(monkeypatch, tmp_path):
+    captured = {}
+    cache_path = tmp_path / "gpqa" / "gpqa_diamond.csv"
+
+    def fake_load_dataset(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return [
+            {
+                "Question": "Question 1?",
+                "Correct Answer": "Correct",
+                "Incorrect Answer 1": "Wrong 1",
+                "Incorrect Answer 2": "Wrong 2",
+                "Incorrect Answer 3": "Wrong 3",
+            },
+            {
+                "Question": "Question 2?",
+                "Correct Answer": "Correct 2",
+                "Incorrect Answer 1": "Wrong 4",
+                "Incorrect Answer 2": "Wrong 5",
+                "Incorrect Answer 3": "Wrong 6",
+            },
+        ]
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "datasets",
+        types.SimpleNamespace(load_dataset=fake_load_dataset),
+    )
+    monkeypatch.setattr(gpqa, "DEFAULT_LOCAL_DATA_FILE", cache_path, raising=False)
+
+    rows = gpqa.load_gpqa_dataset(limit=1)
+
+    assert captured == {"args": ("Idavidrein/gpqa", "gpqa_diamond"), "kwargs": {"split": "train"}}
+    assert rows == [
+        {
+            "Question": "Question 1?",
+            "Correct Answer": "Correct",
+            "Incorrect Answer 1": "Wrong 1",
+            "Incorrect Answer 2": "Wrong 2",
+            "Incorrect Answer 3": "Wrong 3",
+        }
+    ]
+    assert cache_path.exists()
 
 
 def test_load_local_mmlu_pro_jsonl_rows(tmp_path):
@@ -1345,8 +1546,9 @@ def test_load_local_mmlu_pro_rows_accepts_fewer_than_ten_options_when_answer_is_
     assert len(rows[0]["options"]) == 9
 
 
-def test_load_mmlu_pro_dataset_uses_test_split_only(monkeypatch):
+def test_load_mmlu_pro_dataset_uses_test_split_only(monkeypatch, tmp_path):
     captured = {}
+    cache_path = tmp_path / "mmlu_pro" / "mmlu_pro_test.jsonl"
 
     class FakeDataset(list):
         def select(self, selected_range):
@@ -1367,15 +1569,106 @@ def test_load_mmlu_pro_dataset_uses_test_split_only(monkeypatch):
         "datasets",
         types.SimpleNamespace(load_dataset=fake_load_dataset),
     )
+    monkeypatch.setattr(mmlu_pro, "DEFAULT_LOCAL_DATA_FILE", cache_path, raising=False)
 
     rows = mmlu_pro.load_mmlu_pro_dataset(limit=1)
 
     assert captured == {"args": ("TIGER-Lab/MMLU-Pro",), "kwargs": {"split": "test"}}
     assert rows == [{"question": "Question 1?", "options": ["A"] * 10, "answer": "A", "answer_index": 0}]
+    assert cache_path.exists()
+
+
+def test_load_ma_proofbench_dataset_downloads_saves_and_filters_default_local_file(monkeypatch, tmp_path):
+    captured = {}
+    cache_path = tmp_path / "ma_proofbench" / "ma_proofbench_test.jsonl"
+
+    def fake_load_dataset(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return [
+            {
+                "id": "one",
+                "split": "level1",
+                "informal_statement": "Informal 1",
+                "formal_statement": "theorem one : True := by trivial",
+                "header": "import Mathlib",
+                "topic": "logic",
+                "tag": "test",
+                "version": "v1",
+            },
+            {
+                "id": "two",
+                "split": "level2",
+                "informal_statement": "Informal 2",
+                "formal_statement": "theorem two : True := by trivial",
+                "header": "import Mathlib",
+                "topic": "logic",
+                "tag": "test",
+                "version": "v1",
+            },
+        ]
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "datasets",
+        types.SimpleNamespace(load_dataset=fake_load_dataset),
+    )
+    monkeypatch.setattr(ma_proofbench, "DEFAULT_LOCAL_DATA_FILE", cache_path, raising=False)
+
+    rows = ma_proofbench.load_ma_proofbench_dataset(limit=1, level="level2")
+
+    assert captured == {"args": ("openbmb/MA-ProofBench",), "kwargs": {"split": "test"}}
+    assert [row["id"] for row in rows] == ["two"]
+    assert cache_path.exists()
+
+
+def test_load_olymmath_dataset_downloads_and_saves_all_default_local_files(monkeypatch, tmp_path, capsys):
+    captured = []
+
+    def fake_load_dataset(*args, **kwargs):
+        captured.append((args, kwargs))
+        config = args[1]
+        if config == "lean":
+            row = {
+                "unique_id": "lean-1",
+                "subject": "algebra",
+                "formal_statement": "theorem lean_one : True := by trivial",
+            }
+        else:
+            row = {"problem": f"{config} problem?", "answer": "1", "subject": "algebra", "unique_id": f"{config}-1"}
+        return [row, dict(row, unique_id=f"{row['unique_id']}-second")]
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "datasets",
+        types.SimpleNamespace(load_dataset=fake_load_dataset),
+    )
+    local_data_dir = tmp_path / "OlymMATH"
+    monkeypatch.setattr(olymmath, "DEFAULT_LOCAL_DATA_DIR", local_data_dir, raising=False)
+
+    rows = olymmath.load_olymmath_dataset(subset="en-hard", limit=1)
+
+    assert captured == [
+        (("RUC-AIBOX/OlymMATH", "en-easy"), {"split": "test"}),
+        (("RUC-AIBOX/OlymMATH", "en-hard"), {"split": "test"}),
+        (("RUC-AIBOX/OlymMATH", "zh-easy"), {"split": "test"}),
+        (("RUC-AIBOX/OlymMATH", "zh-hard"), {"split": "test"}),
+        (("RUC-AIBOX/OlymMATH", "lean"), {"split": "test"}),
+    ]
+    assert rows == [{"problem": "en-hard problem?", "answer": "1", "subject": "algebra", "unique_id": "en-hard-1"}]
+    assert (local_data_dir / "OlymMATH-EN-EASY.jsonl").exists()
+    assert (local_data_dir / "OlymMATH-EN-HARD.jsonl").exists()
+    assert (local_data_dir / "OlymMATH-ZH-EASY.jsonl").exists()
+    assert (local_data_dir / "OlymMATH-ZH-HARD.jsonl").exists()
+    assert (local_data_dir / "OlymMATH-LEAN.jsonl").exists()
+    output = capsys.readouterr().out
+    assert "OlymMATH local data incomplete" in output
+    assert "Downloading OlymMATH data file from Hugging Face" in output
 
 
 def test_load_gpqa_dataset_falls_back_to_default_local_file_when_hub_is_gated(monkeypatch, tmp_path):
-    path = tmp_path / "gpqa_diamond.csv"
+    path = tmp_path / "gpqa" / "gpqa_diamond.csv"
+    path.parent.mkdir(parents=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,

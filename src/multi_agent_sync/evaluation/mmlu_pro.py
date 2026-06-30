@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from multi_agent_sync.evaluation.dataset_files import load_or_download_rows
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt
 
@@ -15,7 +16,7 @@ from multi_agent_sync.prompts import render_prompt
 DATASET_NAME = "TIGER-Lab/MMLU-Pro"
 SPLIT_NAME = "test"
 DEFAULT_OUTPUT_CSV = "mmlu_pro_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/mmlu_pro_test.jsonl")
+DEFAULT_LOCAL_DATA_FILE = Path("data/mmlu_pro/mmlu_pro_test.jsonl")
 LABELS = list("ABCDEFGHIJ")
 
 
@@ -81,23 +82,23 @@ def extract_answer(text: str) -> str | None:
 
 def load_mmlu_pro_dataset(limit: int | None, data_file: str | None = None) -> list[dict[str, Any]] | Any:
     if data_file:
+        print(f"Using local benchmark data file: {data_file}")
         return load_local_mmlu_pro_rows(Path(data_file), limit=limit)
 
+    return load_or_download_rows(
+        DEFAULT_LOCAL_DATA_FILE,
+        load_local_rows=load_local_mmlu_pro_rows,
+        download_rows=download_mmlu_pro_rows,
+        limit=limit,
+    )
+
+
+def download_mmlu_pro_rows() -> Any:
     try:
         from datasets import load_dataset
     except ModuleNotFoundError as exc:
         raise RuntimeError("Missing optional dependency 'datasets'. Install it with: uv add datasets") from exc
-
-    try:
-        dataset = load_dataset(DATASET_NAME, split=SPLIT_NAME)
-    except Exception:
-        if DEFAULT_LOCAL_DATA_FILE.exists():
-            return load_local_mmlu_pro_rows(DEFAULT_LOCAL_DATA_FILE, limit=limit)
-        raise
-
-    if limit is not None and limit > 0:
-        dataset = dataset.select(range(min(limit, len(dataset))))
-    return dataset
+    return load_dataset(DATASET_NAME, split=SPLIT_NAME)
 
 
 def load_local_mmlu_pro_rows(path: Path, limit: int | None = None) -> list[dict[str, Any]]:

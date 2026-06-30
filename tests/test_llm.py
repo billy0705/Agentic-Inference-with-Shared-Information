@@ -17,6 +17,22 @@ def test_get_llm_passes_max_tokens_to_openai_compatible_provider(monkeypatch):
     assert captured_kwargs["max_completion_tokens"] == 8192
 
 
+def test_get_llm_uses_openai_base_url_env(monkeypatch):
+    captured_kwargs = {}
+
+    def fake_chat_openai(**kwargs):
+        captured_kwargs.update(kwargs)
+        return "openai-llm"
+
+    monkeypatch.setattr(llm_module, "ChatOpenAI", fake_chat_openai)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://example.test/v1/")
+
+    llm = llm_module.get_llm(model="test-model", openai=True, max_tokens=8192)
+
+    assert llm == "openai-llm"
+    assert captured_kwargs["base_url"] == "http://example.test/v1"
+
+
 def test_get_llm_passes_max_tokens_to_ollama_provider(monkeypatch):
     captured_kwargs = {}
 
