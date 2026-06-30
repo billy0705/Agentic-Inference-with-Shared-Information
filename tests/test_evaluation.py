@@ -10,7 +10,7 @@ import pytest
 from multi_agent_sync.evaluation import main as evaluation
 from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation import runner
-from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
+from multi_agent_sync.evaluation.types import BenchmarkSpec
 
 
 @dataclass
@@ -385,84 +385,6 @@ async def test_run_evaluation_updates_results_summary_and_correctness_matrix_inc
         {"task_id": "0", "plain_llm": "T", "multiagent_streaming": "F"},
         {"task_id": "1", "plain_llm": "T", "multiagent_streaming": "F"},
     ]
-
-
-@pytest.mark.asyncio
-async def test_olymmath_lean_retries_placeholder_output_and_keeps_raw_final_output(monkeypatch, tmp_path):
-    prompts: list[str] = []
-    bad_output = "```lean4\nimport Mathlib\n\ntheorem to_prove : True := by\n  sorry\n```"
-    good_output = "```lean4\nimport Mathlib\n\ntheorem to_prove : True := by\n  trivial\n```"
-
-    async def fake_run_method(method, prompt, llm, args):
-        prompts.append(prompt)
-        raw_output = bad_output if len(prompts) == 1 else good_output
-        return runner.RunResult(
-            raw_output=raw_output,
-            returncode=0,
-            elapsed_seconds=0.1,
-            prompt_tokens=1,
-            completion_tokens=1,
-            total_tokens=2,
-            trace={"prompt": prompt, "raw_output": raw_output},
-        )
-
-    def fake_score_response(row, raw_output, args):
-        if "sorry" in raw_output:
-            return BenchmarkScore(
-                pred="contains_sorry",
-                correct=False,
-                error="Generated Lean code contains a placeholder.",
-                metadata={"lean_code": raw_output},
-            )
-        return BenchmarkScore(pred="verified", correct=True, metadata={"lean_code": raw_output})
-
-    monkeypatch.setattr(evaluation, "get_llm", lambda model=None, openai=True, max_tokens=None: "fake-llm")
-    monkeypatch.setattr(runner, "run_method", fake_run_method)
-    monkeypatch.setattr(runner, "progress", lambda items, desc: items)
-    monkeypatch.setattr(runner, "create_run_id", lambda: "run-test", raising=False)
-    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "openai/gpt-oss-120b")
-
-    benchmark = BenchmarkSpec(
-        name="olymmath_lean",
-        display_name="OlymMATH-LEAN",
-        default_output_filename="olymmath_lean_results.csv",
-        load_items=lambda args: [{"question": "Prove true."}],
-        build_prompt=lambda row, rng: ("initial Lean prompt", "lean_verifies"),
-        extract_answer=lambda raw_output: None,
-        score_response=fake_score_response,
-    )
-    monkeypatch.setattr(evaluation, "get_benchmarks", lambda: {"olymmath_lean": benchmark})
-
-    args = evaluation.build_parser().parse_args(
-        [
-            "--benchmark",
-            "olymmath_lean",
-            "--methods",
-            "plain_llm",
-            "--output-dir",
-            str(tmp_path),
-            "--lean-placeholder-retries",
-            "2",
-        ]
-    )
-
-    results = await evaluation.run_evaluation(args)
-
-    run_root = tmp_path / "olymmath_lean" / "gpt-oss-120b" / "run-test"
-    output_path = run_root / "olymmath_lean_results.csv"
-    trace_path = run_root / "examples" / "0000_plain_llm.json"
-    csv_text = output_path.read_text(encoding="utf-8")
-    trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
-
-    assert len(prompts) == 2
-    assert "initial Lean prompt" in prompts[1]
-    assert "omitted-proof placeholders" in prompts[1]
-    assert "sorry" not in prompts[1].lower()
-    assert results[0]["pred"] == "verified"
-    assert results[0]["raw_output"] == good_output
-    assert good_output in csv_text
-    assert trace_payload["raw_output"] == good_output
-    assert trace_payload["method_trace"]["lean_placeholder_retries"][0]["raw_output"] == bad_output
 
 
 def test_default_output_path_uses_run_id_to_avoid_overwriting():

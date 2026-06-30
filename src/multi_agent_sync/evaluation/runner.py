@@ -27,7 +27,7 @@ VALID_METHODS = {
     "multiagent_dynamic_streaming",
     "multiagent_dynamic_no_streaming",
     "plain_llm",
-}
+    }
 
 
 @dataclass
@@ -218,7 +218,6 @@ def build_run_config(
             "ma_proofbench_level": getattr(args, "ma_proofbench_level", None),
             "olymmath_subset": getattr(args, "olymmath_subset", None),
             "lean_timeout": getattr(args, "lean_timeout", None),
-            "lean_placeholder_retries": getattr(args, "lean_placeholder_retries", None),
             "kimina_host": getattr(args, "kimina_host", None),
             "kimina_port": getattr(args, "kimina_port", None),
             "kimina_max_workers": getattr(args, "kimina_max_workers", None),
@@ -243,28 +242,13 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "max_steps": args.max_steps,
         "attempts": getattr(args, "attempts", 1),
         "olymmath_subset": getattr(args, "olymmath_subset", None),
-        "lean_placeholder_retries": getattr(args, "lean_placeholder_retries", None),
         "kimina_host": getattr(args, "kimina_host", None),
         "kimina_port": getattr(args, "kimina_port", None),
         "kimina_max_workers": getattr(args, "kimina_max_workers", None),
         "total_runtime_timeout": args.total_runtime_timeout,
         "synthesis_timeout": args.synthesis_timeout,
         "save_json_traces": args.save_json_traces,
-    }
-
-
-def should_retry_lean_placeholder(benchmark_name: str, score: BenchmarkScore) -> bool:
-    return benchmark_name == "olymmath_lean" and score.pred == "contains_sorry"
-
-
-def build_lean_placeholder_retry_prompt(original_prompt: str, attempt: int) -> str:
-    return (
-        f"{original_prompt}\n\n"
-        f"Previous attempt {attempt} was rejected because the Lean proof used an omitted-proof placeholder. "
-        "Produce a fresh complete Lean 4 solution. "
-        "Do not include omitted-proof placeholders, admit-style terms, or unfinished proof markers. "
-        "Output only the Lean code block."
-    )
+}
 
 
 def resolve_model_name(args: argparse.Namespace) -> str:

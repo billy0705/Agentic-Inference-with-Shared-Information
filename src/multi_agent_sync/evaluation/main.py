@@ -87,12 +87,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum Lean verifier runtime per MA-ProofBench candidate, in seconds.",
     )
     parser.add_argument(
-        "--lean-placeholder-retries",
-        type=int,
-        default=2,
-        help="Retries for OlymMATH-LEAN outputs rejected for omitted-proof placeholders.",
-    )
-    parser.add_argument(
         "--kimina-host",
         default="127.0.0.1",
         help="Kimina Lean Server host for MA-ProofBench verification.",
@@ -164,73 +158,31 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
         for method in methods:
             started_at = time.perf_counter()
             method_trace: dict[str, Any] = {}
-            raw_output = ""
-            returncode = 1
-            elapsed_seconds = 0.0
-            prompt_tokens = None
-            completion_tokens = None
-            total_tokens = None
-            error = ""
-            score = None
-            lean_placeholder_retries: list[dict[str, Any]] = []
-            retry_limit = max(0, int(getattr(args, "lean_placeholder_retries", 0)))
-            current_prompt = prompt
+            try:
+                run_result = await runner.run_method(method, prompt, llm, args)
+                raw_output = run_result.raw_output
+                returncode = run_result.returncode
+                elapsed_seconds = run_result.elapsed_seconds
+                prompt_tokens = run_result.prompt_tokens
+                completion_tokens = run_result.completion_tokens
+                total_tokens = run_result.total_tokens
+                method_trace = run_result.trace or {}
+                error = ""
+            except Exception as exc:
+                raw_output = ""
+                returncode = 1
+                elapsed_seconds = time.perf_counter() - started_at
+                prompt_tokens = None
+                completion_tokens = None
+                total_tokens = None
+                error = str(exc)
+                method_trace = {"error": error}
 
-            for attempt_index in range(retry_limit + 1):
-                attempt_started_at = time.perf_counter()
-                try:
-                    run_result = await runner.run_method(method, current_prompt, llm, args)
-                    raw_output = run_result.raw_output
-                    returncode = run_result.returncode
-                    elapsed_seconds += run_result.elapsed_seconds
-                    prompt_tokens = runner.add_optional_ints(prompt_tokens, run_result.prompt_tokens)
-                    completion_tokens = runner.add_optional_ints(completion_tokens, run_result.completion_tokens)
-                    total_tokens = runner.add_optional_ints(total_tokens, run_result.total_tokens)
-                    method_trace = run_result.trace or {}
-                    error = ""
-                except Exception as exc:
-                    raw_output = ""
-                    returncode = 1
-                    elapsed_seconds += time.perf_counter() - attempt_started_at
-                    prompt_tokens = None
-                    completion_tokens = None
-                    total_tokens = None
-                    error = str(exc)
-                    method_trace = {"error": error}
-
-                score = runner.score_benchmark_response(benchmark, row_dict, raw_output, gold, args)
-                if attempt_index >= retry_limit or not runner.should_retry_lean_placeholder(benchmark.name, score):
-                    break
-
-                retry_number = attempt_index + 1
-                print(
-                    f"OlymMATH-LEAN output for question {idx}, method {method} used an omitted-proof "
-                    f"placeholder; retrying {retry_number}/{retry_limit}."
-                )
-                lean_placeholder_retries.append(
-                    {
-                        "attempt": retry_number,
-                        "pred": score.pred,
-                        "correct": score.correct,
-                        "error": error or score.error,
-                        "raw_output": raw_output,
-                        "score_metadata": score.metadata,
-                        "method_trace": method_trace,
-                    }
-                )
-                current_prompt = runner.build_lean_placeholder_retry_prompt(prompt, retry_number)
-
-            if score is None:
-                score = runner.score_benchmark_response(benchmark, row_dict, raw_output, gold, args)
-
+            score = runner.score_benchmark_response(benchmark, row_dict, raw_output, gold, args)
             result_error = error or score.error
             result_pred = score.pred
             result_metadata = dict(score.metadata)
             artifact_method_trace = dict(method_trace)
-            if lean_placeholder_retries:
-                result_metadata["lean_placeholder_retries_used"] = len(lean_placeholder_retries)
-                result_metadata["lean_placeholder_retry_limit"] = retry_limit
-                artifact_method_trace["lean_placeholder_retries"] = lean_placeholder_retries
             result = {
                 "benchmark": benchmark.name,
                 "method": method,
