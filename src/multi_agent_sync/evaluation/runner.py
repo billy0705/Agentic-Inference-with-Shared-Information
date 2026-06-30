@@ -202,6 +202,7 @@ def build_run_config(
             "limit": args.limit,
             "attempts": getattr(args, "attempts", 1),
             "ma_proofbench_level": getattr(args, "ma_proofbench_level", None),
+            "olymmath_subset": getattr(args, "olymmath_subset", None),
             "lean_timeout": getattr(args, "lean_timeout", None),
             "kimina_host": getattr(args, "kimina_host", None),
             "kimina_port": getattr(args, "kimina_port", None),
@@ -226,6 +227,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "message_streaming": method_message_streaming(method),
         "max_steps": args.max_steps,
         "attempts": getattr(args, "attempts", 1),
+        "olymmath_subset": getattr(args, "olymmath_subset", None),
         "kimina_host": getattr(args, "kimina_host", None),
         "kimina_port": getattr(args, "kimina_port", None),
         "kimina_max_workers": getattr(args, "kimina_max_workers", None),
@@ -256,7 +258,7 @@ def method_message_streaming(method: str) -> bool | None:
 
 
 def build_question_context(row: dict[str, Any]) -> dict[str, Any]:
-    question = row.get("Question") or row.get("question") or row.get("informal_statement", "")
+    question = row.get("Question") or row.get("question") or row.get("problem") or row.get("informal_statement", "")
     incorrect_answers = [
         row[field]
         for field in ("Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")
@@ -282,6 +284,10 @@ def build_question_context(row: dict[str, Any]) -> dict[str, Any]:
             context["gold_answer"] = str(row["answer"]).strip().upper()
     if row.get("formal_statement"):
         context["formal_statement"] = row.get("formal_statement")
+    if row.get("unique_id"):
+        context["unique_id"] = row.get("unique_id")
+    if row.get("subject"):
+        context["subject"] = row.get("subject")
     if row.get("split"):
         context["split"] = row.get("split")
     if row.get("topic"):

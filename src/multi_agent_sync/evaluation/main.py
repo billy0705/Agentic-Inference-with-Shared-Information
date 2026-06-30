@@ -6,7 +6,7 @@ import random
 import time
 from typing import Any
 
-from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro
+from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
@@ -24,6 +24,8 @@ def get_benchmarks() -> dict[str, BenchmarkSpec]:
         gsm8k.build_benchmark(),
         ma_proofbench.build_benchmark(),
         mmlu_pro.build_benchmark(),
+        olymmath.build_benchmark(),
+        olymmath.build_lean_benchmark(),
     ]
     return {benchmark.name: benchmark for benchmark in benchmarks}
 
@@ -67,6 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["all", "level1", "level2"],
         default="all",
         help="MA-ProofBench difficulty tier to run. Defaults to all and preserves dataset order.",
+    )
+    parser.add_argument(
+        "--olymmath-subset",
+        choices=["en-easy", "en-hard", "zh-easy", "zh-hard"],
+        default="en-easy",
+        help="OlymMATH natural-language subset to run. Ignored by --benchmark olymmath_lean.",
     )
     parser.add_argument(
         "--lean-timeout",

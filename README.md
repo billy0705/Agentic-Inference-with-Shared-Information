@@ -273,6 +273,18 @@ Run MA-ProofBench Lean theorem-proving problems with the same methods:
 uv run evaluation --benchmark ma_proofbench --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
 ```
 
+Run OlymMATH natural-language Olympiad problems with answer-key scoring:
+
+```bash
+uv run evaluation --benchmark olymmath --olymmath-subset en-hard --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+```
+
+Run OlymMATH-LEAN theorem-proving problems with verifier-based scoring:
+
+```bash
+uv run evaluation --benchmark olymmath_lean --methods plain_llm --limit 10 --kimina-host 127.0.0.1 --kimina-port 8001
+```
+
 To compare fixed subagents, dynamic subagents, and the direct baseline in one run:
 
 ```bash
@@ -342,6 +354,17 @@ uv run evaluation --benchmark ma_proofbench --methods plain_llm --limit 10 --kim
 If `kimina_client` is not importable, install the Kimina Lean Server client package or set `KIMINA_CLIENT_PATH` to its client directory before running evaluation.
 
 Local MA-ProofBench `.csv`, `.jsonl`, and `.ndjson` files must include `id`, `split`, `informal_statement`, `formal_statement`, `header`, `topic`, `tag`, and `version`.
+
+OlymMATH uses the public Hugging Face dataset `RUC-AIBOX/OlymMATH`. The natural-language benchmark supports `--olymmath-subset en-easy`, `en-hard`, `zh-easy`, and `zh-hard`, corresponding to the upstream JSONL files `OlymMATH-EN-EASY.jsonl`, `OlymMATH-EN-HARD.jsonl`, `OlymMATH-ZH-EASY.jsonl`, and `OlymMATH-ZH-HARD.jsonl`. Rows contain `problem`, `answer`, `subject`, and `unique_id`. The evaluator prompts for a final answer in `Final Answer: <answer>` format, normalizes common LaTeX answer forms, and scores against the released answer key.
+
+The OlymMATH paper reports rule-based answer evaluation for EASY/HARD and formal verification for LEAN. It does not provide one universal natural-language solver prompt; for Lean, the appendix prompt is for generating formalizations during benchmark construction, while model evaluation uses theorem-proving model prompt templates. This repository therefore uses local prompts that match the benchmark contracts: final answer extraction for EASY/HARD, and complete Lean code generation for LEAN.
+
+OlymMATH-LEAN loads the upstream `OlymMATH-LEAN.jsonl` subset. Rows contain `unique_id`, `subject`, `formal_statement`, `formal_statement_raw`, `formal_proof`, `en_informal`, `zh_informal`, and natural-language proof fields. Scoring reuses the Lean verifier workflow: extract a Lean code block, reject `sorry`, ensure the theorem statement is unchanged, then verify with Kimina Lean Server. To use local OlymMATH files:
+
+```bash
+uv run evaluation --benchmark olymmath --olymmath-subset en-hard --methods plain_llm --limit 10 --data-file /path/to/OlymMATH-EN-HARD.jsonl
+uv run evaluation --benchmark olymmath_lean --methods plain_llm --limit 10 --data-file /path/to/OlymMATH-LEAN.jsonl
+```
 
 ## Current Limitations
 

@@ -1,3 +1,4 @@
+import argparse
 import csv
 import json
 import random
@@ -7,7 +8,7 @@ from dataclasses import dataclass
 import pytest
 
 from multi_agent_sync.evaluation import main as evaluation
-from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro
+from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 
@@ -120,6 +121,26 @@ def test_parser_accepts_ma_proofbench_with_all_levels_and_one_attempt_by_default
     assert args.kimina_host == "127.0.0.1"
     assert args.kimina_port == 8001
     assert "ma_proofbench" in evaluation.get_benchmarks()
+
+
+def test_parser_accepts_olymmath_benchmarks():
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "olymmath",
+            "--olymmath-subset",
+            "en-hard",
+            "--methods",
+            "plain_llm",
+        ]
+    )
+    lean_args = evaluation.build_parser().parse_args(["--benchmark", "olymmath_lean", "--methods", "plain_llm"])
+
+    assert args.benchmark == "olymmath"
+    assert args.olymmath_subset == "en-hard"
+    assert lean_args.benchmark == "olymmath_lean"
+    assert "olymmath" in evaluation.get_benchmarks()
+    assert "olymmath_lean" in evaluation.get_benchmarks()
 
 
 def test_parser_rejects_removed_local_lean_verifier_flags():
@@ -388,6 +409,20 @@ def test_mmlu_pro_default_output_path_uses_run_id_to_avoid_overwriting():
     )
 
 
+def test_olymmath_default_output_paths_use_run_id_to_avoid_overwriting():
+    benchmark = olymmath.build_benchmark()
+    lean_benchmark = olymmath.build_lean_benchmark()
+    args = evaluation.build_parser().parse_args(["--benchmark", "olymmath"])
+    lean_args = evaluation.build_parser().parse_args(["--benchmark", "olymmath_lean"])
+
+    assert runner.resolve_output_path(benchmark, args, run_id="run-123") == (
+        runner.DEFAULT_OUTPUT_DIR / "olymmath_results_run-123.csv"
+    )
+    assert runner.resolve_output_path(lean_benchmark, lean_args, run_id="run-123") == (
+        runner.DEFAULT_OUTPUT_DIR / "olymmath_lean_results_run-123.csv"
+    )
+
+
 def test_output_filename_is_written_inside_output_folder():
     benchmark = gpqa.build_benchmark()
     args = evaluation.build_parser().parse_args(["--benchmark", "gpqa", "--output", "result.csv"])
@@ -535,6 +570,163 @@ def test_mmlu_pro_question_context_uses_options_list():
         "options": {"A": "First", "B": "Second", "C": "Third"},
         "gold_answer": "B",
     }
+
+
+def test_olymmath_build_prompt_uses_problem_answer_and_subject():
+    prompt, gold = olymmath.build_prompt(
+        {
+            "problem": "Calculate $\\sqrt{9+8\\cos 20^{\\circ }}-\\sec 20^{\\circ }$.",
+            "answer": "3",
+            "subject": "Algebra",
+            "unique_id": "OlymMATH-EASY-2-EN",
+        },
+        random.Random(0),
+    )
+
+    assert gold == "3"
+    assert "Subject: Algebra" in prompt
+    assert "Calculate $\\sqrt" in prompt
+    assert "Final Answer: <answer>" in prompt
+
+
+@pytest.mark.parametrize(
+    ("raw_output", "expected"),
+    [
+        ("Final Answer: 948", "948"),
+        ("The result is clear.\n\\boxed{\\frac{1}{2}}", "1/2"),
+        ("Final Answer: 2\\sqrt{10}", "2*sqrt(10)"),
+        ("Answer: \\left[ -\\frac{1}{8}, \\frac{1}{8} \\right]", "[-1/8,1/8]"),
+    ],
+)
+def test_olymmath_extract_answer_normalizes_latex_answers(raw_output, expected):
+    benchmark = olymmath.build_benchmark()
+
+    assert benchmark.extract_answer(raw_output) == expected
+
+
+def test_olymmath_score_response_uses_normalized_answer_match():
+    score = olymmath.score_response(
+        {
+            "problem": "Find a value.",
+            "answer": "\\frac{1}{2}",
+            "subject": "Algebra",
+            "unique_id": "OlymMATH-EASY-0-EN",
+        },
+        "Final Answer: 1/2",
+        argparse.Namespace(),
+    )
+
+    assert score.correct is True
+    assert score.pred == "1/2"
+    assert score.metadata["unique_id"] == "OlymMATH-EASY-0-EN"
+
+
+@pytest.mark.parametrize(
+    ("gold", "raw_output"),
+    [
+        ("\\frac{18}{5}", "Final Answer: 3.6"),
+        ("2^{17}", "Final Answer: 131072"),
+        ("2\\sqrt{10}", "Final Answer: 6.324555320336759"),
+    ],
+)
+def test_olymmath_score_response_accepts_common_numeric_equivalents(gold, raw_output):
+    score = olymmath.score_response(
+        {
+            "problem": "Find a value.",
+            "answer": gold,
+            "subject": "Algebra",
+            "unique_id": "OlymMATH-EASY-0-EN",
+        },
+        raw_output,
+        argparse.Namespace(),
+    )
+
+    assert score.correct is True
+
+
+def test_olymmath_question_context_uses_problem_and_metadata():
+    context = runner.build_question_context(
+        {
+            "problem": "Find the number of sequences.",
+            "answer": "948",
+            "subject": "Combinatorics",
+            "unique_id": "OlymMATH-EASY-0-EN",
+        }
+    )
+
+    assert context == {
+        "question": "Find the number of sequences.",
+        "options": {},
+        "unique_id": "OlymMATH-EASY-0-EN",
+        "subject": "Combinatorics",
+    }
+
+
+def test_load_local_olymmath_rows_validates_natural_language_rows(tmp_path):
+    path = tmp_path / "olymmath.jsonl"
+    rows = [
+        {
+            "problem": "First problem.",
+            "answer": "1",
+            "subject": "Algebra",
+            "unique_id": "OlymMATH-EASY-0-EN",
+        },
+        {
+            "problem": "Second problem.",
+            "answer": "2",
+            "subject": "Geometry",
+            "unique_id": "OlymMATH-EASY-1-EN",
+        },
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    loaded = olymmath.load_local_rows(path, subset="en-easy", limit=1)
+
+    assert loaded == rows[:1]
+
+
+def test_olymmath_lean_build_prompt_uses_formal_statement_raw():
+    prompt, gold = olymmath.build_lean_prompt(
+        {
+            "unique_id": "OlymMATH-LEAN-0",
+            "subject": "Algebra",
+            "formal_statement": "import Mathlib\n\ntheorem to_prove : False := by\n  sorry",
+            "formal_statement_raw": "import Mathlib\n\ntheorem to_prove : True := by\n  sorry",
+            "en_informal": "Prove true.",
+        },
+        random.Random(0),
+    )
+
+    assert gold == "lean_verifies"
+    assert "Prove true." in prompt
+    assert "theorem to_prove : True" in prompt
+    assert "theorem to_prove : False" not in prompt
+    assert "```lean4" in prompt
+
+
+def test_olymmath_lean_scores_verifier_success(monkeypatch):
+    row = {
+        "unique_id": "OlymMATH-LEAN-0",
+        "subject": "Algebra",
+        "formal_statement": "import Mathlib\n\ntheorem to_prove : True := by\n  sorry",
+        "formal_statement_raw": "import Mathlib\n\ntheorem to_prove : True := by\n  sorry",
+        "en_informal": "Prove true.",
+    }
+    output = "```lean4\ntheorem to_prove : True := by\n  trivial\n```"
+    captured = {}
+
+    def fake_verifier(code, args):
+        captured["code"] = code
+        return ma_proofbench.LeanVerificationResult(passed=True, verifier_output="ok")
+
+    monkeypatch.setattr(ma_proofbench, "run_lean_verifier", fake_verifier)
+
+    score = olymmath.score_lean_response(row, output, argparse.Namespace())
+
+    assert score.pred == "verified"
+    assert score.correct is True
+    assert captured["code"] == "import Mathlib\n\ntheorem to_prove : True := by\n  trivial"
+    assert score.metadata["verification_passed"] is True
 
 
 def test_ma_proofbench_build_prompt_matches_paper_general_purpose_prompt():
