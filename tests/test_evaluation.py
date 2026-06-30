@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from multi_agent_sync.evaluation import main as evaluation
-from multi_agent_sync.evaluation import gpqa, gsm8k, mmlu_pro
+from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 
@@ -102,6 +102,33 @@ def test_parser_accepts_mmlu_pro_benchmark():
 
     assert args.benchmark == "mmlu_pro"
     assert "mmlu_pro" in evaluation.get_benchmarks()
+
+
+def test_parser_accepts_ma_proofbench_with_all_levels_and_one_attempt_by_default():
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "ma_proofbench",
+            "--methods",
+            "plain_llm",
+        ]
+    )
+
+    assert args.benchmark == "ma_proofbench"
+    assert args.ma_proofbench_level == "all"
+    assert args.attempts == 1
+    assert args.kimina_host == "127.0.0.1"
+    assert args.kimina_port == 8001
+    assert "ma_proofbench" in evaluation.get_benchmarks()
+
+
+def test_parser_rejects_removed_local_lean_verifier_flags():
+    with pytest.raises(SystemExit):
+        evaluation.build_parser().parse_args(["--benchmark", "ma_proofbench", "--lean-verifier", "local"])
+    with pytest.raises(SystemExit):
+        evaluation.build_parser().parse_args(["--benchmark", "ma_proofbench", "--lean-command", "lake env lean"])
+    with pytest.raises(SystemExit):
+        evaluation.build_parser().parse_args(["--benchmark", "ma_proofbench", "--lean-workdir", "lean_ma_proofbench"])
 
 
 def test_json_trace_saving_is_enabled_by_default():
@@ -444,6 +471,33 @@ def test_mmlu_pro_build_prompt_preserves_dataset_option_order_and_gold_letter():
     assert "Final Answer: <A/B/C/D/E/F/G/H/I/J>" in prompt
 
 
+def test_mmlu_pro_build_prompt_accepts_test_rows_with_fewer_than_ten_options():
+    prompt, gold = mmlu_pro.build_prompt(
+        {
+            "question": "Which safety label is correct?",
+            "options": [
+                "Safe practices, Fear, Jealousy, Trivial",
+                "Unsafe practices, Distress, Joy, Trivial",
+                "Safe practices, Wants, Jealousy, Trivial",
+                "Safe practices, Distress, Fear, Trivial",
+                "Unsafe practices, Wants, Jealousy, Serious",
+                "Safe practices, Distress, Jealousy, Serious",
+                "Safe practices, Wants, Fear, Serious",
+                "Unsafe practices, Wants, Fear, Trivial",
+                "Unsafe practices, Distress, Fear, Serious",
+            ],
+            "answer": "I",
+            "answer_index": 8,
+        },
+        random.Random(0),
+    )
+
+    assert gold == "I"
+    assert "I. Unsafe practices, Distress, Fear, Serious" in prompt
+    assert "J." not in prompt
+    assert "Final Answer: <A/B/C/D/E/F/G/H/I>" in prompt
+
+
 @pytest.mark.parametrize(
     ("raw_output", "expected"),
     [
@@ -481,6 +535,306 @@ def test_mmlu_pro_question_context_uses_options_list():
         "options": {"A": "First", "B": "Second", "C": "Third"},
         "gold_answer": "B",
     }
+
+
+def test_ma_proofbench_build_prompt_matches_paper_general_purpose_prompt():
+    prompt, gold = ma_proofbench.build_prompt(
+        {
+            "id": 1,
+            "split": "level1",
+            "informal_statement": "Show that sin is Lipschitz.",
+            "formal_statement": "import Mathlib\n\ntheorem example_theorem : True := by\n  sorry",
+            "header": "import Mathlib",
+            "topic": "Real functions",
+            "tag": "Functions of one variable",
+            "version": "4.28.0",
+        },
+        random.Random(0),
+    )
+
+    assert gold == "lean_verifies"
+    assert prompt == (
+        "You are an expert in Lean 4 and Mathematics. Please finish the following proof in Lean4 code.\n\n"
+        "Do not change the original statement. Copy the final statement to prove exactly.\n"
+        "Please include the complete header (including imports and namespaces) so that your code can pass the Lean4 compiler. "
+        "Please solve the statement step by step and provide your complete Lean4 code between ```lean4 and ``` after careful reasoning.\n\n"
+        "The statement for you to complete is:\n"
+        "```lean4\n"
+        "import Mathlib\n\n"
+        "theorem example_theorem : True := by\n"
+        "  sorry\n"
+        "```"
+    )
+    assert "Show that sin is Lipschitz." not in prompt
+    assert "Metadata:" not in prompt
+    assert "theorem example_theorem : True" in prompt
+
+
+def test_ma_proofbench_extracts_lean_code_block():
+    output = "Reasoning first.\n```lean4\nimport Mathlib\n\ntheorem t : True := by\n  trivial\n```"
+
+    assert ma_proofbench.extract_lean_code(output) == "import Mathlib\n\ntheorem t : True := by\n  trivial"
+
+
+def test_ma_proofbench_extracts_last_lean_code_block_when_model_repeats_stub():
+    output = (
+        "The original statement is:\n"
+        "```lean4\n"
+        "import Mathlib\n\n"
+        "theorem t : True := by\n"
+        "  sorry\n"
+        "```\n"
+        "Here is the completed proof:\n"
+        "```lean4\n"
+        "import Mathlib\n\n"
+        "theorem t : True := by\n"
+        "  trivial\n"
+        "```"
+    )
+
+    assert ma_proofbench.extract_lean_code(output) == "import Mathlib\n\ntheorem t : True := by\n  trivial"
+
+
+def test_ma_proofbench_scores_verifier_success(monkeypatch, tmp_path):
+    row = {
+        "id": 1,
+        "split": "level1",
+        "informal_statement": "Show true.",
+        "formal_statement": "import Mathlib\n\ntheorem t : True := by\n  sorry",
+        "header": "import Mathlib",
+        "topic": "Real functions",
+        "tag": "Functions of one variable",
+        "version": "4.28.0",
+    }
+    output = "```lean4\nimport Mathlib\n\ntheorem t : True := by\n  trivial\n```"
+
+    monkeypatch.setattr(
+        ma_proofbench,
+        "run_lean_verifier",
+        lambda code, args: ma_proofbench.LeanVerificationResult(passed=True, verifier_output="ok"),
+    )
+
+    args = evaluation.build_parser().parse_args(
+        ["--benchmark", "ma_proofbench", "--methods", "plain_llm", "--output-dir", str(tmp_path)]
+    )
+    score = ma_proofbench.score_response(row, output, args)
+
+    assert score.pred == "verified"
+    assert score.correct is True
+    assert score.metadata["verification_passed"] is True
+
+
+def test_ma_proofbench_merges_dataset_header_before_verification(monkeypatch, tmp_path):
+    captured = {}
+    row = {
+        "id": 1,
+        "split": "level1",
+        "informal_statement": "Show true.",
+        "formal_statement": "import Mathlib\n\nopen Set\n\ntheorem t : True := by\n  sorry",
+        "header": "import Mathlib\n\nopen Set",
+        "topic": "Real functions",
+        "tag": "Functions of one variable",
+        "version": "4.28.0",
+    }
+    output = "```lean4\ntheorem t : True := by\n  trivial\n```"
+
+    def fake_verifier(code, args):
+        captured["code"] = code
+        return ma_proofbench.LeanVerificationResult(passed=True, verifier_output="ok")
+
+    monkeypatch.setattr(ma_proofbench, "run_lean_verifier", fake_verifier)
+
+    args = evaluation.build_parser().parse_args(
+        ["--benchmark", "ma_proofbench", "--methods", "plain_llm", "--output-dir", str(tmp_path)]
+    )
+    score = ma_proofbench.score_response(row, output, args)
+
+    assert score.correct is True
+    assert captured["code"] == "import Mathlib\n\nopen Set\n\ntheorem t : True := by\n  trivial"
+    assert score.metadata["lean_code"] == captured["code"]
+
+
+def test_ma_proofbench_dispatches_to_kimina_server_verifier(monkeypatch):
+    captured = {}
+
+    def fake_kimina_verifier(code, args):
+        captured["code"] = code
+        captured["host"] = args.kimina_host
+        captured["port"] = args.kimina_port
+        return ma_proofbench.LeanVerificationResult(
+            passed=True,
+            verifier_output="complete",
+            backend="kimina-server",
+        )
+
+    monkeypatch.setattr(ma_proofbench, "run_kimina_server_verifier", fake_kimina_verifier)
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "ma_proofbench",
+            "--methods",
+            "plain_llm",
+            "--kimina-host",
+            "127.0.0.1",
+            "--kimina-port",
+            "8000",
+        ]
+    )
+
+    result = ma_proofbench.run_lean_verifier("import Mathlib\n\ntheorem t : True := by\n  trivial", args)
+
+    assert result.passed is True
+    assert result.backend == "kimina-server"
+    assert captured == {
+        "code": "import Mathlib\n\ntheorem t : True := by\n  trivial",
+        "host": "127.0.0.1",
+        "port": 8000,
+    }
+
+
+def test_ma_proofbench_collects_kimina_complete_result():
+    response = {
+        "sorries": [],
+        "tactics": [],
+        "messages": [],
+    }
+
+    result = ma_proofbench.collect_kimina_result(
+        code="import Mathlib\n\ntheorem t : True := by\n  trivial",
+        response=response,
+        elapsed_seconds=0.25,
+    )
+
+    assert result.passed is True
+    assert json.loads(result.verifier_output)["complete"] is True
+    assert result.backend == "kimina-server"
+
+
+def test_ma_proofbench_collects_kimina_sorry_as_incomplete():
+    response = {
+        "sorries": [{"pos": {"line": 3}}],
+        "tactics": [],
+        "messages": [],
+    }
+
+    result = ma_proofbench.collect_kimina_result(
+        code="import Mathlib\n\ntheorem t : True := by\n  sorry",
+        response=response,
+        elapsed_seconds=0.25,
+    )
+
+    payload = json.loads(result.verifier_output)
+    assert result.passed is False
+    assert payload["pass"] is True
+    assert payload["complete"] is False
+
+
+def test_ma_proofbench_rejects_sorry_before_verifier(tmp_path):
+    row = {
+        "id": 1,
+        "split": "level1",
+        "informal_statement": "Show true.",
+        "formal_statement": "import Mathlib\n\ntheorem t : True := by\n  sorry",
+        "header": "import Mathlib",
+        "topic": "Real functions",
+        "tag": "Functions of one variable",
+        "version": "4.28.0",
+    }
+    output = "```lean4\nimport Mathlib\n\ntheorem t : True := by\n  sorry\n```"
+    args = evaluation.build_parser().parse_args(["--benchmark", "ma_proofbench", "--methods", "plain_llm"])
+
+    score = ma_proofbench.score_response(row, output, args)
+
+    assert score.pred == "contains_sorry"
+    assert score.correct is False
+    assert "sorry" in score.error
+
+
+def test_load_local_ma_proofbench_rows_preserves_order_and_filters_level(tmp_path):
+    path = tmp_path / "ma_proofbench.jsonl"
+    rows = [
+        {
+            "id": 1,
+            "split": "level1",
+            "informal_statement": "First.",
+            "formal_statement": "import Mathlib\n\ntheorem first : True := by\n  sorry",
+            "header": "import Mathlib",
+            "topic": "Real functions",
+            "tag": "Functions of one variable",
+            "version": "4.28.0",
+        },
+        {
+            "id": 2,
+            "split": "level2",
+            "informal_statement": "Second.",
+            "formal_statement": "import Mathlib\n\ntheorem second : True := by\n  sorry",
+            "header": "import Mathlib",
+            "topic": "Functional analysis",
+            "tag": "Banach spaces",
+            "version": "4.28.0",
+        },
+        {
+            "id": 3,
+            "split": "level1",
+            "informal_statement": "Third.",
+            "formal_statement": "import Mathlib\n\ntheorem third : True := by\n  sorry",
+            "header": "import Mathlib",
+            "topic": "Complex analysis",
+            "tag": "Holomorphic functions",
+            "version": "4.28.0",
+        },
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    loaded = ma_proofbench.load_local_ma_proofbench_rows(path, level="level1")
+
+    assert [row["id"] for row in loaded] == [1, 3]
+
+
+@pytest.mark.asyncio
+async def test_ma_proofbench_score_hook_is_used_by_runner(monkeypatch, tmp_path):
+    row = {
+        "id": 1,
+        "split": "level1",
+        "informal_statement": "Show true.",
+        "formal_statement": "import Mathlib\n\ntheorem t : True := by\n  sorry",
+        "header": "import Mathlib",
+        "topic": "Real functions",
+        "tag": "Functions of one variable",
+        "version": "4.28.0",
+    }
+
+    benchmark = BenchmarkSpec(
+        name="fake_proof",
+        display_name="Fake Proof",
+        default_output_filename="fake_proof.csv",
+        load_items=lambda args: [row],
+        build_prompt=lambda row, rng: ("Prompt", "lean_verifies"),
+        extract_answer=lambda text: None,
+        score_response=lambda row, text, args: runner.BenchmarkScore(
+            pred="verified",
+            correct=True,
+            metadata={"verification_passed": True},
+        ),
+    )
+
+    async def fake_run_method(method, prompt, llm, args):
+        return runner.RunResult(raw_output="Lean code", returncode=0, elapsed_seconds=0.1)
+
+    monkeypatch.setattr(evaluation, "get_benchmarks", lambda: {"fake_proof": benchmark})
+    monkeypatch.setattr(evaluation, "get_llm", lambda model=None, openai=True, max_tokens=None: "fake-llm")
+    monkeypatch.setattr(runner, "run_method", fake_run_method)
+    monkeypatch.setattr(runner, "progress", lambda items, desc: items)
+
+    args = evaluation.build_parser().parse_args(
+        ["--benchmark", "fake_proof", "--methods", "plain_llm", "--output-dir", str(tmp_path)]
+    )
+
+    results = await evaluation.run_evaluation(args)
+
+    assert results[0]["pred"] == "verified"
+    assert results[0]["correct"] is True
+    assert results[0]["score_metadata"] == {"verification_passed": True}
 
 
 def test_summarize_results_groups_accuracy_by_method():
@@ -776,6 +1130,27 @@ def test_load_local_mmlu_pro_rows_validates_required_fields(tmp_path):
 
     with pytest.raises(RuntimeError, match="missing required field"):
         mmlu_pro.load_local_mmlu_pro_rows(path)
+
+
+def test_load_local_mmlu_pro_rows_accepts_fewer_than_ten_options_when_answer_is_in_range(tmp_path):
+    path = tmp_path / "mmlu_pro.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "question": "Which safety label is correct?",
+                "options": ["A", "B", "C", "D", "E", "F", "G", "H", "I"],
+                "answer": "I",
+                "answer_index": 8,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = mmlu_pro.load_local_mmlu_pro_rows(path)
+
+    assert rows[0]["answer"] == "I"
+    assert len(rows[0]["options"]) == 9
 
 
 def test_load_mmlu_pro_dataset_uses_test_split_only(monkeypatch):

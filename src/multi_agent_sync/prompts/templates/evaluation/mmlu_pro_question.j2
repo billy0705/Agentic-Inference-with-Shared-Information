@@ -3,7 +3,7 @@ You are answering a challenging multiple-choice question from MMLU-Pro.
 {% if category %}Category: {{ category }}
 
 {% endif -%}
-Choose exactly one option: A, B, C, D, E, F, G, H, I, or J.
+Choose exactly one option: {{ label_choices }}.
 
 Question:
 {{ question }}
@@ -13,7 +13,7 @@ Options:
 
 Important:
 - Think carefully.
-- Your final answer must be exactly one of A, B, C, D, E, F, G, H, I, or J.
+- Your final answer must be exactly one of {{ label_choices }}.
 - At the end, write the final answer in this exact format:
 
-Final Answer: <A/B/C/D/E/F/G/H/I/J>
+Final Answer: {{ final_answer_format }}

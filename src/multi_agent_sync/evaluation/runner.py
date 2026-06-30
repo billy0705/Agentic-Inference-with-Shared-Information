@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from multi_agent_sync.evaluation.types import BenchmarkSpec
+from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
 from multi_agent_sync.graph.workflow import run_workflow
 
 
@@ -200,6 +200,12 @@ def build_run_config(
             "resolved_model": resolve_model_name(args),
             "local_model": args.local_model,
             "limit": args.limit,
+            "attempts": getattr(args, "attempts", 1),
+            "ma_proofbench_level": getattr(args, "ma_proofbench_level", None),
+            "lean_timeout": getattr(args, "lean_timeout", None),
+            "kimina_host": getattr(args, "kimina_host", None),
+            "kimina_port": getattr(args, "kimina_port", None),
+            "kimina_max_workers": getattr(args, "kimina_max_workers", None),
             "max_steps": args.max_steps,
             "total_runtime_timeout": args.total_runtime_timeout,
             "synthesis_timeout": args.synthesis_timeout,
@@ -219,6 +225,10 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "subagent_mode": method_subagent_mode(method),
         "message_streaming": method_message_streaming(method),
         "max_steps": args.max_steps,
+        "attempts": getattr(args, "attempts", 1),
+        "kimina_host": getattr(args, "kimina_host", None),
+        "kimina_port": getattr(args, "kimina_port", None),
+        "kimina_max_workers": getattr(args, "kimina_max_workers", None),
         "total_runtime_timeout": args.total_runtime_timeout,
         "synthesis_timeout": args.synthesis_timeout,
         "save_json_traces": args.save_json_traces,
@@ -246,7 +256,7 @@ def method_message_streaming(method: str) -> bool | None:
 
 
 def build_question_context(row: dict[str, Any]) -> dict[str, Any]:
-    question = row.get("Question") or row.get("question", "")
+    question = row.get("Question") or row.get("question") or row.get("informal_statement", "")
     incorrect_answers = [
         row[field]
         for field in ("Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")
@@ -270,7 +280,29 @@ def build_question_context(row: dict[str, Any]) -> dict[str, Any]:
             context["gold_answer"] = match.group("answer").strip()
         elif len(str(row["answer"]).strip()) == 1:
             context["gold_answer"] = str(row["answer"]).strip().upper()
+    if row.get("formal_statement"):
+        context["formal_statement"] = row.get("formal_statement")
+    if row.get("split"):
+        context["split"] = row.get("split")
+    if row.get("topic"):
+        context["topic"] = row.get("topic")
+    if row.get("tag"):
+        context["tag"] = row.get("tag")
     return context
+
+
+def score_benchmark_response(
+    benchmark: BenchmarkSpec,
+    row: dict[str, Any],
+    raw_output: str,
+    gold: str,
+    args: argparse.Namespace,
+) -> BenchmarkScore:
+    if benchmark.score_response is not None:
+        return benchmark.score_response(row, raw_output, args)
+
+    pred = benchmark.extract_answer(raw_output)
+    return BenchmarkScore(pred=pred, correct=pred == gold)
 
 
 def build_multiagent_debug(method_trace: dict[str, Any]) -> dict[str, Any]:
@@ -474,6 +506,7 @@ def write_results_csv(output_path: Path, results: list[dict[str, Any]]) -> None:
                 "completion_tokens",
                 "total_tokens",
                 "raw_output",
+                "score_metadata",
                 "json_trace_path",
             ],
         )

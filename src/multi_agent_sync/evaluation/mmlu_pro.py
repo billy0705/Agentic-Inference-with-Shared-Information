@@ -37,14 +37,18 @@ def load_items(args: argparse.Namespace) -> list[dict[str, Any]] | Any:
 def build_prompt(row: dict[str, Any], rng: random.Random) -> tuple[str, str]:
     del rng
     options = normalize_options(row["options"])
+    labels = labels_for_options(options)
     answer = normalize_answer(row["answer"])
+    validate_answer_for_options(answer, options)
     validate_answer_index(row, answer)
-    option_lines = [f"{label}. {option}" for label, option in zip(LABELS, options, strict=True)]
+    option_lines = [f"{label}. {option}" for label, option in zip(labels, options, strict=True)]
     prompt = render_prompt(
         "evaluation/mmlu_pro_question.j2",
         question=row["question"],
         category=row.get("category"),
         option_lines=option_lines,
+        label_choices=", ".join(labels),
+        final_answer_format=f"<{'/'.join(labels)}>",
     )
     return prompt, answer
 
@@ -138,9 +142,9 @@ def validate_mmlu_pro_rows(rows: list[dict[str, Any]]) -> None:
             raise RuntimeError(f"Local MMLU-Pro row {index} is missing required field(s): {', '.join(missing)}")
 
         options = normalize_options(row["options"])
-        if len(options) != len(LABELS):
-            raise RuntimeError(f"Local MMLU-Pro row {index} must include exactly 10 options.")
+        validate_option_count(options, row_index=index)
         answer = normalize_answer(row["answer"])
+        validate_answer_for_options(answer, options, row_index=index)
         validate_answer_index(row, answer, row_index=index)
 
 
@@ -150,11 +154,32 @@ def normalize_options(options: Any) -> list[str]:
     return [str(option) for option in options]
 
 
+def labels_for_options(options: list[str]) -> list[str]:
+    validate_option_count(options)
+    return LABELS[: len(options)]
+
+
+def validate_option_count(options: list[str], row_index: int | None = None) -> None:
+    if not options:
+        prefix = f"Local MMLU-Pro row {row_index} " if row_index is not None else "MMLU-Pro row "
+        raise RuntimeError(f"{prefix}must include at least one option.")
+    if len(options) > len(LABELS):
+        prefix = f"Local MMLU-Pro row {row_index} " if row_index is not None else "MMLU-Pro row "
+        raise RuntimeError(f"{prefix}must include no more than 10 options.")
+
+
 def normalize_answer(answer: Any) -> str:
     normalized = str(answer).strip().upper()
     if normalized not in LABELS:
         raise RuntimeError(f"MMLU-Pro answer must be one of {', '.join(LABELS)}.")
     return normalized
+
+
+def validate_answer_for_options(answer: str, options: list[str], row_index: int | None = None) -> None:
+    labels = labels_for_options(options)
+    if answer not in labels:
+        prefix = f"Local MMLU-Pro row {row_index} " if row_index is not None else "MMLU-Pro row "
+        raise RuntimeError(f"{prefix}answer {answer} is outside the available options {', '.join(labels)}.")
 
 
 def validate_answer_index(row: dict[str, Any], answer: str, row_index: int | None = None) -> None:

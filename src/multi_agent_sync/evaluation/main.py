@@ -6,7 +6,7 @@ import random
 import time
 from typing import Any
 
-from multi_agent_sync.evaluation import gpqa, gsm8k, mmlu_pro
+from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
@@ -22,6 +22,7 @@ def get_benchmarks() -> dict[str, BenchmarkSpec]:
     benchmarks = [
         gpqa.build_benchmark(),
         gsm8k.build_benchmark(),
+        ma_proofbench.build_benchmark(),
         mmlu_pro.build_benchmark(),
     ]
     return {benchmark.name: benchmark for benchmark in benchmarks}
@@ -41,6 +42,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Use 0 for full split.")
+    parser.add_argument(
+        "--attempts",
+        type=int,
+        default=1,
+        help="Number of candidate attempts per example. Currently defaults to Pass@1-style evaluation.",
+    )
     parser.add_argument("--output-dir", default=str(runner.DEFAULT_OUTPUT_DIR), help="Directory for benchmark result CSV files.")
     parser.add_argument("--output", default=None, help="Optional CSV filename or path for per-example results.")
     parser.add_argument(
@@ -55,6 +62,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Save per-example JSON traces and run config artifacts. Enabled by default; use --no-save-json-traces to disable.",
     )
     parser.add_argument("--model", default=None, help="Model name to pass to the selected provider.")
+    parser.add_argument(
+        "--ma-proofbench-level",
+        choices=["all", "level1", "level2"],
+        default="all",
+        help="MA-ProofBench difficulty tier to run. Defaults to all and preserves dataset order.",
+    )
+    parser.add_argument(
+        "--lean-timeout",
+        type=float,
+        default=60.0,
+        help="Maximum Lean verifier runtime per MA-ProofBench candidate, in seconds.",
+    )
+    parser.add_argument(
+        "--kimina-host",
+        default="127.0.0.1",
+        help="Kimina Lean Server host for MA-ProofBench verification.",
+    )
+    parser.add_argument(
+        "--kimina-port",
+        type=int,
+        default=8001,
+        help="Kimina Lean Server port for MA-ProofBench verification.",
+    )
+    parser.add_argument(
+        "--kimina-max-workers",
+        type=int,
+        default=1,
+        help="Maximum Kimina Lean Server workers per verification request.",
+    )
     parser.add_argument(
         "--local-model",
         action="store_true",
@@ -128,21 +164,23 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                 error = str(exc)
                 method_trace = {"error": error}
 
-            pred = benchmark.extract_answer(raw_output)
+            score = runner.score_benchmark_response(benchmark, row_dict, raw_output, gold, args)
+            result_error = error or score.error
             result = {
                 "benchmark": benchmark.name,
                 "method": method,
                 "index": idx,
                 "gold": gold,
-                "pred": pred,
-                "correct": pred == gold,
+                "pred": score.pred,
+                "correct": score.correct,
                 "returncode": returncode,
-                "error": error,
+                "error": result_error,
                 "elapsed_seconds": elapsed_seconds,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
                 "raw_output": raw_output,
+                "score_metadata": score.metadata,
                 "json_trace_path": "",
             }
             if args.save_json_traces:
@@ -157,10 +195,10 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                         "method": method,
                         "index": idx,
                         "gold": gold,
-                        "pred": pred,
-                        "correct": pred == gold,
+                        "pred": score.pred,
+                        "correct": score.correct,
                         "returncode": returncode,
-                        "error": error,
+                        "error": result_error,
                         "elapsed_seconds": elapsed_seconds,
                         "token_usage": {
                             "prompt_tokens": prompt_tokens,
@@ -171,6 +209,7 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                         "question": question_context["question"],
                         "options": question_context["options"],
                         "gold_answer": question_context.get("gold_answer", gold),
+                        "score_metadata": score.metadata,
                         "prompt": prompt,
                         "raw_output": raw_output,
                         "multiagent_debug": runner.build_multiagent_debug(method_trace),

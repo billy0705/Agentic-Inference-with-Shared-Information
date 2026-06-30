@@ -267,6 +267,12 @@ Run MMLU-Pro test-set multiple-choice questions with the same methods:
 uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
 ```
 
+Run MA-ProofBench Lean theorem-proving problems with the same methods:
+
+```bash
+uv run evaluation --benchmark ma_proofbench --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+```
+
 To compare fixed subagents, dynamic subagents, and the direct baseline in one run:
 
 ```bash
@@ -301,13 +307,41 @@ uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no
 
 Local GSM8K `.csv`, `.jsonl`, and `.ndjson` files must include `question` and `answer`.
 
-MMLU-Pro uses the public Hugging Face dataset `TIGER-Lab/MMLU-Pro`, split `test` only. Rows contain `question`, `options`, `answer`, and optionally `answer_index`, `category`, `cot_content`, `question_id`, and `src`. The evaluator keeps the dataset option order, labels the 10 options `A` through `J`, and scores against the `answer` letter. To use a local MMLU-Pro-shaped file:
+MMLU-Pro uses the public Hugging Face dataset `TIGER-Lab/MMLU-Pro`, split `test` only. Rows contain `question`, `options`, `answer`, and optionally `answer_index`, `category`, `cot_content`, `question_id`, and `src`. The evaluator keeps the dataset option order, labels the available options from `A` through at most `J`, and scores against the `answer` letter. To use a local MMLU-Pro-shaped file:
 
 ```bash
 uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/mmlu_pro.jsonl
 ```
 
 Local MMLU-Pro `.csv`, `.jsonl`, and `.ndjson` files must include `question`, `options`, and `answer`. For CSV files, `options` must be a JSON list string.
+
+MA-ProofBench uses the public Hugging Face dataset `openbmb/MA-ProofBench`, split `test`. Rows contain `id`, `split`, `informal_statement`, `formal_statement`, `header`, `topic`, `tag`, and `version`. The default level is `all`; use `--ma-proofbench-level level1` or `--ma-proofbench-level level2` to run one tier. The evaluator preserves dataset order and defaults to `--attempts 1`.
+
+MA-ProofBench scoring is verifier-based. The evaluator extracts the final Lean code block, merges the dataset `header`, rejects outputs containing `sorry`, checks that the target theorem statement was not changed, and then verifies the proof. A proof is correct only when verification reports a complete proof with no errors and no sorries.
+
+By default, MA-ProofBench uses Kimina Lean Server, matching the upstream benchmark workflow. Start the server first:
+
+```bash
+git clone https://github.com/OpenBMB/MA-ProofBench.git
+cd MA-ProofBench/kimina-lean-server
+
+cp .env.template .env
+bash setup.sh
+pip install -r requirements.txt
+pip install .
+prisma generate
+python -m server
+```
+
+Then run the benchmark from this repository:
+
+```bash
+uv run evaluation --benchmark ma_proofbench --methods plain_llm --limit 10 --kimina-host 127.0.0.1 --kimina-port 8001
+```
+
+If `kimina_client` is not importable, install the Kimina Lean Server client package or set `KIMINA_CLIENT_PATH` to its client directory before running evaluation.
+
+Local MA-ProofBench `.csv`, `.jsonl`, and `.ndjson` files must include `id`, `split`, `informal_statement`, `formal_statement`, `header`, `topic`, `tag`, and `version`.
 
 ## Current Limitations
 

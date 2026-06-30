@@ -31,3 +31,4 @@ packages = ["src/multi_agent_sync"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+testpaths = ["tests"]
