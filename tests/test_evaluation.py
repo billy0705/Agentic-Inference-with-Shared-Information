@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import pytest
 
 from multi_agent_sync.evaluation import main as evaluation
-from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
+from multi_agent_sync.evaluation import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 
@@ -42,6 +42,10 @@ def test_parse_methods_accepts_dynamic_multiagent_methods():
         "multiagent_dynamic_no_streaming",
         "plain_llm",
     ]
+
+
+def test_parse_methods_accepts_single_agent_method():
+    assert runner.parse_methods("single_agent,plain_llm") == ["single_agent", "plain_llm"]
 
 
 def test_parse_methods_keeps_multiagent_alias_for_streaming():
@@ -87,6 +91,13 @@ def test_parser_accepts_gsm8k_benchmark():
 
     assert args.benchmark == "gsm8k"
     assert "gsm8k" in evaluation.get_benchmarks()
+
+
+def test_parser_accepts_chess_benchmark():
+    args = evaluation.build_parser().parse_args(["--benchmark", "chess", "--methods", "plain_llm", "--limit", "10"])
+
+    assert args.benchmark == "chess"
+    assert "chess" in evaluation.get_benchmarks()
 
 
 def test_parser_accepts_mmlu_pro_benchmark():
@@ -211,6 +222,43 @@ async def test_run_evaluation_sets_max_tokens_to_16384(monkeypatch, tmp_path):
     await evaluation.run_evaluation(args)
 
     assert captured_llm_kwargs == {"model": "openai/gpt-oss-120b", "openai": True, "max_tokens": 16384}
+
+
+@pytest.mark.asyncio
+async def test_single_agent_stops_when_final_answer_is_parseable():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "continue", "final_answer": "", "notes": "Need to inspect the board."}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: h3", "notes": "Legal destination found."}'),
+        ]
+    )
+    args = argparse.Namespace(max_steps=3, answer_extractor=lambda text: "h3" if "h3" in text else None)
+
+    result = await runner.run_method("single_agent", "Complete the chess move.", llm, args)
+
+    assert result.raw_output == "Final Answer: h3"
+    assert len(result.trace["steps"]) == 2
+    assert result.trace["stopped_reason"] == "final_answer_parseable"
+    assert result.trace["steps"][1]["parsed_answer"] == "h3"
+
+
+@pytest.mark.asyncio
+async def test_single_agent_respects_max_steps_when_final_answer_is_not_parseable():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "continue", "final_answer": "", "notes": "Still working."}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: i9", "notes": "Invalid square."}'),
+        ]
+    )
+    args = argparse.Namespace(max_steps=2, answer_extractor=lambda text: None)
+
+    result = await runner.run_method("single_agent", "Complete the chess move.", llm, args)
+
+    assert result.raw_output == "Final Answer: i9"
+    assert len(result.trace["steps"]) == 2
+    assert result.trace["stopped_reason"] == "max_steps"
+    assert result.trace["steps"][1]["status"] == "final"
+    assert result.trace["steps"][1]["parsed_answer"] is None
 
 
 @pytest.mark.asyncio
@@ -503,6 +551,61 @@ def test_gsm8k_build_prompt_extracts_gold_answer_from_dataset_rationale():
     assert gold == "10"
     assert "Weng earns $12 an hour" in prompt
     assert "Final Answer: <number>" in prompt
+
+
+def test_chess_build_prompt_defines_square_output_and_uses_first_target_as_gold():
+    prompt, gold = chess.build_prompt(
+        {
+            "input": "g2g3 f7f5 f1",
+            "target": ["h3", "g2"],
+        },
+        random.Random(0),
+    )
+
+    assert gold == "h3"
+    assert "g2g3 f7f5 f1" in prompt
+    assert "Final Answer: <square>" in prompt
+    assert "[a-h][1-8]" in prompt
+
+
+@pytest.mark.parametrize(
+    ("raw_output", "expected"),
+    [
+        ("Final Answer: h3", "h3"),
+        ("Answer: G2", "g2"),
+        ("The destination square is b8.", "b8"),
+        ("h3", "h3"),
+    ],
+)
+def test_chess_extract_answer_returns_normalized_square(raw_output, expected):
+    benchmark = chess.build_benchmark()
+
+    assert benchmark.extract_answer(raw_output) == expected
+
+
+@pytest.mark.parametrize("raw_output", ["Final Answer: i9", "castle kingside", "f1g2"])
+def test_chess_extract_answer_rejects_invalid_or_ambiguous_output(raw_output):
+    benchmark = chess.build_benchmark()
+
+    assert benchmark.extract_answer(raw_output) is None
+
+
+def test_chess_score_response_accepts_any_target_square():
+    score = chess.score_response(
+        {
+            "input": "g2g3 f7f5 f1",
+            "target": ["h3", "g2"],
+        },
+        "Final Answer: g2",
+        argparse.Namespace(),
+    )
+
+    assert score.correct is True
+    assert score.pred == "g2"
+    assert score.metadata == {
+        "output_regex": "[a-h][1-8]",
+        "valid_targets": ["h3", "g2"],
+    }
 
 
 @pytest.mark.parametrize(

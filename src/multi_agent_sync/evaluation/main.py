@@ -6,7 +6,7 @@ import random
 import time
 from typing import Any
 
-from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
+from multi_agent_sync.evaluation import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
@@ -22,6 +22,7 @@ def get_benchmarks() -> dict[str, BenchmarkSpec]:
     benchmarks = [
         gpqa.build_benchmark(),
         gsm8k.build_benchmark(),
+        chess.build_benchmark(),
         ma_proofbench.build_benchmark(),
         mmlu_pro.build_benchmark(),
         olymmath.build_benchmark(),
@@ -40,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated methods to compare. Supported: multiagent_streaming, "
             "multiagent_no_streaming, multiagent_dynamic_streaming, "
-            "multiagent_dynamic_no_streaming, plain_llm. Legacy alias: multiagent."
+            "multiagent_dynamic_no_streaming, single_agent, plain_llm. Legacy alias: multiagent."
         ),
     )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Use 0 for full split.")
@@ -123,6 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
 async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
     benchmark = get_benchmarks()[args.benchmark]
     methods = runner.parse_methods(args.methods)
+    setattr(args, "answer_extractor", benchmark.extract_answer)
     items = benchmark.load_items(args)
     rng = random.Random(args.seed)
     resolved_model = runner.resolve_model_name(args)
