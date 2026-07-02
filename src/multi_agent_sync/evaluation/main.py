@@ -6,7 +6,7 @@ import random
 import time
 from typing import Any
 
-from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
+from multi_agent_sync.evaluation import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
@@ -22,6 +22,7 @@ def get_benchmarks() -> dict[str, BenchmarkSpec]:
     benchmarks = [
         gpqa.build_benchmark(),
         gsm8k.build_benchmark(),
+        chess.build_benchmark(),
         ma_proofbench.build_benchmark(),
         mmlu_pro.build_benchmark(),
         olymmath.build_benchmark(),

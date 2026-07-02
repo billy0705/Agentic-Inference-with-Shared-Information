@@ -261,6 +261,12 @@ Run GSM8K test-set math word problems with the same methods:
 uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
 ```
 
+Run BIG-bench chess state-tracking examples with the same methods:
+
+```bash
+uv run evaluation --benchmark chess --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+```
+
 Run MMLU-Pro test-set multiple-choice questions with the same methods:
 
 ```bash
@@ -320,6 +326,14 @@ uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no
 ```
 
 Local GSM8K `.csv`, `.jsonl`, and `.ndjson` files must include `question` and `answer`.
+
+Chess uses the BIG-bench `chess_state_tracking/synthetic_short` task. By default, the evaluator uses `data/chess/synthetic_short_task.json` when it exists; otherwise it downloads the upstream BIG-bench task JSON and saves it there. Rows contain `input` and `target`, where `input` is the UCI move prefix ending with the starting square, and `target` is the list of valid destination squares. The model output is defined as exactly one destination square matching `[a-h][1-8]`, preferably written as `Final Answer: <square>`. A response is correct when the extracted square is one of the target squares. To use a local chess file:
+
+```bash
+uv run evaluation --benchmark chess --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/task.json
+```
+
+Local chess `.json`, `.jsonl`, and `.ndjson` files must include `input` and `target`. A `.json` file can be the original BIG-bench task object with an `examples` list.
 
 MMLU-Pro uses the public Hugging Face dataset `TIGER-Lab/MMLU-Pro`, split `test` only. By default, the evaluator uses `data/mmlu_pro/mmlu_pro_test.jsonl` when it exists; otherwise it downloads and saves that file there. Rows contain `question`, `options`, `answer`, and optionally `answer_index`, `category`, `cot_content`, `question_id`, and `src`. The evaluator keeps the dataset option order, labels the available options from `A` through at most `J`, and scores against the `answer` letter. To use a local MMLU-Pro-shaped file:
 

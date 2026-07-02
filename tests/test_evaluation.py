@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import pytest
 
 from multi_agent_sync.evaluation import main as evaluation
-from multi_agent_sync.evaluation import gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
+from multi_agent_sync.evaluation import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 
@@ -87,6 +87,22 @@ def test_parser_accepts_gsm8k_benchmark():
 
     assert args.benchmark == "gsm8k"
     assert "gsm8k" in evaluation.get_benchmarks()
+
+
+def test_parser_accepts_chess_benchmark():
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "chess",
+            "--methods",
+            "plain_llm",
+            "--limit",
+            "10",
+        ]
+    )
+
+    assert args.benchmark == "chess"
+    assert "chess" in evaluation.get_benchmarks()
 
 
 def test_parser_accepts_mmlu_pro_benchmark():
@@ -405,6 +421,15 @@ def test_gsm8k_default_output_path_uses_run_id_to_avoid_overwriting():
     )
 
 
+def test_chess_default_output_path_uses_run_id_to_avoid_overwriting():
+    benchmark = chess.build_benchmark()
+    args = evaluation.build_parser().parse_args(["--benchmark", "chess", "--model", "openai/gpt-oss-120b"])
+
+    assert runner.resolve_output_path(benchmark, args, run_id="run-123") == (
+        runner.DEFAULT_OUTPUT_DIR / "chess" / "gpt-oss-120b" / "run-123" / "chess_results.csv"
+    )
+
+
 def test_mmlu_pro_default_output_path_uses_run_id_to_avoid_overwriting():
     benchmark = mmlu_pro.build_benchmark()
     args = evaluation.build_parser().parse_args(["--benchmark", "mmlu_pro", "--model", "openai/gpt-oss-120b"])
@@ -503,6 +528,90 @@ def test_gsm8k_build_prompt_extracts_gold_answer_from_dataset_rationale():
     assert gold == "10"
     assert "Weng earns $12 an hour" in prompt
     assert "Final Answer: <number>" in prompt
+
+
+def test_chess_build_prompt_defines_square_output_and_uses_first_target_as_gold():
+    prompt, gold = chess.build_prompt(
+        {
+            "input": "g2g3 f7f5 f1",
+            "target": ["h3", "g2"],
+        },
+        random.Random(0),
+    )
+
+    assert gold == "h3"
+    assert "g2g3 f7f5 f1" in prompt
+    assert "Final Answer: <square>" in prompt
+    assert "[a-h][1-8]" in prompt
+
+
+@pytest.mark.parametrize(
+    ("raw_output", "expected"),
+    [
+        ("Final Answer: h3", "h3"),
+        ("Answer: G2", "g2"),
+        ("The destination square is b8.", "b8"),
+        ("h3", "h3"),
+    ],
+)
+def test_chess_extract_answer_returns_normalized_square(raw_output, expected):
+    benchmark = chess.build_benchmark()
+
+    assert benchmark.extract_answer(raw_output) == expected
+
+
+@pytest.mark.parametrize("raw_output", ["Final Answer: i9", "castle kingside", "f1g2"])
+def test_chess_extract_answer_rejects_invalid_or_ambiguous_output(raw_output):
+    benchmark = chess.build_benchmark()
+
+    assert benchmark.extract_answer(raw_output) is None
+
+
+def test_chess_score_response_accepts_any_target_square():
+    score = chess.score_response(
+        {
+            "input": "g2g3 f7f5 f1",
+            "target": ["h3", "g2"],
+        },
+        "Final Answer: g2",
+        argparse.Namespace(),
+    )
+
+    assert score.correct is True
+    assert score.pred == "g2"
+    assert score.metadata == {
+        "output_regex": "[a-h][1-8]",
+        "valid_targets": ["h3", "g2"],
+    }
+
+
+def test_chess_score_response_marks_non_target_square_incorrect():
+    score = chess.score_response(
+        {
+            "input": "g2g3 f7f5 f1",
+            "target": ["h3", "g2"],
+        },
+        "Final Answer: b8",
+        argparse.Namespace(),
+    )
+
+    assert score.correct is False
+    assert score.pred == "b8"
+
+
+def test_chess_question_context_uses_input_and_targets():
+    context = runner.build_question_context(
+        {
+            "input": "g2g3 f7f5 f1",
+            "target": ["h3", "g2"],
+        }
+    )
+
+    assert context == {
+        "question": "g2g3 f7f5 f1",
+        "options": {},
+        "gold_answer": ["h3", "g2"],
+    }
 
 
 @pytest.mark.parametrize(

@@ -308,7 +308,7 @@ def method_message_streaming(method: str) -> bool | None:
 
 
 def build_question_context(row: dict[str, Any]) -> dict[str, Any]:
-    question = row.get("Question") or row.get("question") or row.get("problem") or row.get("informal_statement", "")
+    question = row.get("Question") or row.get("question") or row.get("problem") or row.get("informal_statement") or row.get("input", "")
     incorrect_answers = [
         row[field]
         for field in ("Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")
@@ -332,6 +332,8 @@ def build_question_context(row: dict[str, Any]) -> dict[str, Any]:
             context["gold_answer"] = match.group("answer").strip()
         elif len(str(row["answer"]).strip()) == 1:
             context["gold_answer"] = str(row["answer"]).strip().upper()
+    if isinstance(row.get("target"), list):
+        context["gold_answer"] = row.get("target")
     if row.get("formal_statement"):
         context["formal_statement"] = row.get("formal_statement")
     if row.get("unique_id"):
