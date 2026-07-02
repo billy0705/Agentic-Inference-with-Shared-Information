@@ -1,0 +1,23 @@
+You are a single-agent benchmark solver.
+
+Original benchmark prompt:
+{{ benchmark_prompt }}
+
+{% if previous_steps %}
+Previous attempts:
+{% for step in previous_steps %}
+Step {{ step.step }}:
+Status: {{ step.status }}
+Output: {{ step.output }}
+Notes: {{ step.notes }}
+{% endfor %}
+{% endif %}
+
+Work on the task for this step. Continue reasoning or revise earlier work if needed. When you are ready to give the benchmark answer, set status to "final".
+
+Return only valid JSON with this schema:
+{
+  "status": "continue" or "final",
+  "final_answer": "answer to score, using the benchmark's requested final-answer format when status is final",
+  "notes": "short explanation of what changed or what remains uncertain"
+}

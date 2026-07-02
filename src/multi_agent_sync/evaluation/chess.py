@@ -57,10 +57,8 @@ def extract_answer(text: str) -> str | None:
 
     strict_patterns = [
         rf"Final\s+Answer\s*:\s*(?P<square>{OUTPUT_REGEX})\b",
-        rf"Final\s+answer\s*:\s*(?P<square>{OUTPUT_REGEX})\b",
         rf"final_answer\s*:\s*(?P<square>{OUTPUT_REGEX})\b",
         rf"Answer\s*:\s*(?P<square>{OUTPUT_REGEX})\b",
-        rf"answer\s*:\s*(?P<square>{OUTPUT_REGEX})\b",
         rf"\bdestination\s+square\s+is\s*(?P<square>{OUTPUT_REGEX})\b",
     ]
     for pattern in strict_patterns:
@@ -93,7 +91,6 @@ def load_chess_dataset(limit: int | None, data_file: str | None = None) -> list[
     if path.exists():
         print(f"Using local benchmark data file: {path}")
         return load_local_rows(path, limit=limit)
-
     if data_file:
         raise RuntimeError(f"Local chess benchmark data file does not exist: {path}")
 
@@ -127,8 +124,7 @@ def save_bigbench_task(path: Path, rows: list[dict[str, Any]]) -> None:
 def load_local_rows(path: Path, limit: int | None = None) -> list[dict[str, Any]]:
     suffix = path.suffix.lower()
     if suffix == ".json":
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        rows = rows_from_payload(payload)
+        rows = rows_from_payload(json.loads(path.read_text(encoding="utf-8")))
     elif suffix in {".jsonl", ".ndjson"}:
         rows = []
         with path.open(encoding="utf-8") as f:

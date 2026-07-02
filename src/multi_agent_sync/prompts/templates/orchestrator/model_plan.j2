@@ -12,7 +12,9 @@ Rules:
 * Select only from the available agents.
 * Do not invent new agents.
 * Do not select ArchitectAgent.
-* Always use multi_agent mode. Do not return any other mode.
+* Use multi_agent mode for most tasks.
+* Only use direct mode for easy factual tasks.
+* Do not use direct mode for coding, debugging, implementation, benchmark, research, comparison, proof, calculation, or tasks that need verification.
 * Prefer 2 to 4 agents for most tasks.
 * Every plan must include CriticAgent or VerifierAgent.
 * task_type must be a short free-text label. Do not use "unknown" unless the task is truly impossible to understand.
@@ -40,6 +42,20 @@ Return only valid JSON with this exact schema:
     "event_types_to_share": ["finding", "critique", "warning"],
     "reactive_steps": true,
     "notes": "how agents should use each other's messages"
+  }
+}
+
+For easy factual tasks only, you may instead return:
+{
+  "mode": "direct",
+  "task_type": "short free-text label",
+  "task_summary": "one sentence summary",
+  "reason": "why one direct answer is enough",
+  "selected_agents": [],
+  "collaboration_protocol": {
+    "event_types_to_share": ["finding", "critique", "warning"],
+    "reactive_steps": false,
+    "notes": "No agent collaboration is needed."
   }
 }
 

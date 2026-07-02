@@ -249,10 +249,10 @@ Tests use fake LLMs, so they do not require an Ollama server.
 
 ## Evaluation
 
-Run GPQA-Diamond against the multi-agent workflow with agent-to-agent message streaming, the same workflow without agent-to-agent message streaming, and a direct LLM baseline:
+Run GPQA-Diamond against the multi-agent workflow with agent-to-agent message streaming, the same workflow without agent-to-agent message streaming, the iterative single-agent baseline, and a direct LLM baseline:
 
 ```bash
-uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,single_agent,plain_llm --limit 10
 ```
 
 Run GSM8K test-set math word problems with the same methods:
@@ -264,7 +264,7 @@ uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no
 Run BIG-bench chess state-tracking examples with the same methods:
 
 ```bash
-uv run evaluation --benchmark chess --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+uv run evaluation --benchmark chess --methods multiagent_streaming,multiagent_no_streaming,single_agent,plain_llm --limit 10
 ```
 
 Run MMLU-Pro test-set multiple-choice questions with the same methods:
@@ -291,13 +291,13 @@ Run OlymMATH-LEAN theorem-proving problems with verifier-based scoring:
 uv run evaluation --benchmark olymmath_lean --methods plain_llm --limit 10 --kimina-host 127.0.0.1 --kimina-port 8001
 ```
 
-To compare fixed subagents, dynamic subagents, and the direct baseline in one run:
+To compare fixed subagents, dynamic subagents, the iterative single-agent baseline, and the direct baseline in one run:
 
 ```bash
-uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,multiagent_dynamic_streaming,multiagent_dynamic_no_streaming,plain_llm --limit 10
+uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,multiagent_dynamic_streaming,multiagent_dynamic_no_streaming,single_agent,plain_llm --limit 10
 ```
 
-The benchmark writes each run under `output/<benchmark>/<model>/<run_id>/`, such as `output/ma_proofbench/gpt-oss-120b/20260624T130000Z_ab12cd34/`. Provider prefixes are omitted from the model folder, so `google/gemma-4-26B-A4B-it` writes under `gemma-4-26B-A4B-it`. The run folder contains the per-question results CSV, summary JSON, correctness matrix CSV, run config, and per-example traces, and these artifacts are updated after each completed question-method run. `multiagent` remains as a legacy alias for fixed `multiagent_streaming`. Use `--output result.csv` to name the CSV inside the run folder, or `--output-dir other-output` to change the root directory.
+The benchmark writes each run under `output/<benchmark>/<model>/<run_id>/`, such as `output/ma_proofbench/gpt-oss-120b/20260624T130000Z_ab12cd34/`. Provider prefixes are omitted from the model folder, so `google/gemma-4-26B-A4B-it` writes under `gemma-4-26B-A4B-it`. The run folder contains the per-question results CSV, summary JSON, correctness matrix CSV, run config, and per-example traces, and these artifacts are updated after each completed question-method run. `multiagent` remains as a legacy alias for fixed `multiagent_streaming`. `single_agent` runs one model for up to `--max-steps`, feeding prior attempts back into the next step; it stops early only when the model marks the answer final and the benchmark extractor can parse it. Use `--output result.csv` to name the CSV inside the run folder, or `--output-dir other-output` to change the root directory.
 
 Evaluation defaults to `--model auto` for the OpenAI-compatible provider. In auto mode it queries `<OPENAI_BASE_URL or http://localhost:8000/v1>/models` and uses the first returned model id. If the endpoint is unavailable or returns no model ids, it falls back to `OPENAI_MODEL`, then `openai/gpt-oss-120b`. Pass `--model <model-id>` to skip auto-detection. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the OpenAI-compatible API provider.
 
@@ -330,7 +330,7 @@ Local GSM8K `.csv`, `.jsonl`, and `.ndjson` files must include `question` and `a
 Chess uses the BIG-bench `chess_state_tracking/synthetic_short` task. By default, the evaluator uses `data/chess/synthetic_short_task.json` when it exists; otherwise it downloads the upstream BIG-bench task JSON and saves it there. Rows contain `input` and `target`, where `input` is the UCI move prefix ending with the starting square, and `target` is the list of valid destination squares. The model output is defined as exactly one destination square matching `[a-h][1-8]`, preferably written as `Final Answer: <square>`. A response is correct when the extracted square is one of the target squares. To use a local chess file:
 
 ```bash
-uv run evaluation --benchmark chess --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/task.json
+uv run evaluation --benchmark chess --methods multiagent_streaming,multiagent_no_streaming,single_agent,plain_llm --limit 10 --data-file /path/to/task.json
 ```
 
 Local chess `.json`, `.jsonl`, and `.ndjson` files must include `input` and `target`. A `.json` file can be the original BIG-bench task object with an `examples` list.
