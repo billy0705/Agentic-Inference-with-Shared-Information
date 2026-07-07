@@ -15,9 +15,27 @@ from typing import Any
 from uuid import uuid4
 
 from multi_agent_sync.llm import get_openai_base_url
+from multi_agent_sync.evaluation.baselines import (
+    DEBATE_AGENT_COUNT,
+    DEBATE_ROUNDS,
+    MAJORITY_VOTE_AGENT_COUNT,
+    MeteredLLM,
+    TokenUsage,
+    parse_single_agent_payload,
+    run_majority_vote,
+    run_multiagent,
+    run_multiagent_debate,
+    run_plain_llm,
+    run_single_agent,
+)
+from multi_agent_sync.evaluation.baselines.common import (
+    add_optional_ints,
+    coerce_int,
+    extract_answer_with_args as extract_debate_answer,
+    extract_token_usage,
+    most_frequent_present_answer,
+)
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
-from multi_agent_sync.graph.workflow import run_workflow
-from multi_agent_sync.prompts import render_prompt
 
 
 DEFAULT_OUTPUT_DIR = Path("output")
@@ -32,23 +50,6 @@ VALID_METHODS = {
     "plain_llm",
     "single_agent",
     }
-DEBATE_AGENT_COUNT = 3
-DEBATE_ROUNDS = 2
-MAJORITY_VOTE_AGENT_COUNT = 3
-MATH_DEBATE_BENCHMARKS = {"gsm8k", "olymmath"}
-MULTIPLE_CHOICE_DEBATE_BENCHMARKS = {"gpqa", "mmlu_pro"}
-
-
-@dataclass
-class TokenUsage:
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
-    total_tokens: int | None = None
-
-    def add(self, other: "TokenUsage") -> None:
-        self.prompt_tokens = add_optional_ints(self.prompt_tokens, other.prompt_tokens)
-        self.completion_tokens = add_optional_ints(self.completion_tokens, other.completion_tokens)
-        self.total_tokens = add_optional_ints(self.total_tokens, other.total_tokens)
 
 
 @dataclass
@@ -60,65 +61,6 @@ class RunResult:
     completion_tokens: int | None = None
     total_tokens: int | None = None
     trace: dict[str, Any] | None = None
-
-
-class MeteredLLM:
-    def __init__(self, llm: Any) -> None:
-        self._llm = llm
-        self.usage = TokenUsage()
-
-    async def ainvoke(self, prompt: str) -> Any:
-        response = await self._llm.ainvoke(prompt)
-        self.usage.add(extract_token_usage(response))
-        return response
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._llm, name)
-
-
-def add_optional_ints(left: int | None, right: int | None) -> int | None:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return left + right
-
-
-def coerce_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def extract_token_usage(response: Any) -> TokenUsage:
-    usage_metadata = getattr(response, "usage_metadata", None) or {}
-    response_metadata = getattr(response, "response_metadata", None) or {}
-    token_usage = response_metadata.get("token_usage", {}) if isinstance(response_metadata, dict) else {}
-
-    prompt_tokens = coerce_int(
-        usage_metadata.get("input_tokens")
-        or usage_metadata.get("prompt_tokens")
-        or token_usage.get("prompt_tokens")
-        or token_usage.get("input_tokens")
-    )
-    completion_tokens = coerce_int(
-        usage_metadata.get("output_tokens")
-        or usage_metadata.get("completion_tokens")
-        or token_usage.get("completion_tokens")
-        or token_usage.get("output_tokens")
-    )
-    total_tokens = coerce_int(usage_metadata.get("total_tokens") or token_usage.get("total_tokens"))
-    if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
-        total_tokens = prompt_tokens + completion_tokens
-
-    return TokenUsage(
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=total_tokens,
-    )
 
 
 def parse_methods(methods: str) -> list[str]:
@@ -468,317 +410,6 @@ def build_debug_workflow(selected_agents: list[dict[str, Any]], method_trace: di
     )
     workflow.append({"node": "synthesizer", "description": "Combined subagent outputs and event log into final answer."})
     return workflow
-
-
-async def run_plain_llm(prompt: str, llm: Any) -> tuple[str, int]:
-    response = await llm.ainvoke(prompt)
-    return getattr(response, "content", str(response)), 0
-
-
-async def run_single_agent(prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int, dict[str, Any]]:
-    max_steps = max(1, int(getattr(args, "max_steps", 3)))
-    answer_extractor = getattr(args, "answer_extractor", None)
-    if not callable(answer_extractor):
-        answer_extractor = lambda text: text.strip() if text.strip() else None
-
-    steps: list[dict[str, Any]] = []
-    raw_output = ""
-    stopped_reason = "max_steps"
-
-    for step_index in range(1, max_steps + 1):
-        step_prompt = render_prompt(
-            "evaluation/single_agent_step.j2",
-            benchmark_prompt=prompt,
-            previous_steps=steps,
-        )
-        response = await llm.ainvoke(step_prompt)
-        content = getattr(response, "content", str(response)).strip()
-        parsed_payload = parse_single_agent_payload(content)
-        status = parsed_payload.get("status")
-        final_answer = str(parsed_payload.get("final_answer") or "").strip()
-        notes = str(parsed_payload.get("notes") or "").strip()
-        candidate_output = final_answer or content
-        parsed_answer = answer_extractor(candidate_output)
-        raw_output = candidate_output
-
-        step_trace = {
-            "step": step_index,
-            "status": status,
-            "output": candidate_output,
-            "notes": notes,
-            "parsed_answer": parsed_answer,
-            "raw_response": content,
-        }
-        steps.append(step_trace)
-
-        if status == "final" and parsed_answer is not None:
-            stopped_reason = "final_answer_parseable"
-            break
-
-    return raw_output, 0, {
-        "method": "single_agent",
-        "prompt": prompt,
-        "raw_output": raw_output,
-        "steps": steps,
-        "stopped_reason": stopped_reason,
-    }
-
-
-async def run_majority_vote(prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int, dict[str, Any]]:
-    agent_runs: list[dict[str, Any]] = []
-    raw_outputs: list[str] = []
-    parsed_answers: list[str | None] = []
-
-    for agent_index in range(MAJORITY_VOTE_AGENT_COUNT):
-        raw_output, returncode, trace = await run_single_agent(prompt, llm, args)
-        parsed_answer = extract_debate_answer(raw_output, args)
-        raw_outputs.append(raw_output)
-        parsed_answers.append(parsed_answer)
-        agent_runs.append(
-            {
-                "agent": agent_index + 1,
-                "raw_output": raw_output,
-                "returncode": returncode,
-                "parsed_answer": parsed_answer,
-                "trace": trace,
-            }
-        )
-
-    voted_answer = most_frequent_present_answer(parsed_answers)
-    fallback_used = voted_answer is None
-    final_output = f"Final Answer: {voted_answer}" if voted_answer is not None else raw_outputs[0]
-
-    return final_output, 0, {
-        "method": "majority_vote",
-        "prompt": prompt,
-        "agents": MAJORITY_VOTE_AGENT_COUNT,
-        "agent_runs": agent_runs,
-        "raw_outputs": raw_outputs,
-        "parsed_answers": parsed_answers,
-        "voted_answer": voted_answer,
-        "fallback_used": fallback_used,
-        "raw_output": final_output,
-    }
-
-
-async def run_multiagent_debate(prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int, dict[str, Any]]:
-    benchmark_name = str(getattr(args, "benchmark", "") or "")
-    prompt_style = debate_prompt_style(benchmark_name)
-    agent_contexts = [
-        [{"role": "user", "content": build_debate_initial_prompt(prompt, prompt_style)}]
-        for _ in range(DEBATE_AGENT_COUNT)
-    ]
-    rounds: list[dict[str, Any]] = []
-
-    for round_index in range(DEBATE_ROUNDS):
-        round_trace: dict[str, Any] = {"round": round_index + 1, "agent_responses": []}
-        for agent_index, agent_context in enumerate(agent_contexts):
-            if round_index != 0:
-                other_agent_contexts = agent_contexts[:agent_index] + agent_contexts[agent_index + 1 :]
-                agent_context.append(
-                    {
-                        "role": "user",
-                        "content": build_debate_round_prompt(
-                            other_agent_contexts,
-                            prompt,
-                            2 * round_index - 1,
-                            prompt_style,
-                        ),
-                    }
-                )
-
-            rendered_prompt = render_debate_context(agent_context)
-            response = await llm.ainvoke(rendered_prompt)
-            content = getattr(response, "content", str(response))
-            assistant_message = {"role": "assistant", "content": content}
-            agent_context.append(assistant_message)
-            round_trace["agent_responses"].append(
-                {
-                    "agent": agent_index + 1,
-                    "prompt": rendered_prompt,
-                    "response": content,
-                }
-            )
-        rounds.append(round_trace)
-
-    final_outputs = [context[-1]["content"] for context in agent_contexts]
-    parsed_final_answers = [extract_debate_answer(output, args) for output in final_outputs]
-    majority_answer = most_frequent_present_answer(parsed_final_answers)
-    raw_output = f"Final Answer: {majority_answer}" if majority_answer is not None else final_outputs[0]
-
-    return raw_output, 0, {
-        "method": "multiagent_debate",
-        "prompt": prompt,
-        "prompt_style": prompt_style,
-        "agents": DEBATE_AGENT_COUNT,
-        "rounds": DEBATE_ROUNDS,
-        "agent_contexts": agent_contexts,
-        "round_traces": rounds,
-        "final_outputs": final_outputs,
-        "parsed_final_answers": parsed_final_answers,
-        "majority_answer": majority_answer,
-        "raw_output": raw_output,
-    }
-
-
-def debate_prompt_style(benchmark_name: str) -> str:
-    if benchmark_name in MATH_DEBATE_BENCHMARKS:
-        return "math"
-    if benchmark_name in MULTIPLE_CHOICE_DEBATE_BENCHMARKS:
-        return "multiple_choice"
-    return "generic"
-
-
-def build_debate_initial_prompt(prompt: str, prompt_style: str) -> str:
-    if prompt_style == "math":
-        return (
-            f"Can you solve the following math problem? {prompt} Explain your reasoning.\n"
-            "Your final answer should be a single numerical number, in the form \\boxed{answer}, "
-            "at the end of your response.\n"
-        )
-    if prompt_style == "multiple_choice":
-        return (
-            f"Can you answer the following question as accurately as possible? {prompt} "
-            "Explain your answer, putting the answer in the form (X) at the end of your response."
-        )
-    return prompt
-
-
-def build_debate_round_prompt(
-    other_agent_contexts: list[list[dict[str, str]]],
-    prompt: str,
-    response_index: int,
-    prompt_style: str,
-) -> str:
-    if not other_agent_contexts:
-        if prompt_style == "math":
-            return (
-                "Can you double check that your answer is correct. Please reiterate your answer, "
-                "with your final answer a single numerical number, in the form \\boxed{answer}."
-            )
-        return "Can you double check that your answer is correct. Put your final answer in the form (X) at the end of your response."
-
-    prefix = "These are the solutions to the problem from other agents: "
-    for agent_context in other_agent_contexts:
-        agent_response = agent_context[response_index]["content"]
-        prefix += f"\n\n One agent solution: ```{agent_response}```"
-
-    if prompt_style == "math":
-        return (
-            prefix
-            + "\n\n Using the solutions from other agents as additional information, can you provide your answer to the math problem? \n"
-            + f" The original math problem is {prompt}.\n"
-            + "Your final answer should be a single numerical number, in the form \\boxed{answer}, at the end of your response."
-        )
-    if prompt_style == "multiple_choice":
-        return (
-            prefix
-            + "\n\n Using the reasoning from other agents as additional advice, can you give an updated answer? "
-            + "Examine your solution and that other agents step by step.\n"
-            + "Put your answer in the form (X) at the end of your response."
-        )
-    return (
-        prefix
-        + "\n\n Using the reasoning from other agents as additional advice, can you give an updated answer? "
-        + "Examine your solution and that other agents step by step."
-    )
-
-
-def render_debate_context(agent_context: list[dict[str, str]]) -> str:
-    return "\n\n".join(f"{message['role']}: {message['content']}" for message in agent_context)
-
-
-def extract_debate_answer(output: str, args: argparse.Namespace) -> str | None:
-    answer_extractor = getattr(args, "answer_extractor", None)
-    if callable(answer_extractor):
-        return answer_extractor(output)
-    return output.strip() or None
-
-
-def most_frequent_present_answer(answers: list[str | None]) -> str | None:
-    present_answers = [answer for answer in answers if answer is not None]
-    if not present_answers:
-        return None
-
-    most_frequent = present_answers[0]
-    highest_count = 0
-    for answer in present_answers:
-        count = present_answers.count(answer)
-        if count > highest_count:
-            highest_count = count
-            most_frequent = answer
-    return most_frequent
-
-
-def parse_single_agent_payload(content: str) -> dict[str, Any]:
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
-        stripped = re.sub(r"\s*```$", "", stripped)
-    try:
-        payload = json.loads(stripped)
-    except json.JSONDecodeError:
-        decoder = json.JSONDecoder()
-        for match in re.finditer(r"\{", stripped):
-            try:
-                payload, _ = decoder.raw_decode(stripped[match.start() :])
-                break
-            except json.JSONDecodeError:
-                continue
-        else:
-            return {"status": "continue", "final_answer": "", "notes": "Model did not return JSON."}
-    if not isinstance(payload, dict):
-        return {"status": "continue", "final_answer": "", "notes": "Model did not return a JSON object."}
-
-    status = str(payload.get("status") or "continue").strip().lower()
-    if status not in {"continue", "final"}:
-        status = "continue"
-    return {
-        "status": status,
-        "final_answer": payload.get("final_answer") or "",
-        "notes": payload.get("notes") or "",
-    }
-
-
-async def run_multiagent(
-    prompt: str,
-    llm: Any,
-    args: argparse.Namespace,
-    *,
-    enable_agent_message_streaming: bool = True,
-    subagent_mode: str = "fixed",
-) -> tuple[str, int, dict[str, Any]]:
-    state = await run_workflow(
-        task=prompt,
-        llm=llm,
-        subagent_mode=subagent_mode,
-        max_steps_per_agent=args.max_steps,
-        total_runtime_timeout=args.total_runtime_timeout,
-        synthesis_timeout=args.synthesis_timeout,
-        enable_agent_message_streaming=enable_agent_message_streaming,
-        stream_to_console=False,
-        no_color=True,
-    )
-    return state["final_answer"], 0, extract_workflow_trace(state)
-
-
-def extract_workflow_trace(state: dict[str, Any]) -> dict[str, Any]:
-    trace_keys = [
-        "run_id",
-        "mode",
-        "subagent_mode",
-        "task_type",
-        "reason",
-        "plan",
-        "selected_agents",
-        "assignments",
-        "orchestrator_plan",
-        "event_log",
-        "agent_outputs",
-        "agent_traces",
-        "final_answer",
-    ]
-    return {key: state.get(key) for key in trace_keys if key in state}
 
 
 async def run_method(method: str, prompt: str, llm: Any, args: argparse.Namespace) -> RunResult:

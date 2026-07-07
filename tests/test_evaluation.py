@@ -13,6 +13,16 @@ from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 
 
+def test_baselines_package_exports_evaluation_methods():
+    from multi_agent_sync.evaluation import baselines
+
+    assert baselines.run_plain_llm is not None
+    assert baselines.run_single_agent is not None
+    assert baselines.run_majority_vote is not None
+    assert baselines.run_multiagent_debate is not None
+    assert baselines.run_multiagent is not None
+
+
 @dataclass
 class UsageResponse:
     content: str
@@ -1458,7 +1468,9 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
         captured_kwargs.update(kwargs)
         return {"final_answer": f"{method} answer"}
 
-    monkeypatch.setattr(runner, "run_workflow", fake_run_workflow)
+    from multi_agent_sync.evaluation.baselines import multiagent_sync
+
+    monkeypatch.setattr(multiagent_sync, "run_workflow", fake_run_workflow)
     args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
 
     result = await runner.run_method(method, "Question?", UsageLLM([]), args)
