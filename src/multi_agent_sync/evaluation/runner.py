@@ -215,12 +215,20 @@ def resolve_model_name(args: argparse.Namespace) -> str:
     if args.model and args.model != "auto":
         return args.model
     if args.local_model:
-        return os.getenv("OLLAMA_MODEL", "qwen3:4b")
-    return resolve_auto_openai_model_name()
+        return resolve_local_model_name()
+    detected_model = resolve_auto_openai_model_name()
+    if detected_model is not None:
+        return detected_model
+    setattr(args, "local_model", True)
+    return resolve_local_model_name()
 
 
-def resolve_auto_openai_model_name() -> str:
-    fallback = os.getenv("OPENAI_MODEL", "openai/gpt-oss-120b")
+def resolve_local_model_name() -> str:
+    return os.getenv("OLLAMA_MODEL", "qwen3:4b")
+
+
+def resolve_auto_openai_model_name() -> str | None:
+    local_fallback = resolve_local_model_name()
     base_url = get_openai_base_url()
     timeout = float(os.getenv("OPENAI_MODEL_LOOKUP_TIMEOUT", "2"))
     try:
@@ -228,13 +236,13 @@ def resolve_auto_openai_model_name() -> str:
         with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        print(f"Could not auto-detect model from {base_url}/models ({exc}); using fallback model: {fallback}")
-        return fallback
+        print(f"Could not auto-detect model from {base_url}/models ({exc}); using local model: {local_fallback}")
+        return None
 
     model_id = first_model_id(payload)
     if model_id is None:
-        print(f"No model id found in {base_url}/models response; using fallback model: {fallback}")
-        return fallback
+        print(f"No model id found in {base_url}/models response; using local model: {local_fallback}")
+        return None
 
     print(f"Auto-detected model from API: {model_id}")
     return model_id
