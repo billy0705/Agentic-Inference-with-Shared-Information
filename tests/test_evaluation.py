@@ -479,10 +479,13 @@ def test_auto_model_resolution_falls_back_when_api_lookup_fails(monkeypatch, cap
         raise OSError("server unavailable")
 
     monkeypatch.setattr(runner, "urlopen", failing_urlopen)
-    monkeypatch.setenv("OPENAI_MODEL", "openai/fallback-model")
+    monkeypatch.setenv("OLLAMA_MODEL", "local/fallback-model")
 
-    assert runner.resolve_auto_openai_model_name() == "openai/fallback-model"
-    assert "using fallback model: openai/fallback-model" in capsys.readouterr().out
+    args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
+
+    assert runner.resolve_model_name(args) == "local/fallback-model"
+    assert args.local_model is True
+    assert "using local model: local/fallback-model" in capsys.readouterr().out
 
 
 def test_gpqa_owns_answer_extraction():
