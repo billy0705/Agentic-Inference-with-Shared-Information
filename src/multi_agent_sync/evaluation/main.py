@@ -41,7 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated methods to compare. Supported: multiagent_streaming, "
             "multiagent_no_streaming, multiagent_dynamic_streaming, "
-            "multiagent_dynamic_no_streaming, single_agent, plain_llm. Legacy alias: multiagent."
+            "multiagent_dynamic_no_streaming, multiagent_debate, single_agent, plain_llm. "
+            "Legacy alias: multiagent."
         ),
     )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Use 0 for full split.")

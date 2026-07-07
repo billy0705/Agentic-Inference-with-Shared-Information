@@ -23,8 +23,10 @@ class UsageResponse:
 class UsageLLM:
     def __init__(self, responses: list[UsageResponse]) -> None:
         self.responses = list(responses)
+        self.prompts: list[str] = []
 
     async def ainvoke(self, prompt: str) -> UsageResponse:
+        self.prompts.append(prompt)
         return self.responses.pop(0)
 
 
@@ -46,6 +48,10 @@ def test_parse_methods_accepts_dynamic_multiagent_methods():
 
 def test_parse_methods_accepts_single_agent_method():
     assert runner.parse_methods("single_agent,plain_llm") == ["single_agent", "plain_llm"]
+
+
+def test_parse_methods_accepts_multiagent_debate_method():
+    assert runner.parse_methods("multiagent_debate,plain_llm") == ["multiagent_debate", "plain_llm"]
 
 
 def test_parse_methods_keeps_multiagent_alias_for_streaming():
@@ -259,6 +265,70 @@ async def test_single_agent_respects_max_steps_when_final_answer_is_not_parseabl
     assert result.trace["stopped_reason"] == "max_steps"
     assert result.trace["steps"][1]["status"] == "final"
     assert result.trace["steps"][1]["parsed_answer"] is None
+
+
+@pytest.mark.asyncio
+async def test_multiagent_debate_uses_three_agents_two_rounds_and_selects_final_answer():
+    llm = UsageLLM(
+        [
+            UsageResponse("Agent 1 round 1 says Final Answer: A"),
+            UsageResponse("Agent 2 round 1 says Final Answer: B"),
+            UsageResponse("Agent 3 round 1 says Final Answer: B"),
+            UsageResponse("Agent 1 round 2 says Final Answer: B"),
+            UsageResponse("Agent 2 round 2 says Final Answer: B"),
+            UsageResponse("Agent 3 round 2 says Final Answer: C"),
+        ]
+    )
+    args = argparse.Namespace(
+        benchmark="mmlu_pro",
+        answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
+    )
+
+    result = await runner.run_method("multiagent_debate", "Question with options.", llm, args)
+
+    assert result.raw_output == "Final Answer: B"
+    assert len(llm.prompts) == 6
+    assert all("Question with options." in prompt for prompt in llm.prompts[:3])
+    assert "These are the solutions to the problem from other agents:" in llm.prompts[3]
+    assert "Agent 2 round 1 says Final Answer: B" in llm.prompts[3]
+    assert "Agent 3 round 1 says Final Answer: B" in llm.prompts[3]
+    assert "Agent 1 round 1 says Final Answer: A" in llm.prompts[3]
+    assert result.trace["method"] == "multiagent_debate"
+    assert result.trace["agents"] == 3
+    assert result.trace["rounds"] == 2
+    assert result.trace["parsed_final_answers"] == ["B", "B", "C"]
+    assert result.trace["majority_answer"] == "B"
+    assert len(result.trace["agent_contexts"]) == 3
+    assert len(result.trace["agent_contexts"][0]) == 4
+    debug = runner.build_multiagent_debug(result.trace)
+    assert [step["node"] for step in debug["workflow"]] == ["debate_agents", "debate_answer_selection"]
+
+
+@pytest.mark.asyncio
+async def test_multiagent_debate_math_prompt_matches_upstream_shape():
+    llm = UsageLLM(
+        [
+            UsageResponse(r"Agent 1 round 1 \boxed{1}"),
+            UsageResponse(r"Agent 2 round 1 \boxed{2}"),
+            UsageResponse(r"Agent 3 round 1 \boxed{2}"),
+            UsageResponse(r"Agent 1 round 2 \boxed{2}"),
+            UsageResponse(r"Agent 2 round 2 \boxed{2}"),
+            UsageResponse(r"Agent 3 round 2 \boxed{3}"),
+        ]
+    )
+    args = argparse.Namespace(
+        benchmark="gsm8k",
+        answer_extractor=gsm8k.extract_answer,
+    )
+
+    result = await runner.run_method("multiagent_debate", "What is 1 + 1?", llm, args)
+
+    assert "Can you solve the following math problem? What is 1 + 1? Explain your reasoning." in llm.prompts[0]
+    assert r"Your final answer should be a single numerical number, in the form \boxed{answer}" in llm.prompts[0]
+    assert "Can you double check that your answer is correct." not in llm.prompts[0]
+    assert "Using the solutions from other agents as additional information" in llm.prompts[3]
+    assert "The original math problem is What is 1 + 1?." in llm.prompts[3]
+    assert result.raw_output == "Final Answer: 2"
 
 
 @pytest.mark.asyncio

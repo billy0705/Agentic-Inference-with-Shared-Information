@@ -249,16 +249,16 @@ Tests use fake LLMs, so they do not require an Ollama server.
 
 ## Evaluation
 
-Run GPQA-Diamond against the multi-agent workflow with agent-to-agent message streaming, the same workflow without agent-to-agent message streaming, the iterative single-agent baseline, and a direct LLM baseline:
+Run GPQA-Diamond against the multi-agent workflow with agent-to-agent message streaming, the same workflow without agent-to-agent message streaming, the Du et al. multi-agent debate baseline, the iterative single-agent baseline, and a direct LLM baseline:
 
 ```bash
-uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,single_agent,plain_llm --limit 10
+uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,multiagent_debate,single_agent,plain_llm --limit 10
 ```
 
 Run GSM8K test-set math word problems with the same methods:
 
 ```bash
-uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no_streaming,multiagent_debate,plain_llm --limit 10
 ```
 
 Run BIG-bench chess state-tracking examples with the same methods:
@@ -270,7 +270,7 @@ uv run evaluation --benchmark chess --methods multiagent_streaming,multiagent_no
 Run MMLU-Pro test-set multiple-choice questions with the same methods:
 
 ```bash
-uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent_no_streaming,multiagent_debate,plain_llm --limit 10
 ```
 
 Run MA-ProofBench Lean theorem-proving problems with the same methods:
@@ -282,7 +282,7 @@ uv run evaluation --benchmark ma_proofbench --methods multiagent_streaming,multi
 Run OlymMATH natural-language Olympiad problems with answer-key scoring:
 
 ```bash
-uv run evaluation --benchmark olymmath --olymmath-subset en-hard --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+uv run evaluation --benchmark olymmath --olymmath-subset en-hard --methods multiagent_streaming,multiagent_no_streaming,multiagent_debate,plain_llm --limit 10
 ```
 
 Run OlymMATH-LEAN theorem-proving problems with verifier-based scoring:
@@ -297,7 +297,7 @@ To compare fixed subagents, dynamic subagents, the iterative single-agent baseli
 uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,multiagent_dynamic_streaming,multiagent_dynamic_no_streaming,single_agent,plain_llm --limit 10
 ```
 
-The benchmark writes each run under `output/<benchmark>/<model>/<run_id>/`, such as `output/ma_proofbench/gpt-oss-120b/20260624T130000Z_ab12cd34/`. Provider prefixes are omitted from the model folder, so `google/gemma-4-26B-A4B-it` writes under `gemma-4-26B-A4B-it`. The run folder contains the per-question results CSV, summary JSON, correctness matrix CSV, run config, and per-example traces, and these artifacts are updated after each completed question-method run. `multiagent` remains as a legacy alias for fixed `multiagent_streaming`. `single_agent` runs one model for up to `--max-steps`, feeding prior attempts back into the next step; it stops early only when the model marks the answer final and the benchmark extractor can parse it. Use `--output result.csv` to name the CSV inside the run folder, or `--output-dir other-output` to change the root directory.
+The benchmark writes each run under `output/<benchmark>/<model>/<run_id>/`, such as `output/ma_proofbench/gpt-oss-120b/20260624T130000Z_ab12cd34/`. Provider prefixes are omitted from the model folder, so `google/gemma-4-26B-A4B-it` writes under `gemma-4-26B-A4B-it`. The run folder contains the per-question results CSV, summary JSON, correctness matrix CSV, run config, and per-example traces, and these artifacts are updated after each completed question-method run. `multiagent` remains as a legacy alias for fixed `multiagent_streaming`. `multiagent_debate` ports the Du et al. multi-agent debate baseline with the upstream defaults of 3 agents and 2 debate rounds: each agent first answers independently, then each agent sees the other agents' previous answers and updates its answer. The final score uses a majority vote over the parsed final answers, matching the upstream evaluation scripts. `single_agent` runs one model for up to `--max-steps`, feeding prior attempts back into the next step; it stops early only when the model marks the answer final and the benchmark extractor can parse it. Use `--output result.csv` to name the CSV inside the run folder, or `--output-dir other-output` to change the root directory.
 
 Evaluation defaults to `--model auto` for the OpenAI-compatible provider. In auto mode it queries `<OPENAI_BASE_URL or http://localhost:8000/v1>/models` and uses the first returned model id. If the endpoint is unavailable or returns no model ids, it falls back to `OPENAI_MODEL`, then `openai/gpt-oss-120b`. Pass `--model <model-id>` to skip auto-detection. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the OpenAI-compatible API provider.
 
