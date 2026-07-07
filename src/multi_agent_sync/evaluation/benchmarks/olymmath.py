@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from multi_agent_sync.evaluation import ma_proofbench
+from multi_agent_sync.evaluation.benchmarks import ma_proofbench
 from multi_agent_sync.evaluation.dataset_files import save_rows
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt

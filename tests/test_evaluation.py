@@ -23,6 +23,17 @@ def test_baselines_package_exports_evaluation_methods():
     assert baselines.run_multiagent is not None
 
 
+def test_benchmarks_package_exports_benchmark_modules():
+    from multi_agent_sync.evaluation import benchmarks
+
+    assert benchmarks.chess.build_benchmark is not None
+    assert benchmarks.gpqa.build_benchmark is not None
+    assert benchmarks.gsm8k.build_benchmark is not None
+    assert benchmarks.ma_proofbench.build_benchmark is not None
+    assert benchmarks.mmlu_pro.build_benchmark is not None
+    assert benchmarks.olymmath.build_benchmark is not None
+
+
 @dataclass
 class UsageResponse:
     content: str
