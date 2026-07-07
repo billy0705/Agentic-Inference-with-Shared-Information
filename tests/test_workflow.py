@@ -224,9 +224,30 @@ async def test_langgraph_workflow_runs_from_start_to_end():
 
 
 @pytest.mark.asyncio
-async def test_direct_orchestrator_response_falls_back_to_multi_agent_runtime():
+async def test_easy_direct_orchestrator_response_uses_direct_answer_node():
     state = await run_workflow(
         task="What is an API?",
+        llm=FakeLLM(),
+        max_steps_per_agent=1,
+        stream_to_console=False,
+    )
+
+    assert state["mode"] == "direct"
+    assert state["agent_outputs"] == {}
+    assert state["agent_traces"] == {}
+    assert state["final_answer"] == "A direct answer from one LLM call."
+    assert any(
+        event.event_type == "plan_created"
+        and "mode=direct" in event.content
+        and "selected_agents=none" in event.content
+        for event in state["event_log"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_easy_direct_orchestrator_response_falls_back_to_multi_agent_runtime():
+    state = await run_workflow(
+        task="Which one of the following implementation strategies should we use?",
         llm=FakeLLM(),
         max_steps_per_agent=1,
         stream_to_console=False,
@@ -235,13 +256,7 @@ async def test_direct_orchestrator_response_falls_back_to_multi_agent_runtime():
     assert state["mode"] == "multi_agent"
     assert set(state["agent_outputs"]) == {"CodingAgent", "CriticAgent", "VerifierAgent"}
     assert state["agent_traces"]
-    assert state["final_answer"] == "A concise final plan that combines research, coding, and critique outputs."
-    assert any(
-        event.event_type == "plan_created"
-        and "mode=multi_agent" in event.content
-        and "selected_agents=CodingAgent,CriticAgent,VerifierAgent" in event.content
-        for event in state["event_log"]
-    )
+    assert "A concise final plan that combines research, coding, and critique outputs." in state["final_answer"]
 
 
 @pytest.mark.asyncio

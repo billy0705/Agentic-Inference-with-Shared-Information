@@ -17,6 +17,7 @@ from uuid import uuid4
 from multi_agent_sync.llm import get_openai_base_url
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
 from multi_agent_sync.graph.workflow import run_workflow
+from multi_agent_sync.prompts import render_prompt
 
 
 DEFAULT_OUTPUT_DIR = Path("output")
@@ -27,6 +28,7 @@ VALID_METHODS = {
     "multiagent_dynamic_streaming",
     "multiagent_dynamic_no_streaming",
     "plain_llm",
+    "single_agent",
     }
 
 
@@ -304,19 +306,19 @@ def first_model_id(payload: Any) -> str | None:
 
 
 def method_subagent_mode(method: str) -> str:
-    if method == "plain_llm":
+    if method in {"plain_llm", "single_agent"}:
         return "none"
     return "dynamic" if "dynamic" in method else "fixed"
 
 
 def method_message_streaming(method: str) -> bool | None:
-    if method == "plain_llm":
+    if method in {"plain_llm", "single_agent"}:
         return None
     return "no_streaming" not in method
 
 
 def build_question_context(row: dict[str, Any]) -> dict[str, Any]:
-    question = row.get("Question") or row.get("question") or row.get("problem") or row.get("informal_statement", "")
+    question = row.get("Question") or row.get("question") or row.get("problem") or row.get("informal_statement") or row.get("input", "")
     incorrect_answers = [
         row[field]
         for field in ("Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")
@@ -340,6 +342,8 @@ def build_question_context(row: dict[str, Any]) -> dict[str, Any]:
             context["gold_answer"] = match.group("answer").strip()
         elif len(str(row["answer"]).strip()) == 1:
             context["gold_answer"] = str(row["answer"]).strip().upper()
+    if isinstance(row.get("target"), list):
+        context["gold_answer"] = row.get("target")
     if row.get("formal_statement"):
         context["formal_statement"] = row.get("formal_statement")
     if row.get("unique_id"):
@@ -425,6 +429,10 @@ def extract_agent_messages(method_trace: dict[str, Any]) -> list[dict[str, Any]]
 
 def build_debug_workflow(selected_agents: list[dict[str, Any]], method_trace: dict[str, Any]) -> list[dict[str, str]]:
     if not selected_agents:
+        if method_trace.get("method") == "single_agent":
+            return [
+                {"node": "single_agent", "description": "Iteratively answered and self-reviewed until final parseable output or max steps."},
+            ]
         if method_trace.get("prompt") is not None:
             return [
                 {"node": "plain_llm", "description": "Answered the benchmark prompt directly."},
@@ -446,6 +454,85 @@ def build_debug_workflow(selected_agents: list[dict[str, Any]], method_trace: di
 async def run_plain_llm(prompt: str, llm: Any) -> tuple[str, int]:
     response = await llm.ainvoke(prompt)
     return getattr(response, "content", str(response)), 0
+
+
+async def run_single_agent(prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int, dict[str, Any]]:
+    max_steps = max(1, int(getattr(args, "max_steps", 3)))
+    answer_extractor = getattr(args, "answer_extractor", None)
+    if not callable(answer_extractor):
+        answer_extractor = lambda text: text.strip() if text.strip() else None
+
+    steps: list[dict[str, Any]] = []
+    raw_output = ""
+    stopped_reason = "max_steps"
+
+    for step_index in range(1, max_steps + 1):
+        step_prompt = render_prompt(
+            "evaluation/single_agent_step.j2",
+            benchmark_prompt=prompt,
+            previous_steps=steps,
+        )
+        response = await llm.ainvoke(step_prompt)
+        content = getattr(response, "content", str(response)).strip()
+        parsed_payload = parse_single_agent_payload(content)
+        status = parsed_payload.get("status")
+        final_answer = str(parsed_payload.get("final_answer") or "").strip()
+        notes = str(parsed_payload.get("notes") or "").strip()
+        candidate_output = final_answer or content
+        parsed_answer = answer_extractor(candidate_output)
+        raw_output = candidate_output
+
+        step_trace = {
+            "step": step_index,
+            "status": status,
+            "output": candidate_output,
+            "notes": notes,
+            "parsed_answer": parsed_answer,
+            "raw_response": content,
+        }
+        steps.append(step_trace)
+
+        if status == "final" and parsed_answer is not None:
+            stopped_reason = "final_answer_parseable"
+            break
+
+    return raw_output, 0, {
+        "method": "single_agent",
+        "prompt": prompt,
+        "raw_output": raw_output,
+        "steps": steps,
+        "stopped_reason": stopped_reason,
+    }
+
+
+def parse_single_agent_payload(content: str) -> dict[str, Any]:
+    stripped = content.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", stripped):
+            try:
+                payload, _ = decoder.raw_decode(stripped[match.start() :])
+                break
+            except json.JSONDecodeError:
+                continue
+        else:
+            return {"status": "continue", "final_answer": "", "notes": "Model did not return JSON."}
+    if not isinstance(payload, dict):
+        return {"status": "continue", "final_answer": "", "notes": "Model did not return a JSON object."}
+
+    status = str(payload.get("status") or "continue").strip().lower()
+    if status not in {"continue", "final"}:
+        status = "continue"
+    return {
+        "status": status,
+        "final_answer": payload.get("final_answer") or "",
+        "notes": payload.get("notes") or "",
+    }
 
 
 async def run_multiagent(
@@ -496,6 +583,8 @@ async def run_method(method: str, prompt: str, llm: Any, args: argparse.Namespac
     if method == "plain_llm":
         raw_output, returncode = await run_plain_llm(prompt, metered_llm)
         trace = {"prompt": prompt, "raw_output": raw_output}
+    elif method == "single_agent":
+        raw_output, returncode, trace = await run_single_agent(prompt, metered_llm, args)
     elif method in {"multiagent", "multiagent_streaming"}:
         raw_output, returncode, trace = await run_multiagent(
             prompt,

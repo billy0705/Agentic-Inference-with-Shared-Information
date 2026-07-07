@@ -24,7 +24,7 @@ def agent_names(plan: dict) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_direct_mode_is_not_allowed_and_falls_back_to_multi_agent():
+async def test_direct_mode_is_allowed_for_easy_factual_tasks():
     llm = StaticLLM(
         """
         {
@@ -49,6 +49,32 @@ async def test_direct_mode_is_not_allowed_and_falls_back_to_multi_agent():
     )
 
     plan = await create_model_based_plan("What is an API?", llm, AGENT_REGISTRY)
+
+    assert plan["mode"] == "direct"
+    assert plan["subagent_mode"] == "fixed"
+    assert plan["selected_agents"] == []
+
+
+@pytest.mark.asyncio
+async def test_direct_mode_for_non_easy_task_falls_back_to_multi_agent():
+    llm = StaticLLM(
+        """
+        {
+          "mode": "direct",
+          "task_type": "software implementation task",
+          "task_summary": "The user asks for code changes.",
+          "reason": "The model incorrectly selected direct mode.",
+          "selected_agents": [],
+          "collaboration_protocol": {
+            "event_types_to_share": ["finding", "critique", "warning"],
+            "reactive_steps": true,
+            "notes": "No collaboration needed."
+          }
+        }
+        """
+    )
+
+    plan = await create_model_based_plan("Implement a benchmark runner and tests.", llm, AGENT_REGISTRY)
 
     assert plan["mode"] == "multi_agent"
     assert plan["subagent_mode"] == "fixed"

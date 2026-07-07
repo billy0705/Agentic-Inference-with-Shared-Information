@@ -8,7 +8,7 @@ from typing import Any, Literal, TypedDict
 from multi_agent_sync.prompts import render_prompt
 
 
-Mode = Literal["multi_agent"]
+Mode = Literal["multi_agent", "direct"]
 SubagentMode = Literal["fixed", "dynamic"]
 
 
@@ -52,6 +52,32 @@ MAX_SELECTED_AGENTS = 4
 CODE_KEYWORDS = ("code", "programming", "bug", "error", "pytest", "function", "api", "implementation", "repository")
 RESEARCH_KEYWORDS = ("research", "comparison", "compare", "literature", "recent work", "background", "evidence")
 REASONING_KEYWORDS = ("math", "calculate", "calculation", "proof", "prove", "theorem", "logic", "philosophy", "reasoning", "argument", "theory")
+DIRECT_TASK_STARTERS = (
+    "what is ",
+    "what are ",
+    "who is ",
+    "who was ",
+    "define ",
+    "briefly define ",
+    "briefly explain ",
+)
+DIRECT_BLOCKING_KEYWORDS = (
+    "implement",
+    "implementation",
+    "code",
+    "debug",
+    "pytest",
+    "repository",
+    "research",
+    "compare",
+    "comparison",
+    "proof",
+    "prove",
+    "theorem",
+    "benchmark",
+    "evaluate",
+    "test",
+)
 
 
 async def create_model_based_plan(
@@ -138,11 +164,20 @@ def validate_orchestrator_plan(
     subagent_mode: SubagentMode = "fixed",
 ) -> OrchestratorPlan:
     mode = raw_plan.get("mode")
+    if mode == "direct":
+        if is_easy_direct_task(task):
+            return create_direct_plan(raw_plan, task, subagent_mode=subagent_mode)
+        return create_fallback_plan(
+            task,
+            available_agents,
+            reason="Model orchestrator returned direct mode for a non-easy task; direct mode is only allowed for easy factual tasks.",
+            subagent_mode=subagent_mode,
+        )
     if mode != "multi_agent":
         return create_fallback_plan(
             task,
             available_agents,
-            reason="Model orchestrator returned direct or invalid mode; direct mode is disabled.",
+            reason="Model orchestrator returned an invalid mode.",
             subagent_mode=subagent_mode,
         )
 
@@ -209,6 +244,32 @@ def normalize_selected_agents(value: Any, available_agents: Mapping[str, Any]) -
         if len(selected_agents) == MAX_SELECTED_AGENTS:
             break
     return selected_agents
+
+
+def create_direct_plan(raw_plan: Mapping[str, Any], task: str, subagent_mode: SubagentMode) -> OrchestratorPlan:
+    task_type = _clean_text(raw_plan.get("task_type")) or "easy factual question"
+    task_summary = _clean_text(raw_plan.get("task_summary")) or f"Answer the user task directly: {task}"
+    reason = _clean_text(raw_plan.get("reason")) or "The task is simple enough for one direct model response."
+    return {
+        "mode": "direct",
+        "subagent_mode": subagent_mode,
+        "task_type": task_type,
+        "task_summary": task_summary,
+        "reason": reason,
+        "selected_agents": [],
+        "collaboration_protocol": normalize_collaboration_protocol(raw_plan.get("collaboration_protocol")),
+    }
+
+
+def is_easy_direct_task(task: str) -> bool:
+    normalized = re.sub(r"\s+", " ", task.strip().lower())
+    if not normalized:
+        return False
+    if len(normalized.split()) > 40:
+        return False
+    if any(keyword in normalized for keyword in DIRECT_BLOCKING_KEYWORDS):
+        return False
+    return normalized.startswith(DIRECT_TASK_STARTERS)
 
 
 def ensure_fixed_review_agent(selected_agents: list[SelectedAgent], available_agents: Mapping[str, Any]) -> list[SelectedAgent]:
