@@ -54,6 +54,10 @@ def test_parse_methods_accepts_multiagent_debate_method():
     assert runner.parse_methods("multiagent_debate,plain_llm") == ["multiagent_debate", "plain_llm"]
 
 
+def test_parse_methods_accepts_majority_vote_method():
+    assert runner.parse_methods("majority_vote,single_agent,plain_llm") == ["majority_vote", "single_agent", "plain_llm"]
+
+
 def test_parse_methods_keeps_multiagent_alias_for_streaming():
     assert runner.parse_methods("multiagent,plain_llm") == ["multiagent", "plain_llm"]
 
@@ -265,6 +269,77 @@ async def test_single_agent_respects_max_steps_when_final_answer_is_not_parseabl
     assert result.trace["stopped_reason"] == "max_steps"
     assert result.trace["steps"][1]["status"] == "final"
     assert result.trace["steps"][1]["parsed_answer"] is None
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_runs_three_independent_single_agents_and_votes():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: A", "notes": "First vote."}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": "Second vote."}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": "Third vote."}'),
+        ]
+    )
+    args = argparse.Namespace(
+        max_steps=1,
+        answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
+    )
+
+    result = await runner.run_method("majority_vote", "Question with options.", llm, args)
+
+    assert result.raw_output == "Final Answer: B"
+    assert len(llm.prompts) == 3
+    assert all("Question with options." in prompt for prompt in llm.prompts)
+    assert result.trace["method"] == "majority_vote"
+    assert result.trace["agents"] == 3
+    assert result.trace["parsed_answers"] == ["A", "B", "B"]
+    assert result.trace["voted_answer"] == "B"
+    assert result.trace["fallback_used"] is False
+    assert len(result.trace["agent_runs"]) == 3
+    assert all(agent_run["trace"]["method"] == "single_agent" for agent_run in result.trace["agent_runs"])
+    debug = runner.build_multiagent_debug(result.trace)
+    assert [step["node"] for step in debug["workflow"]] == ["single_agent_votes", "majority_vote"]
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_tie_uses_first_parsed_answer():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: C", "notes": ""}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": ""}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: A", "notes": ""}'),
+        ]
+    )
+    args = argparse.Namespace(
+        max_steps=1,
+        answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
+    )
+
+    result = await runner.run_method("majority_vote", "Question with options.", llm, args)
+
+    assert result.raw_output == "Final Answer: C"
+    assert result.trace["parsed_answers"] == ["C", "B", "A"]
+    assert result.trace["voted_answer"] == "C"
+    assert result.trace["fallback_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_falls_back_to_first_raw_output_when_all_answers_are_unparseable():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "continue", "final_answer": "Unclear first answer", "notes": ""}'),
+            UsageResponse('{"status": "continue", "final_answer": "Unclear second answer", "notes": ""}'),
+            UsageResponse('{"status": "continue", "final_answer": "Unclear third answer", "notes": ""}'),
+        ]
+    )
+    args = argparse.Namespace(max_steps=1, answer_extractor=lambda text: None)
+
+    result = await runner.run_method("majority_vote", "Question with options.", llm, args)
+
+    assert result.raw_output == "Unclear first answer"
+    assert result.trace["parsed_answers"] == [None, None, None]
+    assert result.trace["voted_answer"] is None
+    assert result.trace["fallback_used"] is True
 
 
 @pytest.mark.asyncio

@@ -28,11 +28,13 @@ VALID_METHODS = {
     "multiagent_dynamic_streaming",
     "multiagent_dynamic_no_streaming",
     "multiagent_debate",
+    "majority_vote",
     "plain_llm",
     "single_agent",
     }
 DEBATE_AGENT_COUNT = 3
 DEBATE_ROUNDS = 2
+MAJORITY_VOTE_AGENT_COUNT = 3
 MATH_DEBATE_BENCHMARKS = {"gsm8k", "olymmath"}
 MULTIPLE_CHOICE_DEBATE_BENCHMARKS = {"gpqa", "mmlu_pro"}
 
@@ -259,6 +261,8 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
     if method == "multiagent_debate":
         settings["debate_agents"] = DEBATE_AGENT_COUNT
         settings["debate_rounds"] = DEBATE_ROUNDS
+    if method == "majority_vote":
+        settings["majority_vote_agents"] = MAJORITY_VOTE_AGENT_COUNT
     return settings
 
 
@@ -311,11 +315,13 @@ def method_subagent_mode(method: str) -> str:
         return "none"
     if method == "multiagent_debate":
         return "debate"
+    if method == "majority_vote":
+        return "majority_vote"
     return "dynamic" if "dynamic" in method else "fixed"
 
 
 def method_message_streaming(method: str) -> bool | None:
-    if method in {"plain_llm", "single_agent", "multiagent_debate"}:
+    if method in {"plain_llm", "single_agent", "multiagent_debate", "majority_vote"}:
         return None
     return "no_streaming" not in method
 
@@ -441,6 +447,11 @@ def build_debug_workflow(selected_agents: list[dict[str, Any]], method_trace: di
                 {"node": "debate_agents", "description": "Ran three independent debate agents for two rounds."},
                 {"node": "debate_answer_selection", "description": "Selected the final debate answer from parsed final agent responses."},
             ]
+        if method_trace.get("method") == "majority_vote":
+            return [
+                {"node": "single_agent_votes", "description": "Ran independent single-agent attempts on the same prompt."},
+                {"node": "majority_vote", "description": "Selected the most frequent parsed answer, using first parsed answer as tie-breaker."},
+            ]
         if method_trace.get("prompt") is not None:
             return [
                 {"node": "plain_llm", "description": "Answered the benchmark prompt directly."},
@@ -510,6 +521,43 @@ async def run_single_agent(prompt: str, llm: Any, args: argparse.Namespace) -> t
         "raw_output": raw_output,
         "steps": steps,
         "stopped_reason": stopped_reason,
+    }
+
+
+async def run_majority_vote(prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int, dict[str, Any]]:
+    agent_runs: list[dict[str, Any]] = []
+    raw_outputs: list[str] = []
+    parsed_answers: list[str | None] = []
+
+    for agent_index in range(MAJORITY_VOTE_AGENT_COUNT):
+        raw_output, returncode, trace = await run_single_agent(prompt, llm, args)
+        parsed_answer = extract_debate_answer(raw_output, args)
+        raw_outputs.append(raw_output)
+        parsed_answers.append(parsed_answer)
+        agent_runs.append(
+            {
+                "agent": agent_index + 1,
+                "raw_output": raw_output,
+                "returncode": returncode,
+                "parsed_answer": parsed_answer,
+                "trace": trace,
+            }
+        )
+
+    voted_answer = most_frequent_present_answer(parsed_answers)
+    fallback_used = voted_answer is None
+    final_output = f"Final Answer: {voted_answer}" if voted_answer is not None else raw_outputs[0]
+
+    return final_output, 0, {
+        "method": "majority_vote",
+        "prompt": prompt,
+        "agents": MAJORITY_VOTE_AGENT_COUNT,
+        "agent_runs": agent_runs,
+        "raw_outputs": raw_outputs,
+        "parsed_answers": parsed_answers,
+        "voted_answer": voted_answer,
+        "fallback_used": fallback_used,
+        "raw_output": final_output,
     }
 
 
@@ -742,6 +790,8 @@ async def run_method(method: str, prompt: str, llm: Any, args: argparse.Namespac
         trace = {"prompt": prompt, "raw_output": raw_output}
     elif method == "single_agent":
         raw_output, returncode, trace = await run_single_agent(prompt, metered_llm, args)
+    elif method == "majority_vote":
+        raw_output, returncode, trace = await run_majority_vote(prompt, metered_llm, args)
     elif method == "multiagent_debate":
         raw_output, returncode, trace = await run_multiagent_debate(prompt, metered_llm, args)
     elif method in {"multiagent", "multiagent_streaming"}:
