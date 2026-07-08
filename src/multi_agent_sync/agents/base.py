@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -17,6 +18,9 @@ class StepResult:
     share_finding: str = ""
     confidence: float = 0.7
     local_notes: str = ""
+    status: str = "continue"
+    tool_action: dict[str, Any] | None = None
+    tool_result: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -24,6 +28,9 @@ class StepResult:
             "share_finding": self.share_finding,
             "confidence": self.confidence,
             "local_notes": self.local_notes,
+            "status": self.status,
+            "tool_action": self.tool_action,
+            "tool_result": self.tool_result,
         }
 
 
@@ -46,6 +53,9 @@ class BaseAgent:
     max_events_per_agent: int = 50
     step_delay_seconds: float = 0.2
     enable_message_streaming: bool = True
+    bash_tool: Any | None = None
+    workspace_access: str = "none"
+    tool_observations: list[dict[str, Any]] = field(default_factory=list)
     reactive_steps_enabled: bool = True
     max_reactive_steps: int = 1
     reactive_event_types: set[str] = field(default_factory=lambda: {"finding", "critique", "warning"})
@@ -127,15 +137,20 @@ class BaseAgent:
         await self.publish_event("agent_started", self.assigned_subtask)
 
         last_step_index = 0
+        final_response_received = False
         for step_index in range(1, self.max_steps + 1):
             if time.monotonic() - started_at > self.max_runtime_seconds:
                 await self.publish_warning("Agent runtime limit reached before all steps completed.")
                 break
 
-            await self.run_step_and_record(step_index)
+            result = await self.run_step_and_record(step_index)
             last_step_index = step_index
+            if result.status == "final":
+                final_response_received = True
+                break
 
-        await self.maybe_run_reactive_steps(started_at, last_step_index)
+        if not final_response_received:
+            await self.maybe_run_reactive_steps(started_at, last_step_index)
 
         self.local_output = "\n".join(self.local_notes).strip()
         self.is_done = True
@@ -201,7 +216,11 @@ class BaseAgent:
         )
         response = await self.llm.ainvoke(prompt)
         content = getattr(response, "content", str(response))
-        result = self.parse_step_response(content)
+        result = (
+            await self.parse_and_run_tool_response(content)
+            if self.has_workspace_tool
+            else self.parse_step_response(content)
+        )
         ended_at = time.time()
         self._last_step_trace_data = {
             "inbox_events": relevant_events,
@@ -212,6 +231,10 @@ class BaseAgent:
             "ended_at": ended_at,
         }
         return result
+
+    @property
+    def has_workspace_tool(self) -> bool:
+        return self.bash_tool is not None and self.workspace_access != "none"
 
     async def maybe_run_reactive_steps(self, started_at: float, last_step_index: int) -> int:
         while self.reactive_steps_enabled and self.reactive_steps_used < self.max_reactive_steps:
@@ -255,6 +278,25 @@ class BaseAgent:
         ]
         notes = "\n".join(f"- {note}" for note in self.local_notes[-8:]) or "- None yet."
         events = "\n".join(event_lines) or "- No relevant external findings yet."
+        if self.has_workspace_tool:
+            return render_prompt(
+                "agents/tool_step.j2",
+                agent_name=self.name,
+                task=self.task,
+                role=self.role,
+                description=self.description,
+                rules=self.rules,
+                critical_debate=self.critical_debate,
+                assigned_subtask=self.assigned_subtask,
+                workspace_access=self.workspace_access,
+                is_reactive=is_reactive,
+                reactive_reason=reactive_reason or "important_unused_events_received",
+                step_index=step_index,
+                max_steps=self.max_steps,
+                notes=notes,
+                events=events,
+                tool_observations=self.format_tool_observations(),
+            )
         return render_prompt(
             "agents/step.j2",
             agent_name=self.name,
@@ -271,6 +313,23 @@ class BaseAgent:
             notes=notes,
             events=events,
         )
+
+    def format_tool_observations(self) -> str:
+        if not self.tool_observations:
+            return "- No bash observations yet."
+        lines: list[str] = []
+        for observation in self.tool_observations[-6:]:
+            lines.append(f"- command: {observation.get('command', '')}")
+            lines.append(f"  exit_code: {observation.get('exit_code')}")
+            stdout = str(observation.get("stdout") or "").strip()
+            stderr = str(observation.get("stderr") or "").strip()
+            if stdout:
+                lines.append(f"  stdout: {stdout}")
+            if stderr:
+                lines.append(f"  stderr: {stderr}")
+            if observation.get("timed_out"):
+                lines.append("  timed_out: true")
+        return "\n".join(lines)
 
     async def publish_event(
         self,
@@ -325,6 +384,8 @@ class BaseAgent:
     def parse_step_response(self, content: str) -> StepResult:
         sections: dict[str, list[str]] = {
             "SUMMARY": [],
+            "ACTION": [],
+            "FINAL": [],
             "SHARE_FINDING": [],
             "CONFIDENCE": [],
             "LOCAL_NOTES": [],
@@ -344,12 +405,71 @@ class BaseAgent:
         with contextlib.suppress(ValueError):
             confidence = max(0.0, min(1.0, float(confidence_text)))
 
+        final = "\n".join(sections["FINAL"]).strip()
+        action = self.parse_tool_action("\n".join(sections["ACTION"]).strip())
+        summary = "\n".join(sections["SUMMARY"]).strip() or final or content.strip()
+        status = "final" if final else "continue"
+
         return StepResult(
-            summary="\n".join(sections["SUMMARY"]).strip() or content.strip(),
+            summary=summary,
             share_finding="\n".join(sections["SHARE_FINDING"]).strip(),
             confidence=confidence,
             local_notes="\n".join(sections["LOCAL_NOTES"]).strip(),
+            status=status,
+            tool_action=action,
         )
+
+    async def parse_and_run_tool_response(self, content: str) -> StepResult:
+        parsed = self.parse_step_response(content)
+        if parsed.status == "final":
+            return parsed
+        if not parsed.tool_action:
+            return parsed
+
+        if parsed.tool_action.get("tool") != "bash":
+            return StepResult(
+                summary=f"Unsupported tool requested: {parsed.tool_action.get('tool')}",
+                share_finding=parsed.share_finding,
+                confidence=0.2,
+                local_notes=parsed.local_notes,
+                status="continue",
+                tool_action=parsed.tool_action,
+                tool_result={"error": "unsupported_tool"},
+            )
+
+        command = str(parsed.tool_action.get("command") or "").strip()
+        if not command:
+            return StepResult(
+                summary="Bash tool action was missing a command.",
+                share_finding=parsed.share_finding,
+                confidence=0.2,
+                local_notes=parsed.local_notes,
+                status="continue",
+                tool_action=parsed.tool_action,
+                tool_result={"error": "missing_command"},
+            )
+
+        result = await self.bash_tool.run(command)
+        result_payload = result.as_dict() if hasattr(result, "as_dict") else dict(result)
+        self.tool_observations.append(result_payload)
+        return StepResult(
+            summary=parsed.summary or f"Ran bash command in Docker: {command}",
+            share_finding=parsed.share_finding,
+            confidence=parsed.confidence,
+            local_notes=parsed.local_notes,
+            status="continue",
+            tool_action=parsed.tool_action,
+            tool_result=result_payload,
+        )
+
+    def parse_tool_action(self, text: str) -> dict[str, Any] | None:
+        if not text:
+            return None
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            return {"tool": "parse_error", "raw": text}
+        return value if isinstance(value, dict) else {"tool": "parse_error", "raw": text}
 
     def _default_assignment(self) -> dict[str, Any]:
         return {

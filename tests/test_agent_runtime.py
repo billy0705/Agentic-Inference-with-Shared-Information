@@ -8,7 +8,9 @@ from multi_agent_sync.agents.critic_agent import CriticAgent
 from multi_agent_sync.agents.research_agent import ResearchAgent
 from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
+from multi_agent_sync.tools.bash import BashTool
 from multi_agent_sync.tracing.trace import TraceLogger
+from multi_agent_sync.workspace.docker import BashResult, DockerWorkspace
 
 
 @dataclass
@@ -40,6 +42,47 @@ class FakeLLM:
                 "LOCAL_NOTES:\nCheck concurrency and validation failure paths."
             )
         return FakeResponse("SUMMARY:\nNo-op.\nSHARE_FINDING:\n\nCONFIDENCE:\n0.5\nLOCAL_NOTES:\n")
+
+
+class ToolLoopLLM:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            assert "Docker workspace" in prompt
+            return FakeResponse(
+                'ACTION:\n{"tool": "bash", "command": "printf hello"}\n'
+                "SHARE_FINDING:\nInspecting the workspace from Docker.\n"
+                "CONFIDENCE:\n0.8\n"
+                "LOCAL_NOTES:\nNeed the command output before finishing."
+            )
+        assert "printf hello" in prompt
+        assert "hello from docker" in prompt
+        return FakeResponse(
+            "FINAL:\nThe Docker command output was observed and the agent can finish.\n"
+            "SHARE_FINDING:\nObserved Docker command output successfully.\n"
+            "CONFIDENCE:\n0.9\n"
+            "LOCAL_NOTES:\nTool loop completed."
+        )
+
+
+class AgentFakeDockerWorkspace(DockerWorkspace):
+    def __init__(self) -> None:
+        super().__init__(container_name="agent-fake-container")
+        self.commands: list[str] = []
+
+    async def run_bash(self, command: str, *, timeout_seconds: float | None = None) -> BashResult:
+        self.commands.append(command)
+        return BashResult(
+            command=command,
+            exit_code=0,
+            stdout="hello from docker\n",
+            stderr="",
+            timed_out=False,
+            container_name=self.container_name,
+        )
 
 
 def build_agents(streamer: InMemoryEventStreamer, run_id: str = "run-agent-test"):
@@ -147,3 +190,33 @@ async def test_agent_stops_processing_events_after_done():
     assert receipt["event_id"] == late_event.event_id
     assert receipt["accepted"] is False
     assert receipt["ignored_reason"] == "agent_done"
+
+
+@pytest.mark.asyncio
+async def test_coding_agent_uses_docker_bash_observation_in_tool_loop():
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    workspace = AgentFakeDockerWorkspace()
+    agent = CodingAgent(
+        run_id="run-tool-loop",
+        task="Inspect a file and finish.",
+        assigned_subtask="Use bash in Docker to inspect the workspace.",
+        llm=ToolLoopLLM(),
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        bash_tool=BashTool(workspace),
+        workspace_access="write",
+        max_steps=2,
+        step_delay_seconds=0,
+    )
+
+    output = await agent.run()
+
+    assert workspace.commands == ["printf hello"]
+    assert "The Docker command output was observed" in output
+    trace = trace_logger.export()["CodingAgent"]
+    first_step = trace["steps"][0]
+    second_step = trace["steps"][1]
+    assert first_step["parsed_output"]["tool_action"]["command"] == "printf hello"
+    assert first_step["parsed_output"]["tool_result"]["stdout"] == "hello from docker\n"
+    assert second_step["parsed_output"]["status"] == "final"

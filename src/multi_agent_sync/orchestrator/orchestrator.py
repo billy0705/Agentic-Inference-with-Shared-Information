@@ -20,6 +20,7 @@ class SelectedAgent(TypedDict, total=False):
     description: str
     rules: list[str]
     critical_debate: bool
+    workspace_access: str
 
 
 class CollaborationProtocol(TypedDict):
@@ -313,6 +314,7 @@ def normalize_dynamic_selected_agents(value: Any) -> list[SelectedAgent]:
                 "subtask": _clean_text(item.get("subtask")) or dynamic_default_subtask(name, critical_debate),
                 "expected_output": _clean_text(item.get("expected_output")) or dynamic_default_expected_output(critical_debate),
                 "critical_debate": critical_debate,
+                "workspace_access": normalize_workspace_access(item.get("workspace_access")),
             }
         )
         seen.add(name)
@@ -339,6 +341,11 @@ def normalize_rules(value: Any) -> list[str]:
         return []
     rules = [_clean_text(rule) for rule in value]
     return [rule for rule in rules if rule][:8]
+
+
+def normalize_workspace_access(value: Any) -> str:
+    access = _clean_text(value).lower()
+    return access if access in {"none", "read", "write"} else "none"
 
 
 def is_valid_dynamic_agent_pool(selected_agents: list[SelectedAgent]) -> bool:
@@ -417,6 +424,7 @@ def create_dynamic_fallback_plan(task: str, reason: str | None = None) -> Orches
                 "subtask": dynamic_default_subtask("TaskWorker", False),
                 "expected_output": dynamic_default_expected_output(False),
                 "critical_debate": False,
+                "workspace_access": "write" if any(keyword in task.lower() for keyword in CODE_KEYWORDS) else "none",
             },
             {
                 "name": "CriticalDebateAgent",
@@ -426,6 +434,7 @@ def create_dynamic_fallback_plan(task: str, reason: str | None = None) -> Orches
                 "subtask": dynamic_default_subtask("CriticalDebateAgent", True),
                 "expected_output": dynamic_default_expected_output(True),
                 "critical_debate": True,
+                "workspace_access": "none",
             },
         ],
         "collaboration_protocol": default_collaboration_protocol(),
@@ -531,6 +540,7 @@ def selected_agents_to_assignments(plan: OrchestratorPlan, max_steps: int = 3) -
             "description": agent.get("description", ""),
             "rules": agent.get("rules", []),
             "critical_debate": agent.get("critical_debate", False),
+            "workspace_access": agent.get("workspace_access", "none"),
         }
         for agent in plan["selected_agents"]
     ]

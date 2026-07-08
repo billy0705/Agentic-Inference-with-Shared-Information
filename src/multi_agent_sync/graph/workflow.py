@@ -42,6 +42,8 @@ async def run_workflow(
     enable_agent_message_streaming: bool = True,
     stream_to_console: bool = True,
     no_color: bool = False,
+    enable_workspace_tools: bool = False,
+    docker_workspace: Any | None = None,
 ) -> GraphState:
     workflow = build_workflow()
     event_streamer = InMemoryEventStreamer()
@@ -69,7 +71,10 @@ async def run_workflow(
         "enable_agent_message_streaming": enable_agent_message_streaming,
         "stream_to_console": stream_to_console,
         "no_color": no_color,
+        "enable_workspace_tools": enable_workspace_tools,
     }
     if llm is not None:
         initial_state["llm"] = llm
+    if docker_workspace is not None:
+        initial_state["docker_workspace"] = docker_workspace
     return await workflow.ainvoke(initial_state)

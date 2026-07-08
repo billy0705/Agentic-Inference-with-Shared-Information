@@ -70,3 +70,50 @@ async def test_async_main_passes_dynamic_subagent_mode_to_workflow(monkeypatch, 
     await cli.async_main(args)
 
     assert captured_kwargs["subagent_mode"] == "dynamic"
+
+
+@pytest.mark.asyncio
+async def test_async_main_creates_and_cleans_docker_workspace(monkeypatch, tmp_path):
+    captured_create_kwargs = {}
+    captured_workflow_kwargs = {}
+    cleanup_called = False
+
+    class FakeDockerWorkspace:
+        @classmethod
+        async def create(cls, **kwargs):
+            captured_create_kwargs.update(kwargs)
+            return cls()
+
+        async def cleanup(self):
+            nonlocal cleanup_called
+            cleanup_called = True
+
+    async def fake_run_workflow(**kwargs):
+        captured_workflow_kwargs.update(kwargs)
+        return {"final_answer": "Done."}
+
+    monkeypatch.setattr(cli, "DockerWorkspace", FakeDockerWorkspace)
+    monkeypatch.setattr(cli, "get_llm", lambda model=None, openai=True: "fake-llm")
+    monkeypatch.setattr(cli, "run_workflow", fake_run_workflow)
+    monkeypatch.setattr(cli, "save_run_artifacts", lambda state, root_dir: tmp_path / "run")
+
+    args = cli.build_parser().parse_args(
+        [
+            "--docker-workspace",
+            "--workspace-image",
+            "python:3.12",
+            "--workspace-source",
+            str(tmp_path),
+            "Fix",
+            "the",
+            "repo",
+        ]
+    )
+
+    await cli.async_main(args)
+
+    assert captured_create_kwargs["image"] == "python:3.12"
+    assert captured_create_kwargs["source_path"] == str(tmp_path)
+    assert captured_workflow_kwargs["enable_workspace_tools"] is True
+    assert captured_workflow_kwargs["docker_workspace"] is not None
+    assert cleanup_called is True
