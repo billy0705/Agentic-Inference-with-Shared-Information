@@ -71,7 +71,7 @@ def test_build_run_evaluation_command_targets_verified_dataset(tmp_path):
     args = argparse.Namespace(
         swebench_max_workers=2,
         swebench_run_id="run-123",
-        swebench_namespace="",
+        swebench_namespace="none",
         swebench_instance_ids="repo__repo-1,repo__repo-2",
     )
     predictions_path = tmp_path / "predictions.jsonl"
@@ -88,6 +88,7 @@ def test_build_run_evaluation_command_targets_verified_dataset(tmp_path):
     assert "--run_id" in command
     assert "run-123" in command
     assert "--namespace" in command
-    assert "" in command
+    assert "none" in command
     assert "--instance_ids" in command
-    assert "repo__repo-1,repo__repo-2" in command
+    instance_id_index = command.index("--instance_ids")
+    assert command[instance_id_index + 1 : instance_id_index + 3] == ["repo__repo-1", "repo__repo-2"]

@@ -58,8 +58,13 @@ def build_run_evaluation_command(predictions_path: Path, args: Any) -> list[str]
         command.extend(["--namespace", str(namespace)])
     instance_ids = str(getattr(args, "swebench_instance_ids", "") or "").strip()
     if instance_ids:
-        command.extend(["--instance_ids", instance_ids])
+        command.append("--instance_ids")
+        command.extend(split_instance_ids(instance_ids))
     return command
+
+
+def split_instance_ids(value: str) -> list[str]:
+    return [item.strip() for item in value.replace(",", " ").split() if item.strip()]
 
 
 def run_official_evaluation(command: list[str], artifact_path: Path) -> dict[str, Any]:
