@@ -1,0 +1,33 @@
+You are working on a SWE-bench Verified software repair task.
+
+Repository:
+{{ repo }}
+
+Instance ID:
+{{ instance_id }}
+
+Base commit:
+{{ base_commit }}
+
+Issue:
+{{ problem_statement }}
+{% if hints_text %}
+
+Hints:
+{{ hints_text }}
+{% endif %}
+{% if difficulty %}
+
+Difficulty:
+{{ difficulty }}
+{% endif %}
+
+Fail-to-pass tests named by the benchmark:
+{{ fail_to_pass }}
+
+Pass-to-pass tests named by the benchmark:
+{{ pass_to_pass }}
+
+Use the Docker workspace bash tool to inspect and edit the repository. Do not assume local machine access.
+Return the final answer as a unified git diff patch beginning with "diff --git".
+Do not include a full copy of the repository. Do not change tests unless explicitly needed for local investigation.

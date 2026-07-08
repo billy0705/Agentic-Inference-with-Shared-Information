@@ -53,7 +53,12 @@ async def run_multiagent(
                 "final_candidate_path": workflow_config.final_candidate_path,
                 "seed_files": sorted(workflow_config.seed_files),
             }
-            if workflow_config.final_candidate_path:
+            if workflow_config.final_candidate_exporter is not None:
+                final_candidate = await workflow_config.final_candidate_exporter(docker_workspace)
+                trace["workspace"]["final_candidate"] = final_candidate
+                if final_candidate.strip():
+                    raw_output = f"{raw_output}\n\n```diff\n{final_candidate.strip()}\n```"
+            elif workflow_config.final_candidate_path:
                 final_candidate = await docker_workspace.read_text(workflow_config.final_candidate_path)
                 trace["workspace"]["final_candidate"] = final_candidate
                 raw_output = f"{raw_output}\n\n```lean4\n{final_candidate.strip()}\n```"

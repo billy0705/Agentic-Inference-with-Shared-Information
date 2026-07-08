@@ -9,6 +9,7 @@ import pytest
 
 from multi_agent_sync.evaluation import main as evaluation
 from multi_agent_sync.evaluation import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
+from multi_agent_sync.evaluation.benchmarks import swe_bench_verified
 from multi_agent_sync.evaluation.baselines import multiagent_sync
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
@@ -69,6 +70,16 @@ class RunnerFakeDockerWorkspace:
 
     async def read_text(self, path: str) -> str:
         return self.files[path]
+
+    async def run_bash(self, command: str, *, timeout_seconds=None):
+        return types.SimpleNamespace(
+            command=command,
+            exit_code=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            container_name="fake",
+        )
 
     async def cleanup(self) -> None:
         self.cleaned = True
@@ -208,6 +219,157 @@ def test_parser_accepts_olymmath_benchmarks():
     assert "olymmath_lean" in evaluation.get_benchmarks()
 
 
+def test_parser_accepts_swe_bench_verified_benchmark():
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "swe_bench_verified",
+            "--methods",
+            "multiagent_streaming",
+            "--limit",
+            "1",
+            "--swebench-agent-workspace",
+            "--swebench-run-harness",
+            "--swebench-max-workers",
+            "2",
+        ]
+    )
+
+    assert args.benchmark == "swe_bench_verified"
+    assert args.swebench_agent_workspace is True
+    assert args.swebench_run_harness is True
+    assert args.swebench_max_workers == 2
+    assert "swe_bench_verified" in evaluation.get_benchmarks()
+
+
+def test_swe_bench_verified_prompt_omits_gold_patches():
+    row = {
+        "repo": "astropy/astropy",
+        "instance_id": "astropy__astropy-12907",
+        "base_commit": "d16bfe05a744909de4b27f5875fe0d4ed41ce607",
+        "problem_statement": "Fix separability_matrix for nested CompoundModels.",
+        "hints_text": "Look at separable.py.",
+        "patch": "GOLD_PATCH_SHOULD_NOT_APPEAR",
+        "test_patch": "GOLD_TEST_PATCH_SHOULD_NOT_APPEAR",
+        "FAIL_TO_PASS": '["test_new"]',
+        "PASS_TO_PASS": '["test_existing"]',
+        "difficulty": "15 min - 1 hour",
+    }
+
+    prompt, gold = swe_bench_verified.build_prompt(row, random.Random(0))
+
+    assert gold == "patch_required"
+    assert "Fix separability_matrix" in prompt
+    assert "astropy/astropy" in prompt
+    assert "d16bfe05a744909de4b27f5875fe0d4ed41ce607" in prompt
+    assert "GOLD_PATCH_SHOULD_NOT_APPEAR" not in prompt
+    assert "GOLD_TEST_PATCH_SHOULD_NOT_APPEAR" not in prompt
+    assert "diff --git" in prompt
+
+
+def test_swe_bench_verified_extracts_prediction_patch_and_scores_prediction_only():
+    raw_output = (
+        "I changed the implementation.\n\n"
+        "```diff\n"
+        "diff --git a/pkg/mod.py b/pkg/mod.py\n"
+        "--- a/pkg/mod.py\n"
+        "+++ b/pkg/mod.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+        "```\n"
+    )
+    row = {"instance_id": "repo__repo-1"}
+
+    score = swe_bench_verified.score_response(row, raw_output, argparse.Namespace())
+
+    assert score.pred == "patch_produced"
+    assert score.correct is False
+    assert score.metadata["instance_id"] == "repo__repo-1"
+    assert score.metadata["prediction_only"] is True
+    assert score.metadata["model_patch"].startswith("diff --git")
+
+
+@pytest.mark.asyncio
+async def test_swe_bench_verified_multiagent_workspace_exports_git_diff(monkeypatch):
+    RunnerFakeDockerWorkspace.created = []
+    captured_workflow_kwargs = {}
+
+    async def fake_run_workflow(**kwargs):
+        captured_workflow_kwargs.update(kwargs)
+        workspace = kwargs["docker_workspace"]
+        workspace.files["__git_diff__"] = (
+            "diff --git a/pkg/mod.py b/pkg/mod.py\n"
+            "--- a/pkg/mod.py\n"
+            "+++ b/pkg/mod.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        return {
+            "final_answer": "Agent finished.",
+            "run_id": "run",
+            "mode": "multi_agent",
+            "subagent_mode": "fixed",
+            "agent_traces": {},
+        }
+
+    async def fake_run_bash(self, command, *, timeout_seconds=None):
+        if command == "git diff -- .":
+            return types.SimpleNamespace(
+                command=command,
+                exit_code=0,
+                stdout=self.files["__git_diff__"],
+                stderr="",
+                timed_out=False,
+                container_name="fake",
+            )
+        return types.SimpleNamespace(
+            command=command,
+            exit_code=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            container_name="fake",
+        )
+
+    monkeypatch.setattr(multiagent_sync, "DockerWorkspace", RunnerFakeDockerWorkspace)
+    monkeypatch.setattr(multiagent_sync, "run_workflow", fake_run_workflow)
+    monkeypatch.setattr(RunnerFakeDockerWorkspace, "run_bash", fake_run_bash)
+
+    row = {
+        "repo": "owner/repo",
+        "instance_id": "owner__repo-1",
+        "base_commit": "a" * 40,
+        "problem_statement": "Fix the bug.",
+        "hints_text": "",
+        "FAIL_TO_PASS": "[]",
+        "PASS_TO_PASS": "[]",
+    }
+    workflow_config = swe_bench_verified.build_workflow_config(row, argparse.Namespace())
+    args = argparse.Namespace(
+        max_steps=2,
+        total_runtime_timeout=5,
+        synthesis_timeout=1,
+        workspace_image="python:3.12",
+        workspace_command_timeout=30,
+        workspace_output_limit=12000,
+    )
+
+    raw_output, returncode, trace = await runner.run_multiagent(
+        "Fix the bug.",
+        UsageLLM([]),
+        args,
+        workflow_config=workflow_config,
+    )
+
+    assert returncode == 0
+    assert captured_workflow_kwargs["enable_workspace_tools"] is True
+    assert "diff --git a/pkg/mod.py b/pkg/mod.py" in raw_output
+    assert trace["workspace"]["final_candidate_path"] == "__git_diff__"
+    assert trace["workspace"]["final_candidate"].startswith("diff --git")
+
+
 def test_parser_rejects_removed_local_lean_verifier_flags():
     with pytest.raises(SystemExit):
         evaluation.build_parser().parse_args(["--benchmark", "ma_proofbench", "--lean-verifier", "local"])
@@ -276,6 +438,60 @@ async def test_run_evaluation_sets_max_tokens_to_16384(monkeypatch, tmp_path):
     await evaluation.run_evaluation(args)
 
     assert captured_llm_kwargs == {"model": "openai/gpt-oss-120b", "openai": True, "max_tokens": 16384}
+
+
+@pytest.mark.asyncio
+async def test_run_evaluation_writes_swebench_predictions_jsonl(monkeypatch, tmp_path):
+    benchmark = BenchmarkSpec(
+        name="swe_bench_verified",
+        display_name="SWE-bench Verified",
+        default_output_filename="swe_bench_verified_results.csv",
+        load_items=lambda args: [
+            {
+                "repo": "owner/repo",
+                "instance_id": "owner__repo-1",
+                "base_commit": "a" * 40,
+                "problem_statement": "Fix the bug.",
+            }
+        ],
+        build_prompt=lambda row, rng: ("Fix the bug.", "patch_required"),
+        extract_answer=swe_bench_verified.extract_answer,
+        score_response=swe_bench_verified.score_response,
+    )
+
+    async def fake_run_method(method, prompt, llm, args, **kwargs):
+        return runner.RunResult(
+            raw_output="```diff\ndiff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n```",
+            returncode=0,
+            elapsed_seconds=0.1,
+            trace={},
+        )
+
+    monkeypatch.setattr(evaluation, "get_benchmarks", lambda: {"swe_bench_verified": benchmark})
+    monkeypatch.setattr(evaluation, "get_llm", lambda model=None, openai=True, max_tokens=None: "fake-llm")
+    monkeypatch.setattr(runner, "run_method", fake_run_method)
+    monkeypatch.setattr(runner, "progress", lambda items, desc: items)
+    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "fake-model")
+
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "swe_bench_verified",
+            "--methods",
+            "multiagent_streaming",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    await evaluation.run_evaluation(args)
+
+    prediction_paths = list(tmp_path.rglob("predictions_multiagent_streaming.jsonl"))
+    assert len(prediction_paths) == 1
+    prediction = json.loads(prediction_paths[0].read_text(encoding="utf-8").splitlines()[0])
+    assert prediction["instance_id"] == "owner__repo-1"
+    assert prediction["model_name_or_path"] == "fake-model"
+    assert prediction["model_patch"].startswith("diff --git")
 
 
 @pytest.mark.asyncio

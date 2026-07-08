@@ -7,7 +7,8 @@ import time
 from typing import Any
 
 from multi_agent_sync.evaluation import runner
-from multi_agent_sync.evaluation.benchmarks import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
+from multi_agent_sync.evaluation.benchmarks import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath, swe_bench_verified
+from multi_agent_sync.evaluation import swebench_harness
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
 
@@ -27,6 +28,7 @@ def get_benchmarks() -> dict[str, BenchmarkSpec]:
         mmlu_pro.build_benchmark(),
         olymmath.build_benchmark(),
         olymmath.build_lean_benchmark(),
+        swe_bench_verified.build_benchmark(),
     ]
     return {benchmark.name: benchmark for benchmark in benchmarks}
 
@@ -110,6 +112,39 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Enable Docker workspace editing plus Kimina feedback for Lean multi-agent methods.",
+    )
+    parser.add_argument(
+        "--swebench-agent-workspace",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable Docker workspace editing and git diff export for SWE-bench multi-agent methods.",
+    )
+    parser.add_argument(
+        "--swebench-run-harness",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run the official SWE-bench Docker harness after writing prediction JSONL files.",
+    )
+    parser.add_argument(
+        "--swebench-max-workers",
+        type=int,
+        default=1,
+        help="Maximum workers for official SWE-bench harness evaluation.",
+    )
+    parser.add_argument(
+        "--swebench-run-id",
+        default=None,
+        help="Optional run_id passed to the official SWE-bench harness.",
+    )
+    parser.add_argument(
+        "--swebench-namespace",
+        default=None,
+        help="Optional Docker image namespace passed to SWE-bench harness. Use empty string on Mac ARM to build locally.",
+    )
+    parser.add_argument(
+        "--swebench-instance-ids",
+        default="",
+        help="Optional comma-separated instance ids passed to SWE-bench harness.",
     )
     parser.add_argument(
         "--workspace-image",
@@ -268,14 +303,42 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
             runner.print_result(result)
 
     summary = runner.summarize_results(results)
+    postprocess_swebench_predictions(benchmark, results, methods, args, run_id)
     runner.print_summary(benchmark, summary, output_path)
     return results
+
+
+def postprocess_swebench_predictions(
+    benchmark: BenchmarkSpec,
+    results: list[dict[str, Any]],
+    methods: list[str],
+    args: argparse.Namespace,
+    run_id: str,
+) -> None:
+    if benchmark.name != "swe_bench_verified":
+        return
+
+    trace_root = runner.resolve_json_trace_root(args, run_id)
+    model_name = runner.resolve_model_name(args)
+    for method in methods:
+        predictions = swebench_harness.build_predictions(results, method=method, model_name_or_path=model_name)
+        if not predictions:
+            continue
+        predictions_path = trace_root / f"predictions_{runner.safe_filename(method)}.jsonl"
+        swebench_harness.write_predictions_jsonl(predictions_path, predictions)
+        if getattr(args, "swebench_run_harness", False):
+            command = swebench_harness.build_run_evaluation_command(predictions_path, args)
+            swebench_harness.run_official_evaluation(command, trace_root / f"harness_{runner.safe_filename(method)}.json")
 
 
 def build_method_workflow_config(benchmark: BenchmarkSpec, row: dict[str, Any], method: str, args: argparse.Namespace):
     if method in {"plain_llm", "single_agent"}:
         return None
-    if not getattr(args, "lean_agent_workspace", False):
+    workspace_enabled = (
+        getattr(args, "lean_agent_workspace", False)
+        or (benchmark.name == "swe_bench_verified" and getattr(args, "swebench_agent_workspace", False))
+    )
+    if not workspace_enabled:
         return None
     if benchmark.build_workflow_config is None:
         return None
