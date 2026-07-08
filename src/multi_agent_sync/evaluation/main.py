@@ -105,6 +105,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum Kimina Lean Server workers per verification request.",
     )
     parser.add_argument(
+        "--lean-agent-workspace",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable Docker workspace editing plus Kimina feedback for Lean multi-agent methods.",
+    )
+    parser.add_argument(
+        "--workspace-image",
+        default="python:3.12",
+        help="Docker image for benchmark agent workspaces when enabled.",
+    )
+    parser.add_argument(
+        "--workspace-command-timeout",
+        type=float,
+        default=60.0,
+        help="Per-command timeout in seconds for Docker benchmark workspaces.",
+    )
+    parser.add_argument(
+        "--workspace-output-limit",
+        type=int,
+        default=12000,
+        help="Maximum stdout/stderr characters retained per Docker workspace command.",
+    )
+    parser.add_argument(
         "--local-model",
         action="store_true",
         help="Use local Ollama instead of the OpenAI-compatible API provider.",
@@ -161,7 +184,11 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
             started_at = time.perf_counter()
             method_trace: dict[str, Any] = {}
             try:
-                run_result = await runner.run_method(method, prompt, llm, args)
+                workflow_config = build_method_workflow_config(benchmark, row_dict, method, args)
+                if workflow_config is None:
+                    run_result = await runner.run_method(method, prompt, llm, args)
+                else:
+                    run_result = await runner.run_method(method, prompt, llm, args, workflow_config=workflow_config)
                 raw_output = run_result.raw_output
                 returncode = run_result.returncode
                 elapsed_seconds = run_result.elapsed_seconds
@@ -242,6 +269,16 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
     summary = runner.summarize_results(results)
     runner.print_summary(benchmark, summary, output_path)
     return results
+
+
+def build_method_workflow_config(benchmark: BenchmarkSpec, row: dict[str, Any], method: str, args: argparse.Namespace):
+    if method in {"plain_llm", "single_agent"}:
+        return None
+    if not getattr(args, "lean_agent_workspace", False):
+        return None
+    if benchmark.build_workflow_config is None:
+        return None
+    return benchmark.build_workflow_config(row, args)
 
 
 async def async_main(argv: list[str] | None = None) -> None:

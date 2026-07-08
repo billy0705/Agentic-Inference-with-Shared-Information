@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -85,6 +86,36 @@ class DockerWorkspace:
             timed_out=timed_out,
             container_name=self.container_name,
         )
+
+    async def read_text(self, path: str) -> str:
+        result = await self.run_bash(f"cat {shlex.quote(path)}")
+        if result.exit_code != 0:
+            raise RuntimeError(f"Could not read {path} from Docker workspace: {result.stderr or result.stdout}")
+        return result.stdout
+
+    async def write_text(self, path: str, content: str) -> None:
+        quoted_path = shlex.quote(path)
+        quoted_parent = shlex.quote(str(Path(path).parent))
+        process = await asyncio.create_subprocess_exec(
+            "docker",
+            "exec",
+            "-i",
+            "-w",
+            self.workdir,
+            self.container_name,
+            "bash",
+            "-lc",
+            f"mkdir -p {quoted_parent} && cat > {quoted_path}",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = await process.communicate(content.encode("utf-8"))
+        exit_code = int(process.returncode or 0)
+        if exit_code != 0:
+            stdout = self._decode_and_limit(stdout_bytes)
+            stderr = self._decode_and_limit(stderr_bytes)
+            raise RuntimeError(f"Could not write {path} in Docker workspace: {stderr or stdout}")
 
     async def cleanup(self) -> None:
         await self._docker("rm", "-f", self.container_name, check=False)

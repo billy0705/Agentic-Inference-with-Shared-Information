@@ -106,6 +106,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     subagent_mode = state.get("subagent_mode", "fixed")
     enable_workspace_tools = bool(state.get("enable_workspace_tools", False))
     docker_workspace = state.get("docker_workspace")
+    feedback_tool = state.get("feedback_tool")
     if enable_workspace_tools and docker_workspace is None:
         raise RuntimeError("Workspace tools were enabled, but no DockerWorkspace was provided.")
 
@@ -142,6 +143,8 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
         }
         if enable_workspace_tools and assignment.get("workspace_access") != "none":
             agent_kwargs["bash_tool"] = BashTool(docker_workspace)
+            if feedback_tool is not None:
+                agent_kwargs["feedback_tool"] = feedback_tool
         if subagent_mode == "dynamic":
             agent_kwargs.update(
                 {
@@ -207,8 +210,11 @@ def apply_workspace_access_policy(
         return normalized
 
     if subagent_mode == "fixed":
+        writer_name = "CodingAgent" if any(assignment.get("agent_name") == "CodingAgent" for assignment in normalized) else None
+        if writer_name is None and normalized:
+            writer_name = str(normalized[0].get("agent_name"))
         for assignment in normalized:
-            assignment["workspace_access"] = "write" if assignment.get("agent_name") == "CodingAgent" else "none"
+            assignment["workspace_access"] = "write" if assignment.get("agent_name") == writer_name else "none"
         return normalized
 
     writer_granted = False

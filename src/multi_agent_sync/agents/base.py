@@ -54,6 +54,7 @@ class BaseAgent:
     step_delay_seconds: float = 0.2
     enable_message_streaming: bool = True
     bash_tool: Any | None = None
+    feedback_tool: Any | None = None
     workspace_access: str = "none"
     tool_observations: list[dict[str, Any]] = field(default_factory=list)
     reactive_steps_enabled: bool = True
@@ -296,6 +297,7 @@ class BaseAgent:
                 notes=notes,
                 events=events,
                 tool_observations=self.format_tool_observations(),
+                feedback_tool_name=getattr(self.feedback_tool, "name", "") if self.feedback_tool is not None else "",
             )
         return render_prompt(
             "agents/step.j2",
@@ -319,14 +321,28 @@ class BaseAgent:
             return "- No bash observations yet."
         lines: list[str] = []
         for observation in self.tool_observations[-6:]:
-            lines.append(f"- command: {observation.get('command', '')}")
-            lines.append(f"  exit_code: {observation.get('exit_code')}")
+            if observation.get("command") is not None:
+                lines.append(f"- command: {observation.get('command', '')}")
+                lines.append(f"  exit_code: {observation.get('exit_code')}")
+            else:
+                lines.append(f"- tool: {observation.get('tool', '')}")
+                if observation.get("path"):
+                    lines.append(f"  path: {observation.get('path')}")
+                if observation.get("passed") is not None:
+                    lines.append(f"  passed: {observation.get('passed')}")
+                if observation.get("backend"):
+                    lines.append(f"  backend: {observation.get('backend')}")
+                if observation.get("returncode") is not None:
+                    lines.append(f"  returncode: {observation.get('returncode')}")
             stdout = str(observation.get("stdout") or "").strip()
             stderr = str(observation.get("stderr") or "").strip()
+            verifier_output = str(observation.get("verifier_output") or "").strip()
             if stdout:
                 lines.append(f"  stdout: {stdout}")
             if stderr:
                 lines.append(f"  stderr: {stderr}")
+            if verifier_output:
+                lines.append(f"  verifier_output: {verifier_output}")
             if observation.get("timed_out"):
                 lines.append("  timed_out: true")
         return "\n".join(lines)
@@ -425,6 +441,29 @@ class BaseAgent:
             return parsed
         if not parsed.tool_action:
             return parsed
+
+        if parsed.tool_action.get("tool") == "verify_candidate":
+            if self.feedback_tool is None:
+                return StepResult(
+                    summary="Lean verifier feedback tool was requested but is not configured.",
+                    share_finding=parsed.share_finding,
+                    confidence=0.2,
+                    local_notes=parsed.local_notes,
+                    status="continue",
+                    tool_action=parsed.tool_action,
+                    tool_result={"error": "missing_feedback_tool"},
+                )
+            result_payload = await self.feedback_tool.run(path=parsed.tool_action.get("path"))
+            self.tool_observations.append(result_payload)
+            return StepResult(
+                summary=parsed.summary or "Ran Lean verifier feedback tool.",
+                share_finding=parsed.share_finding,
+                confidence=parsed.confidence,
+                local_notes=parsed.local_notes,
+                status="continue",
+                tool_action=parsed.tool_action,
+                tool_result=result_payload,
+            )
 
         if parsed.tool_action.get("tool") != "bash":
             return StepResult(

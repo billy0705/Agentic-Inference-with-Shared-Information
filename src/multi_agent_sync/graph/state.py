@@ -32,3 +32,4 @@ class GraphState(TypedDict):
     no_color: NotRequired[bool]
     enable_workspace_tools: NotRequired[bool]
     docker_workspace: NotRequired[Any]
+    feedback_tool: NotRequired[Any]

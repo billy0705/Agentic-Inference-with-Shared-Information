@@ -15,9 +15,10 @@ from typing import Any
 from uuid import uuid4
 
 from multi_agent_sync.llm import get_openai_base_url
-from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
+from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec, BenchmarkWorkflowConfig
 from multi_agent_sync.graph.workflow import run_workflow
 from multi_agent_sync.prompts import render_prompt
+from multi_agent_sync.workspace.docker import DockerWorkspace
 
 
 DEFAULT_OUTPUT_DIR = Path("output")
@@ -223,6 +224,8 @@ def build_run_config(
             "kimina_host": getattr(args, "kimina_host", None),
             "kimina_port": getattr(args, "kimina_port", None),
             "kimina_max_workers": getattr(args, "kimina_max_workers", None),
+            "lean_agent_workspace": getattr(args, "lean_agent_workspace", None),
+            "workspace_image": getattr(args, "workspace_image", None),
             "max_steps": args.max_steps,
             "total_runtime_timeout": args.total_runtime_timeout,
             "synthesis_timeout": args.synthesis_timeout,
@@ -247,6 +250,8 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "kimina_host": getattr(args, "kimina_host", None),
         "kimina_port": getattr(args, "kimina_port", None),
         "kimina_max_workers": getattr(args, "kimina_max_workers", None),
+        "lean_agent_workspace": getattr(args, "lean_agent_workspace", None),
+        "workspace_image": getattr(args, "workspace_image", None),
         "total_runtime_timeout": args.total_runtime_timeout,
         "synthesis_timeout": args.synthesis_timeout,
         "save_json_traces": args.save_json_traces,
@@ -542,19 +547,52 @@ async def run_multiagent(
     *,
     enable_agent_message_streaming: bool = True,
     subagent_mode: str = "fixed",
+    workflow_config: BenchmarkWorkflowConfig | None = None,
 ) -> tuple[str, int, dict[str, Any]]:
-    state = await run_workflow(
-        task=prompt,
-        llm=llm,
-        subagent_mode=subagent_mode,
-        max_steps_per_agent=args.max_steps,
-        total_runtime_timeout=args.total_runtime_timeout,
-        synthesis_timeout=args.synthesis_timeout,
-        enable_agent_message_streaming=enable_agent_message_streaming,
-        stream_to_console=False,
-        no_color=True,
-    )
-    return state["final_answer"], 0, extract_workflow_trace(state)
+    docker_workspace = None
+    try:
+        feedback_tool = None
+        if workflow_config is not None:
+            docker_workspace = await DockerWorkspace.create(
+                image=getattr(args, "workspace_image", "python:3.12"),
+                source_path=None,
+                default_timeout_seconds=getattr(args, "workspace_command_timeout", 60.0),
+                output_char_limit=getattr(args, "workspace_output_limit", 12000),
+            )
+            for path, content in workflow_config.seed_files.items():
+                await docker_workspace.write_text(path, content)
+            if workflow_config.feedback_tool_factory is not None:
+                feedback_tool = workflow_config.feedback_tool_factory(docker_workspace)
+
+        state = await run_workflow(
+            task=prompt,
+            llm=llm,
+            subagent_mode=subagent_mode,
+            max_steps_per_agent=args.max_steps,
+            total_runtime_timeout=args.total_runtime_timeout,
+            synthesis_timeout=args.synthesis_timeout,
+            enable_agent_message_streaming=enable_agent_message_streaming,
+            stream_to_console=False,
+            no_color=True,
+            enable_workspace_tools=workflow_config is not None,
+            docker_workspace=docker_workspace,
+            feedback_tool=feedback_tool,
+        )
+        raw_output = state["final_answer"]
+        trace = extract_workflow_trace(state)
+        if workflow_config is not None and docker_workspace is not None:
+            trace["workspace"] = {
+                "final_candidate_path": workflow_config.final_candidate_path,
+                "seed_files": sorted(workflow_config.seed_files),
+            }
+            if workflow_config.final_candidate_path:
+                final_candidate = await docker_workspace.read_text(workflow_config.final_candidate_path)
+                trace["workspace"]["final_candidate"] = final_candidate
+                raw_output = f"{raw_output}\n\n```lean4\n{final_candidate.strip()}\n```"
+        return raw_output, 0, trace
+    finally:
+        if docker_workspace is not None:
+            await docker_workspace.cleanup()
 
 
 def extract_workflow_trace(state: dict[str, Any]) -> dict[str, Any]:
@@ -576,7 +614,14 @@ def extract_workflow_trace(state: dict[str, Any]) -> dict[str, Any]:
     return {key: state.get(key) for key in trace_keys if key in state}
 
 
-async def run_method(method: str, prompt: str, llm: Any, args: argparse.Namespace) -> RunResult:
+async def run_method(
+    method: str,
+    prompt: str,
+    llm: Any,
+    args: argparse.Namespace,
+    *,
+    workflow_config: BenchmarkWorkflowConfig | None = None,
+) -> RunResult:
     metered_llm = MeteredLLM(llm)
     started_at = time.perf_counter()
     trace: dict[str, Any] | None = None
@@ -592,6 +637,7 @@ async def run_method(method: str, prompt: str, llm: Any, args: argparse.Namespac
             args,
             enable_agent_message_streaming=True,
             subagent_mode="fixed",
+            workflow_config=workflow_config,
         )
     elif method == "multiagent_no_streaming":
         raw_output, returncode, trace = await run_multiagent(
@@ -600,6 +646,7 @@ async def run_method(method: str, prompt: str, llm: Any, args: argparse.Namespac
             args,
             enable_agent_message_streaming=False,
             subagent_mode="fixed",
+            workflow_config=workflow_config,
         )
     elif method == "multiagent_dynamic_streaming":
         raw_output, returncode, trace = await run_multiagent(
@@ -608,6 +655,7 @@ async def run_method(method: str, prompt: str, llm: Any, args: argparse.Namespac
             args,
             enable_agent_message_streaming=True,
             subagent_mode="dynamic",
+            workflow_config=workflow_config,
         )
     elif method == "multiagent_dynamic_no_streaming":
         raw_output, returncode, trace = await run_multiagent(
@@ -616,6 +664,7 @@ async def run_method(method: str, prompt: str, llm: Any, args: argparse.Namespac
             args,
             enable_agent_message_streaming=False,
             subagent_mode="dynamic",
+            workflow_config=workflow_config,
         )
     else:
         raise ValueError(f"Unknown method: {method}")

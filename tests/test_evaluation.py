@@ -28,6 +28,28 @@ class UsageLLM:
         return self.responses.pop(0)
 
 
+class RunnerFakeDockerWorkspace:
+    created: list["RunnerFakeDockerWorkspace"] = []
+
+    def __init__(self) -> None:
+        self.files: dict[str, str] = {}
+        self.cleaned = False
+        RunnerFakeDockerWorkspace.created.append(self)
+
+    @classmethod
+    async def create(cls, **kwargs):
+        return cls()
+
+    async def write_text(self, path: str, content: str) -> None:
+        self.files[path] = content
+
+    async def read_text(self, path: str) -> str:
+        return self.files[path]
+
+    async def cleanup(self) -> None:
+        self.cleaned = True
+
+
 def test_parse_methods_accepts_comma_separated_methods():
     assert runner.parse_methods("multiagent_streaming,multiagent_no_streaming,plain_llm") == [
         "multiagent_streaming",
@@ -222,6 +244,65 @@ async def test_run_evaluation_sets_max_tokens_to_16384(monkeypatch, tmp_path):
     await evaluation.run_evaluation(args)
 
     assert captured_llm_kwargs == {"model": "openai/gpt-oss-120b", "openai": True, "max_tokens": 16384}
+
+
+@pytest.mark.asyncio
+async def test_lean_multiagent_workspace_config_seeds_and_returns_final_file(monkeypatch):
+    RunnerFakeDockerWorkspace.created = []
+    captured_workflow_kwargs = {}
+
+    async def fake_run_workflow(**kwargs):
+        captured_workflow_kwargs.update(kwargs)
+        workspace = kwargs["docker_workspace"]
+        await workspace.write_text(
+            "/workspace/Main.lean",
+            "import Mathlib\n\ntheorem t : True := by\n  trivial\n",
+        )
+        return {
+            "final_answer": "Agent finished.",
+            "run_id": "run",
+            "mode": "multi_agent",
+            "subagent_mode": "fixed",
+            "agent_traces": {},
+        }
+
+    monkeypatch.setattr(runner, "DockerWorkspace", RunnerFakeDockerWorkspace)
+    monkeypatch.setattr(runner, "run_workflow", fake_run_workflow)
+
+    row = {
+        "id": 1,
+        "split": "level1",
+        "informal_statement": "Show true.",
+        "formal_statement": "import Mathlib\n\ntheorem t : True := by\n  sorry",
+        "header": "import Mathlib",
+        "topic": "Logic",
+        "tag": "Basic",
+        "version": "4.28.0",
+    }
+    workflow_config = ma_proofbench.build_lean_workflow_config(row, argparse.Namespace())
+    args = argparse.Namespace(
+        max_steps=2,
+        total_runtime_timeout=5,
+        synthesis_timeout=1,
+        workspace_image="python:3.12",
+        workspace_command_timeout=30,
+        workspace_output_limit=12000,
+    )
+
+    raw_output, returncode, trace = await runner.run_multiagent(
+        "Complete the Lean proof.",
+        UsageLLM([]),
+        args,
+        workflow_config=workflow_config,
+    )
+
+    assert returncode == 0
+    assert captured_workflow_kwargs["enable_workspace_tools"] is True
+    assert captured_workflow_kwargs["feedback_tool"] is not None
+    assert RunnerFakeDockerWorkspace.created[0].files["/workspace/Main.lean"].endswith("trivial\n")
+    assert RunnerFakeDockerWorkspace.created[0].cleaned is True
+    assert "```lean4\nimport Mathlib\n\ntheorem t : True := by\n  trivial\n```" in raw_output
+    assert trace["workspace"]["final_candidate_path"] == "/workspace/Main.lean"
 
 
 @pytest.mark.asyncio

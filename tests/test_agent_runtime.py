@@ -85,6 +85,43 @@ class AgentFakeDockerWorkspace(DockerWorkspace):
         )
 
 
+class VerifyCandidateLLM:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            assert "verify_candidate" in prompt
+            return FakeResponse(
+                'ACTION:\n{"tool": "verify_candidate", "path": "/workspace/Main.lean"}\n'
+                "SHARE_FINDING:\nChecking the current Lean candidate with the verifier.\n"
+                "CONFIDENCE:\n0.8\n"
+                "LOCAL_NOTES:\nNeed verifier feedback."
+            )
+        assert "unknown tactic" in prompt
+        return FakeResponse(
+            "FINAL:\nVerifier feedback was received and used.\n"
+            "SHARE_FINDING:\nLean verifier feedback was available to the agent.\n"
+            "CONFIDENCE:\n0.9\n"
+            "LOCAL_NOTES:\nDone."
+        )
+
+
+class FakeLeanFeedbackTool:
+    name = "verify_candidate"
+
+    async def run(self, *, path: str | None = None):
+        return {
+            "tool": "verify_candidate",
+            "path": path,
+            "passed": False,
+            "backend": "kimina-server",
+            "returncode": 1,
+            "verifier_output": '{"errors": [{"data": "unknown tactic"}]}',
+        }
+
+
 def build_agents(streamer: InMemoryEventStreamer, run_id: str = "run-agent-test"):
     llm = FakeLLM()
     kwargs = {
@@ -220,3 +257,32 @@ async def test_coding_agent_uses_docker_bash_observation_in_tool_loop():
     assert first_step["parsed_output"]["tool_action"]["command"] == "printf hello"
     assert first_step["parsed_output"]["tool_result"]["stdout"] == "hello from docker\n"
     assert second_step["parsed_output"]["status"] == "final"
+
+
+@pytest.mark.asyncio
+async def test_coding_agent_can_request_lean_verifier_feedback_tool():
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    workspace = AgentFakeDockerWorkspace()
+    agent = CodingAgent(
+        run_id="run-lean-feedback",
+        task="Complete a Lean proof.",
+        assigned_subtask="Edit Main.lean and verify it.",
+        llm=VerifyCandidateLLM(),
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        bash_tool=BashTool(workspace),
+        feedback_tool=FakeLeanFeedbackTool(),
+        workspace_access="write",
+        max_steps=2,
+        step_delay_seconds=0,
+    )
+
+    output = await agent.run()
+
+    assert "Verifier feedback was received" in output
+    trace = trace_logger.export()["CodingAgent"]
+    first_step = trace["steps"][0]
+    assert first_step["parsed_output"]["tool_action"]["tool"] == "verify_candidate"
+    assert first_step["parsed_output"]["tool_result"]["backend"] == "kimina-server"
+    assert "unknown tactic" in first_step["parsed_output"]["tool_result"]["verifier_output"]

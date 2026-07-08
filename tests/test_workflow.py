@@ -435,6 +435,20 @@ def test_dynamic_workspace_policy_does_not_let_critical_debate_consume_writer_sl
     assert assignments[1]["workspace_access"] == "write"
 
 
+def test_fixed_workspace_policy_grants_writer_when_coding_agent_is_absent():
+    assignments = apply_workspace_access_policy(
+        [
+            {"agent_name": "SolverAgent"},
+            {"agent_name": "VerifierAgent"},
+        ],
+        subagent_mode="fixed",
+        enable_workspace_tools=True,
+    )
+
+    assert assignments[0]["workspace_access"] == "write"
+    assert assignments[1]["workspace_access"] == "none"
+
+
 @pytest.mark.asyncio
 async def test_agent_traces_include_prompt_response_parsed_output_and_published_events():
     state = await run_workflow(
