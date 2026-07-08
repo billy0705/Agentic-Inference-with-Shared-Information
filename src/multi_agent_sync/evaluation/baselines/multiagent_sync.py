@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import argparse
+from typing import Any
+
+from multi_agent_sync.evaluation.types import BenchmarkWorkflowConfig
+from multi_agent_sync.graph.workflow import run_workflow
+from multi_agent_sync.workspace.docker import DockerWorkspace
+
+
+async def run_multiagent(
+    prompt: str,
+    llm: Any,
+    args: argparse.Namespace,
+    *,
+    enable_agent_message_streaming: bool = True,
+    subagent_mode: str = "fixed",
+    workflow_config: BenchmarkWorkflowConfig | None = None,
+) -> tuple[str, int, dict[str, Any]]:
+    docker_workspace = None
+    try:
+        feedback_tool = None
+        if workflow_config is not None:
+            docker_workspace = await DockerWorkspace.create(
+                image=getattr(args, "workspace_image", "python:3.12"),
+                source_path=None,
+                default_timeout_seconds=getattr(args, "workspace_command_timeout", 60.0),
+                output_char_limit=getattr(args, "workspace_output_limit", 12000),
+            )
+            for path, content in workflow_config.seed_files.items():
+                await docker_workspace.write_text(path, content)
+            if workflow_config.feedback_tool_factory is not None:
+                feedback_tool = workflow_config.feedback_tool_factory(docker_workspace)
+
+        state = await run_workflow(
+            task=prompt,
+            llm=llm,
+            subagent_mode=subagent_mode,
+            max_steps_per_agent=args.max_steps,
+            total_runtime_timeout=args.total_runtime_timeout,
+            synthesis_timeout=args.synthesis_timeout,
+            enable_agent_message_streaming=enable_agent_message_streaming,
+            stream_to_console=False,
+            no_color=True,
+            enable_workspace_tools=workflow_config is not None,
+            docker_workspace=docker_workspace,
+            feedback_tool=feedback_tool,
+        )
+        raw_output = state["final_answer"]
+        trace = extract_workflow_trace(state)
+        if workflow_config is not None and docker_workspace is not None:
+            trace["workspace"] = {
+                "final_candidate_path": workflow_config.final_candidate_path,
+                "seed_files": sorted(workflow_config.seed_files),
+            }
+            if workflow_config.final_candidate_path:
+                final_candidate = await docker_workspace.read_text(workflow_config.final_candidate_path)
+                trace["workspace"]["final_candidate"] = final_candidate
+                raw_output = f"{raw_output}\n\n```lean4\n{final_candidate.strip()}\n```"
+        return raw_output, 0, trace
+    finally:
+        if docker_workspace is not None:
+            await docker_workspace.cleanup()
+
+
+def extract_workflow_trace(state: dict[str, Any]) -> dict[str, Any]:
+    trace_keys = [
+        "run_id",
+        "mode",
+        "subagent_mode",
+        "task_type",
+        "reason",
+        "plan",
+        "selected_agents",
+        "assignments",
+        "orchestrator_plan",
+        "event_log",
+        "agent_outputs",
+        "agent_traces",
+        "final_answer",
+    ]
+    return {key: state.get(key) for key in trace_keys if key in state}

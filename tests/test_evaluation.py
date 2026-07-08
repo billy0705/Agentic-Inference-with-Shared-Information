@@ -9,8 +9,30 @@ import pytest
 
 from multi_agent_sync.evaluation import main as evaluation
 from multi_agent_sync.evaluation import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
+from multi_agent_sync.evaluation.baselines import multiagent_sync
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec
+
+
+def test_baselines_package_exports_evaluation_methods():
+    from multi_agent_sync.evaluation import baselines
+
+    assert baselines.run_plain_llm is not None
+    assert baselines.run_single_agent is not None
+    assert baselines.run_majority_vote is not None
+    assert baselines.run_multiagent_debate is not None
+    assert baselines.run_multiagent is not None
+
+
+def test_benchmarks_package_exports_benchmark_modules():
+    from multi_agent_sync.evaluation import benchmarks
+
+    assert benchmarks.chess.build_benchmark is not None
+    assert benchmarks.gpqa.build_benchmark is not None
+    assert benchmarks.gsm8k.build_benchmark is not None
+    assert benchmarks.ma_proofbench.build_benchmark is not None
+    assert benchmarks.mmlu_pro.build_benchmark is not None
+    assert benchmarks.olymmath.build_benchmark is not None
 
 
 @dataclass
@@ -23,8 +45,10 @@ class UsageResponse:
 class UsageLLM:
     def __init__(self, responses: list[UsageResponse]) -> None:
         self.responses = list(responses)
+        self.prompts: list[str] = []
 
     async def ainvoke(self, prompt: str) -> UsageResponse:
+        self.prompts.append(prompt)
         return self.responses.pop(0)
 
 
@@ -68,6 +92,14 @@ def test_parse_methods_accepts_dynamic_multiagent_methods():
 
 def test_parse_methods_accepts_single_agent_method():
     assert runner.parse_methods("single_agent,plain_llm") == ["single_agent", "plain_llm"]
+
+
+def test_parse_methods_accepts_multiagent_debate_method():
+    assert runner.parse_methods("multiagent_debate,plain_llm") == ["multiagent_debate", "plain_llm"]
+
+
+def test_parse_methods_accepts_majority_vote_method():
+    assert runner.parse_methods("majority_vote,single_agent,plain_llm") == ["majority_vote", "single_agent", "plain_llm"]
 
 
 def test_parse_methods_keeps_multiagent_alias_for_streaming():
@@ -266,8 +298,8 @@ async def test_lean_multiagent_workspace_config_seeds_and_returns_final_file(mon
             "agent_traces": {},
         }
 
-    monkeypatch.setattr(runner, "DockerWorkspace", RunnerFakeDockerWorkspace)
-    monkeypatch.setattr(runner, "run_workflow", fake_run_workflow)
+    monkeypatch.setattr(multiagent_sync, "DockerWorkspace", RunnerFakeDockerWorkspace)
+    monkeypatch.setattr(multiagent_sync, "run_workflow", fake_run_workflow)
 
     row = {
         "id": 1,
@@ -340,6 +372,141 @@ async def test_single_agent_respects_max_steps_when_final_answer_is_not_parseabl
     assert result.trace["stopped_reason"] == "max_steps"
     assert result.trace["steps"][1]["status"] == "final"
     assert result.trace["steps"][1]["parsed_answer"] is None
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_runs_three_independent_single_agents_and_votes():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: A", "notes": "First vote."}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": "Second vote."}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": "Third vote."}'),
+        ]
+    )
+    args = argparse.Namespace(
+        max_steps=1,
+        answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
+    )
+
+    result = await runner.run_method("majority_vote", "Question with options.", llm, args)
+
+    assert result.raw_output == "Final Answer: B"
+    assert len(llm.prompts) == 3
+    assert all("Question with options." in prompt for prompt in llm.prompts)
+    assert result.trace["method"] == "majority_vote"
+    assert result.trace["agents"] == 3
+    assert result.trace["parsed_answers"] == ["A", "B", "B"]
+    assert result.trace["voted_answer"] == "B"
+    assert result.trace["fallback_used"] is False
+    assert len(result.trace["agent_runs"]) == 3
+    assert all(agent_run["trace"]["method"] == "single_agent" for agent_run in result.trace["agent_runs"])
+    debug = runner.build_multiagent_debug(result.trace)
+    assert [step["node"] for step in debug["workflow"]] == ["single_agent_votes", "majority_vote"]
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_tie_uses_first_parsed_answer():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: C", "notes": ""}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": ""}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: A", "notes": ""}'),
+        ]
+    )
+    args = argparse.Namespace(
+        max_steps=1,
+        answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
+    )
+
+    result = await runner.run_method("majority_vote", "Question with options.", llm, args)
+
+    assert result.raw_output == "Final Answer: C"
+    assert result.trace["parsed_answers"] == ["C", "B", "A"]
+    assert result.trace["voted_answer"] == "C"
+    assert result.trace["fallback_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_falls_back_to_first_raw_output_when_all_answers_are_unparseable():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "continue", "final_answer": "Unclear first answer", "notes": ""}'),
+            UsageResponse('{"status": "continue", "final_answer": "Unclear second answer", "notes": ""}'),
+            UsageResponse('{"status": "continue", "final_answer": "Unclear third answer", "notes": ""}'),
+        ]
+    )
+    args = argparse.Namespace(max_steps=1, answer_extractor=lambda text: None)
+
+    result = await runner.run_method("majority_vote", "Question with options.", llm, args)
+
+    assert result.raw_output == "Unclear first answer"
+    assert result.trace["parsed_answers"] == [None, None, None]
+    assert result.trace["voted_answer"] is None
+    assert result.trace["fallback_used"] is True
+
+
+@pytest.mark.asyncio
+async def test_multiagent_debate_uses_three_agents_two_rounds_and_selects_final_answer():
+    llm = UsageLLM(
+        [
+            UsageResponse("Agent 1 round 1 says Final Answer: A"),
+            UsageResponse("Agent 2 round 1 says Final Answer: B"),
+            UsageResponse("Agent 3 round 1 says Final Answer: B"),
+            UsageResponse("Agent 1 round 2 says Final Answer: B"),
+            UsageResponse("Agent 2 round 2 says Final Answer: B"),
+            UsageResponse("Agent 3 round 2 says Final Answer: C"),
+        ]
+    )
+    args = argparse.Namespace(
+        benchmark="mmlu_pro",
+        answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
+    )
+
+    result = await runner.run_method("multiagent_debate", "Question with options.", llm, args)
+
+    assert result.raw_output == "Final Answer: B"
+    assert len(llm.prompts) == 6
+    assert all("Question with options." in prompt for prompt in llm.prompts[:3])
+    assert "These are the solutions to the problem from other agents:" in llm.prompts[3]
+    assert "Agent 2 round 1 says Final Answer: B" in llm.prompts[3]
+    assert "Agent 3 round 1 says Final Answer: B" in llm.prompts[3]
+    assert "Agent 1 round 1 says Final Answer: A" in llm.prompts[3]
+    assert result.trace["method"] == "multiagent_debate"
+    assert result.trace["agents"] == 3
+    assert result.trace["rounds"] == 2
+    assert result.trace["parsed_final_answers"] == ["B", "B", "C"]
+    assert result.trace["majority_answer"] == "B"
+    assert len(result.trace["agent_contexts"]) == 3
+    assert len(result.trace["agent_contexts"][0]) == 4
+    debug = runner.build_multiagent_debug(result.trace)
+    assert [step["node"] for step in debug["workflow"]] == ["debate_agents", "debate_answer_selection"]
+
+
+@pytest.mark.asyncio
+async def test_multiagent_debate_math_prompt_matches_upstream_shape():
+    llm = UsageLLM(
+        [
+            UsageResponse(r"Agent 1 round 1 \boxed{1}"),
+            UsageResponse(r"Agent 2 round 1 \boxed{2}"),
+            UsageResponse(r"Agent 3 round 1 \boxed{2}"),
+            UsageResponse(r"Agent 1 round 2 \boxed{2}"),
+            UsageResponse(r"Agent 2 round 2 \boxed{2}"),
+            UsageResponse(r"Agent 3 round 2 \boxed{3}"),
+        ]
+    )
+    args = argparse.Namespace(
+        benchmark="gsm8k",
+        answer_extractor=gsm8k.extract_answer,
+    )
+
+    result = await runner.run_method("multiagent_debate", "What is 1 + 1?", llm, args)
+
+    assert "Can you solve the following math problem? What is 1 + 1? Explain your reasoning." in llm.prompts[0]
+    assert r"Your final answer should be a single numerical number, in the form \boxed{answer}" in llm.prompts[0]
+    assert "Can you double check that your answer is correct." not in llm.prompts[0]
+    assert "Using the solutions from other agents as additional information" in llm.prompts[3]
+    assert "The original math problem is What is 1 + 1?." in llm.prompts[3]
+    assert result.raw_output == "Final Answer: 2"
 
 
 @pytest.mark.asyncio
@@ -1397,7 +1564,9 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
         captured_kwargs.update(kwargs)
         return {"final_answer": f"{method} answer"}
 
-    monkeypatch.setattr(runner, "run_workflow", fake_run_workflow)
+    from multi_agent_sync.evaluation.baselines import multiagent_sync
+
+    monkeypatch.setattr(multiagent_sync, "run_workflow", fake_run_workflow)
     args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
 
     result = await runner.run_method(method, "Question?", UsageLLM([]), args)

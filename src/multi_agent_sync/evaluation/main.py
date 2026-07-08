@@ -6,8 +6,8 @@ import random
 import time
 from typing import Any
 
-from multi_agent_sync.evaluation import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation import runner
+from multi_agent_sync.evaluation.benchmarks import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
 
@@ -41,7 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated methods to compare. Supported: multiagent_streaming, "
             "multiagent_no_streaming, multiagent_dynamic_streaming, "
-            "multiagent_dynamic_no_streaming, single_agent, plain_llm. Legacy alias: multiagent."
+            "multiagent_dynamic_no_streaming, multiagent_debate, majority_vote, single_agent, plain_llm. "
+            "Legacy alias: multiagent."
         ),
     )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Use 0 for full split.")
