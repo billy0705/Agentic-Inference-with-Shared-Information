@@ -1,0 +1,959 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Output Viewer</title>
+  <style>
+    :root {
+      --bg: #f6f6f1;
+      --panel: #ffffff;
+      --ink: #1f241f;
+      --muted: #687067;
+      --line: #d8ddd3;
+      --accent: #0f766e;
+      --accent-soft: #ddf3ee;
+      --bad: #b42318;
+      --good: #067647;
+      --warn: #b54708;
+      --code: #f0f2ed;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); }
+    button, select, input { font: inherit; }
+    button { cursor: pointer; }
+    .app { display: grid; grid-template-columns: 330px minmax(0, 1fr); min-height: 100vh; }
+    aside { background: #fbfbf7; border-right: 1px solid var(--line); padding: 18px; height: 100vh; overflow: auto; position: sticky; top: 0; }
+    main { padding: 22px; min-width: 0; }
+    h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: 0; }
+    h2 { margin: 0 0 12px; font-size: 16px; letter-spacing: 0; }
+    h3 { margin: 0 0 8px; font-size: 14px; letter-spacing: 0; }
+    .subtle { color: var(--muted); font-size: 13px; }
+    .controls { display: grid; gap: 10px; margin: 16px 0; }
+    .primary { border: 1px solid var(--accent); background: var(--accent); color: white; border-radius: 6px; padding: 10px 12px; font-weight: 700; }
+    .secondary { border: 1px solid var(--line); background: white; color: var(--ink); border-radius: 6px; padding: 8px 10px; }
+    .field { display: grid; gap: 6px; margin: 12px 0; }
+    label { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    select, input[type="search"] { width: 100%; border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--ink); padding: 9px 10px; }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .stat, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+    .stat { padding: 14px; }
+    .stat strong { display: block; font-size: 20px; }
+    .panel { padding: 16px; margin-bottom: 16px; min-width: 0; }
+    .run-list { display: grid; gap: 8px; margin-top: 14px; }
+    .run-button { width: 100%; text-align: left; border: 1px solid var(--line); background: white; border-radius: 8px; padding: 10px; }
+    .run-button.active { border-color: var(--accent); background: var(--accent-soft); }
+    .toolbar { display: flex; gap: 10px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+    .tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); margin: 12px 0; overflow: auto; }
+    .tab { border: 0; background: transparent; color: var(--muted); padding: 10px 4px; white-space: nowrap; }
+    .tab.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+    .pill { display: inline-flex; align-items: center; border: 1px solid var(--line); background: white; border-radius: 999px; min-height: 22px; padding: 2px 8px; margin: 2px 4px 2px 0; font-size: 12px; }
+    .good { color: var(--good); }
+    .bad { color: var(--bad); }
+    .warn { color: var(--warn); }
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+    .agent { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: white; margin-bottom: 12px; }
+    .step { border-left: 3px solid var(--accent); padding-left: 12px; margin: 12px 0; }
+    .event { border-bottom: 1px solid var(--line); padding: 10px 0; }
+    .event:last-child { border-bottom: 0; }
+    .event.finding { border-left: 4px solid var(--good); padding-left: 10px; background: #f5fbf7; }
+    .event.critique { border-left: 4px solid var(--warn); padding-left: 10px; background: #fff8ed; }
+    .event.warning { border-left: 4px solid var(--bad); padding-left: 10px; background: #fff5f5; }
+    .flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+    .flow-arrow { color: var(--muted); font-family: var(--mono); }
+    .mini-panel { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; margin: 8px 0; }
+    pre { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12px; line-height: 1.45; border: 1px solid var(--line); background: var(--code); border-radius: 8px; padding: 12px; max-height: 560px; overflow: auto; }
+    summary { cursor: pointer; color: var(--accent); font-weight: 700; margin-top: 8px; }
+    .empty { border: 1px dashed var(--line); border-radius: 8px; padding: 24px; color: var(--muted); text-align: center; }
+    .hidden { display: none; }
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 1fr; }
+      aside { height: auto; position: static; }
+      .stats, .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <h1>Output Viewer</h1>
+      <div class="subtle" id="sourceStatus">No output folder loaded.</div>
+      <div class="controls">
+        <button class="secondary" id="loadDefaultButton" type="button">Load default ../output</button>
+        <button class="primary" id="openFolderButton" type="button">Open output folder</button>
+        <button class="secondary" id="rescanButton" type="button" disabled>Rescan current folder</button>
+        <input class="hidden" id="folderInput" type="file" webkitdirectory multiple>
+      </div>
+      <div class="field"><label for="benchmarkFilter">Benchmark</label><select id="benchmarkFilter"></select></div>
+      <div class="field"><label for="modelFilter">Model</label><select id="modelFilter"></select></div>
+      <div class="field"><label for="methodFilter">Method</label><select id="methodFilter"></select></div>
+      <div class="field"><label for="runFilter">Run</label><select id="runFilter"></select></div>
+      <div class="field"><label for="searchFilter">Search</label><input id="searchFilter" type="search" placeholder="agent, event, error, prompt"></div>
+      <div class="run-list" id="runList"></div>
+    </aside>
+    <main>
+      <div class="stats" id="stats"></div>
+      <section class="panel" id="runPanel"><div class="empty">Open the repository's output folder to begin.</div></section>
+      <section class="panel">
+        <div class="toolbar">
+          <h2>Example Detail</h2>
+          <div class="toolbar">
+            <select id="exampleFilter"></select>
+          </div>
+        </div>
+        <div class="tabs" id="tabs"></div>
+        <div id="tabContent"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const DEFAULT_OUTPUT_ROOT = '../output/';
+    const TEXT_LIMIT = 300000;
+    const state = {
+      files: [],
+      folderHandle: null,
+      data: { runs: [], benchmarks: [] },
+      benchmark: 'all',
+      model: 'all',
+      method: 'all',
+      run: 'all',
+      exampleIndex: 0,
+      agent: 'all',
+      eventAgent: 'all',
+      tab: 'Overview',
+      search: '',
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    const pretty = (value) => typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2);
+    const truncateText = (value, limit = TEXT_LIMIT) => {
+      const text = typeof value === 'string' ? value : pretty(value);
+      if (text.length <= limit) return text;
+      return `${text.slice(0, limit)}\n\n[truncated ${text.length - limit} characters]`;
+    };
+    const unique = (values) => [...new Set(values.filter(Boolean).map(String))].sort();
+    const round = (value) => Number.isFinite(Number(value)) ? Number(value).toFixed(2) : 'n/a';
+    const cleanPath = (path) => path.replaceAll('\\', '/').replace(/^\/+/, '');
+    const isFileProtocol = () => window.location.protocol === 'file:';
+
+    function configureProtocolMode() {
+      if (!isFileProtocol()) return;
+      const defaultButton = $('loadDefaultButton');
+      defaultButton.disabled = true;
+      defaultButton.textContent = 'Default unavailable on file://';
+      $('sourceStatus').textContent = 'Browser blocks automatic default loading for file:// pages. Click Open output folder and select the output folder.';
+    }
+
+    async function loadDefaultOutputFolder() {
+      if (isFileProtocol()) {
+        $('sourceStatus').textContent = 'Browser blocks automatic default loading for file:// pages. Click Open output folder and select the output folder.';
+        return;
+      }
+      $('sourceStatus').textContent = `Trying ${DEFAULT_OUTPUT_ROOT}...`;
+      try {
+        const files = await collectDefaultOutputFiles(DEFAULT_OUTPUT_ROOT);
+        if (!files.length) throw new Error('No output files found.');
+        state.folderHandle = null;
+        state.files = files;
+        $('rescanButton').disabled = false;
+        await rebuildData(`Loaded default ${DEFAULT_OUTPUT_ROOT}.`);
+      } catch (error) {
+        $('sourceStatus').textContent = `Default ${DEFAULT_OUTPUT_ROOT} is not readable here. Use Open output folder.`;
+        render();
+      }
+    }
+
+    async function collectDefaultOutputFiles(rootUrl) {
+      const root = new URL(rootUrl, window.location.href);
+      const files = [];
+      await collectDefaultDirectory(root, root, files, 0);
+      return files;
+    }
+
+    async function collectDefaultDirectory(url, root, files, depth) {
+      if (depth > 8) return;
+      let html = '';
+      try {
+        html = await readUrlText(url.href);
+      } catch {
+        return;
+      }
+      const documentFragment = new DOMParser().parseFromString(html, 'text/html');
+      const links = [...documentFragment.querySelectorAll('a[href]')]
+        .map((link) => new URL(link.getAttribute('href'), url))
+        .filter((candidate) => candidate.origin === root.origin && candidate.pathname.startsWith(root.pathname))
+        .filter((candidate) => candidate.href !== url.href && !candidate.pathname.endsWith('/../'));
+
+      for (const link of links) {
+        if (link.pathname.length <= url.pathname.length) continue;
+        if (link.pathname.endsWith('/')) {
+          await collectDefaultDirectory(link, root, files, depth + 1);
+        } else {
+          const relativePath = decodeURIComponent(link.pathname.slice(root.pathname.length));
+          const path = cleanPath(`output/${relativePath}`);
+          if (!isRelevantOutputFile(path)) continue;
+          files.push({
+            path,
+            file: {
+              text: async () => {
+                try {
+                  return await readUrlText(link.href);
+                } catch {
+                  return '';
+                }
+              },
+            },
+          });
+        }
+      }
+    }
+
+    async function readUrlText(url) {
+      if (typeof fetch === 'function') {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Unable to read ${url}`);
+        return response.text();
+      }
+      return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open('GET', url);
+        request.onload = () => {
+          if (request.status >= 200 && request.status < 300) {
+            resolve(request.responseText);
+          } else {
+            reject(new Error(`Unable to read ${url}`));
+          }
+        };
+        request.onerror = () => reject(new Error(`Unable to read ${url}`));
+        request.send();
+      });
+    }
+
+    async function openOutputFolder() {
+      if ('showDirectoryPicker' in window) {
+        try {
+          state.folderHandle = await window.showDirectoryPicker({ mode: 'read' });
+          await loadFromDirectoryHandle(state.folderHandle);
+          return;
+        } catch (error) {
+          if (error && error.name === 'AbortError') return;
+        }
+      }
+      $('folderInput').click();
+    }
+
+    async function loadFromDirectoryHandle(handle) {
+      const files = [];
+      await collectDirectoryEntries(handle, '', files);
+      state.files = files;
+      $('rescanButton').disabled = false;
+      await rebuildData(`Loaded ${files.length} files from ${handle.name || 'selected folder'}.`);
+    }
+
+    async function collectDirectoryEntries(handle, prefix, files) {
+      for await (const [name, entry] of handle.entries()) {
+        const path = prefix ? `${prefix}/${name}` : name;
+        if (entry.kind === 'directory') {
+          await collectDirectoryEntries(entry, path, files);
+        } else if (entry.kind === 'file') {
+          const file = await entry.getFile();
+          files.push({ path, file });
+        }
+      }
+    }
+
+    async function loadFromFileInput(fileList) {
+      state.folderHandle = null;
+      state.files = [...fileList].map((file) => ({ path: file.webkitRelativePath || file.name, file }));
+      $('rescanButton').disabled = true;
+      await rebuildData(`Loaded ${state.files.length} files from folder picker.`);
+    }
+
+    async function rescanCurrentFolder() {
+      if (state.folderHandle) {
+        await loadFromDirectoryHandle(state.folderHandle);
+      } else if (state.files.length) {
+        await loadDefaultOutputFolder();
+      }
+    }
+
+    async function rebuildData(statusText) {
+      $('sourceStatus').textContent = 'Reading output files...';
+      state.data = await parseOutputFiles(state.files);
+      state.benchmark = 'all';
+      state.model = 'all';
+      state.method = 'all';
+      state.run = 'all';
+      state.exampleIndex = 0;
+      state.agent = 'all';
+      state.eventAgent = 'all';
+      $('sourceStatus').textContent = `${statusText} ${state.data.runs.length} runs found.`;
+      render();
+    }
+
+    async function parseOutputFiles(fileRecords) {
+      const candidates = fileRecords
+        .map((record) => ({ ...record, path: cleanPath(record.path) }))
+        .filter((record) => isRelevantOutputFile(record.path));
+      const filesByPath = new Map();
+      await Promise.all(candidates.map(async (record) => {
+        filesByPath.set(record.path, { path: record.path, text: await record.file.text() });
+      }));
+
+      const summaryPaths = [...filesByPath.keys()].filter((path) => path.endsWith('/summary.json') || path === 'summary.json').sort();
+      const runs = summaryPaths.map((summaryPath) => buildRun(summaryPath, filesByPath)).filter(Boolean);
+      runs.sort((left, right) => String(right.run_id).localeCompare(String(left.run_id)));
+
+      const benchmarkMap = new Map();
+      for (const run of runs) {
+        const current = benchmarkMap.get(run.benchmark) || { id: run.benchmark, label: run.benchmark_display_name, run_count: 0, example_count: 0 };
+        current.run_count += 1;
+        current.example_count += run.examples.length;
+        benchmarkMap.set(run.benchmark, current);
+      }
+      return { generated_at: new Date().toISOString(), runs, benchmarks: [...benchmarkMap.values()].sort((a, b) => a.id.localeCompare(b.id)) };
+    }
+
+    function isRelevantOutputFile(path) {
+      return path.endsWith('/summary.json') ||
+        path.endsWith('/run_config.json') ||
+        path.includes('/examples/') && path.endsWith('.json') ||
+        path.endsWith('_results.csv') ||
+        path.endsWith('/correctness.csv');
+    }
+
+    function parseJson(text) {
+      try {
+        const value = JSON.parse(text);
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+      } catch {
+        return {};
+      }
+    }
+
+    function parseCsv(text, limit = 200) {
+      const rows = [];
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      if (!lines.length) return rows;
+      const headers = splitCsvLine(lines[0]);
+      for (const line of lines.slice(1, limit + 1)) {
+        const values = splitCsvLine(line);
+        const row = {};
+        headers.forEach((header, index) => { row[header] = values[index] ?? ''; });
+        rows.push(row);
+      }
+      return rows;
+    }
+
+    function splitCsvLine(line) {
+      const values = [];
+      let current = '';
+      let quoted = false;
+      for (let index = 0; index < line.length; index += 1) {
+        const char = line[index];
+        const next = line[index + 1];
+        if (char === '"' && quoted && next === '"') {
+          current += '"';
+          index += 1;
+        } else if (char === '"') {
+          quoted = !quoted;
+        } else if (char === ',' && !quoted) {
+          values.push(current);
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      values.push(current);
+      return values;
+    }
+
+    function buildRun(summaryPath, filesByPath) {
+      const runDir = summaryPath.replace(/\/?summary\.json$/, '').replace(/\/$/, '');
+      const summary = parseJson(filesByPath.get(summaryPath)?.text || '{}');
+      const runConfig = parseJson(filesByPath.get(`${runDir}/run_config.json`)?.text || '{}');
+      const identity = inferRunIdentity(runDir, summary, runConfig);
+      const lookup = buildResultLookup(summary);
+      const examplePaths = [...filesByPath.keys()].filter((path) => path.startsWith(`${runDir}/examples/`) && path.endsWith('.json')).sort();
+      const examples = examplePaths.map((path) => normalizeExample(path, parseJson(filesByPath.get(path).text), lookup)).filter(Boolean);
+      const csvPath = [...filesByPath.keys()].find((path) => path.startsWith(`${runDir}/`) && path.endsWith('_results.csv'));
+      const correctnessPath = [...filesByPath.keys()].find((path) => path === `${runDir}/correctness.csv`);
+      return {
+        ...identity,
+        path: runDir,
+        summary: typeof summary.summary === 'object' && summary.summary ? summary.summary : {},
+        method_averages: typeof summary.method_averages === 'object' && summary.method_averages ? summary.method_averages : {},
+        results: Array.isArray(summary.results) ? summary.results.map(compactResult) : [],
+        run_config: runConfig,
+        csv_path: csvPath || '',
+        csv_rows: csvPath ? parseCsv(filesByPath.get(csvPath).text) : [],
+        correctness_rows: correctnessPath ? parseCsv(filesByPath.get(correctnessPath).text) : [],
+        examples,
+      };
+    }
+
+    function inferRunIdentity(runDir, summary, runConfig) {
+      const parts = runDir.split('/').filter(Boolean);
+      const config = Object.keys(runConfig).length ? runConfig : (summary.run_config || {});
+      const settings = config.settings || {};
+      const runId = String(config.run_id || parts.at(-1) || 'unknown');
+      const benchmark = String(config.benchmark || parts.at(-3) || parts.at(-2) || 'unknown');
+      const model = String(parts.length >= 3 ? parts.at(-2) : settings.model || 'unknown');
+      return {
+        benchmark,
+        benchmark_display_name: String(config.benchmark_display_name || benchmark),
+        model,
+        resolved_model: String(settings.resolved_model || model),
+        run_id: runId,
+      };
+    }
+
+    function buildResultLookup(summary) {
+      const lookup = new Map();
+      if (!Array.isArray(summary.results)) return lookup;
+      for (const row of summary.results) {
+        if (!row || typeof row !== 'object') continue;
+        lookup.set(`${row.method ?? ''}:${row.index ?? ''}`, row);
+      }
+      return lookup;
+    }
+
+    function normalizeExample(path, trace, lookup) {
+      const methodTrace = trace.method_trace && typeof trace.method_trace === 'object' ? trace.method_trace : {};
+      const filename = path.split('/').pop() || '';
+      const match = filename.match(/^(\d+)_(.+)\.json$/);
+      const fallbackIndex = match ? String(Number(match[1])) : '';
+      const fallbackMethod = match ? match[2] : '';
+      const index = trace.index ?? fallbackIndex;
+      const method = trace.method ?? fallbackMethod;
+      const result = lookup.get(`${method}:${index}`) || {};
+      const agents = normalizeAgents(methodTrace);
+      return {
+        path,
+        index,
+        method,
+        benchmark: trace.benchmark || result.benchmark || '',
+        correct: trace.correct ?? result.correct,
+        pred: trace.pred ?? result.pred,
+        gold: trace.gold ?? result.gold,
+        error: truncateText(trace.error ?? result.error ?? ''),
+        prompt: truncateText(trace.prompt || methodTrace.prompt || ''),
+        raw_output: truncateText(trace.raw_output || result.raw_output || ''),
+        result: compactResult(result),
+        selected_agents: selectedAgents(methodTrace),
+        agents,
+        events: normalizeEvents(methodTrace),
+        receipts: normalizeReceipts(agents),
+        workflow: Array.isArray(methodTrace.workflow) ? methodTrace.workflow : [],
+        orchestrator_plan: methodTrace.orchestrator_plan || {},
+        orchestrator: normalizeOrchestrator(methodTrace),
+        raw_trace_excerpt: truncateText(trace, 80000),
+      };
+    }
+
+    function normalizeOrchestrator(methodTrace) {
+      return {
+        plan: methodTrace.orchestrator_plan || {},
+        reason: methodTrace.reason || methodTrace.orchestrator_plan?.reason || '',
+        assignments: Array.isArray(methodTrace.assignments) ? methodTrace.assignments : [],
+        selected_agents: Array.isArray(methodTrace.selected_agents)
+          ? methodTrace.selected_agents
+          : selectedAgents(methodTrace),
+        raw_output: methodTrace.orchestrator_raw_output || methodTrace.raw_orchestrator_output || '',
+        prompt: methodTrace.orchestrator_prompt || '',
+      };
+    }
+
+    function compactResult(row) {
+      if (!row || typeof row !== 'object') return {};
+      const keys = ['benchmark', 'method', 'index', 'gold', 'pred', 'correct', 'returncode', 'error', 'elapsed_seconds', 'prompt_tokens', 'completion_tokens', 'total_tokens', 'score_metadata', 'json_trace_path'];
+      const output = {};
+      keys.forEach((key) => {
+        if (Object.hasOwn(row, key)) output[key] = row[key];
+      });
+      output.raw_output = truncateText(row.raw_output || '');
+      return output;
+    }
+
+    function selectedAgents(methodTrace) {
+      const plan = methodTrace.orchestrator_plan;
+      return plan && Array.isArray(plan.selected_agents) ? plan.selected_agents.filter((agent) => agent && typeof agent === 'object') : [];
+    }
+
+    function normalizeAgents(methodTrace) {
+      const traces = methodTrace.agent_traces && typeof methodTrace.agent_traces === 'object' ? methodTrace.agent_traces : {};
+      const outputs = methodTrace.agent_outputs && typeof methodTrace.agent_outputs === 'object' ? methodTrace.agent_outputs : {};
+      const names = [];
+      selectedAgents(methodTrace).forEach((agent) => { if (agent.name && !names.includes(agent.name)) names.push(agent.name); });
+      Object.keys(traces).forEach((name) => { if (!names.includes(name)) names.push(name); });
+      Object.keys(outputs).forEach((name) => { if (!names.includes(name)) names.push(name); });
+      return names.map((name) => {
+        const trace = traces[name] && typeof traces[name] === 'object' ? traces[name] : {};
+        const steps = Array.isArray(trace.steps) ? trace.steps : [];
+        const finalOutput = trace.final_output || outputs[name] || '';
+        return {
+          name,
+          assignment: trace.assignment || {},
+          steps: steps.filter((step) => step && typeof step === 'object').map(normalizeStep),
+          event_receipts: Array.isArray(trace.event_receipts) ? trace.event_receipts : [],
+          unused_received_events: Array.isArray(trace.unused_received_events) ? trace.unused_received_events : [],
+          final_output: truncateText(finalOutput),
+          tools: findToolActions(String(finalOutput)),
+        };
+      });
+    }
+
+    function normalizeStep(step) {
+      const rawResponse = truncateText(step.raw_response || '');
+      return {
+        step: step.step,
+        prompt: truncateText(step.prompt || ''),
+        raw_response: rawResponse,
+        parsed_output: step.parsed_output || {},
+        published_events: Array.isArray(step.published_events) ? step.published_events : [],
+        inbox_events: Array.isArray(step.inbox_events) ? step.inbox_events : [],
+        used_event_ids: Array.isArray(step.used_event_ids) ? step.used_event_ids : [],
+        duration_seconds: step.duration_seconds,
+        is_reactive: Boolean(step.is_reactive),
+        reactive_reason: step.reactive_reason || '',
+        tools: findToolActions(rawResponse),
+      };
+    }
+
+    function normalizeEvents(methodTrace) {
+      if (!Array.isArray(methodTrace.event_log)) return [];
+      return methodTrace.event_log.filter((event) => event && typeof event === 'object').map((event) => ({
+        event_id: event.event_id,
+        event_type: event.event_type,
+        source: event.source,
+        target: event.target || 'broadcast',
+        content: truncateText(event.content || ''),
+        created_at: event.created_at,
+        metadata: event.metadata || {},
+        tools: findToolActions(String(event.content || '')),
+      }));
+    }
+
+    function normalizeReceipts(agents) {
+      return agents.flatMap((agent) => agent.event_receipts.filter((receipt) => receipt && typeof receipt === 'object').map((receipt) => ({
+        agent_name: agent.name,
+        event_id: receipt.event_id,
+        event_type: receipt.event_type,
+        source: receipt.source,
+        accepted: Boolean(receipt.accepted),
+        ignored_reason: receipt.ignored_reason,
+        used_in_step: receipt.used_in_step,
+        content: truncateText(receipt.content || ''),
+      })));
+    }
+
+    function findToolActions(text) {
+      const actions = [];
+      let cursor = 0;
+      while (true) {
+        const actionAt = text.indexOf('ACTION:', cursor);
+        if (actionAt === -1) break;
+        const snippet = text.slice(actionAt + 'ACTION:'.length).trimStart();
+        try {
+          const parsed = JSON.parse(snippet.slice(0, findJsonObjectEnd(snippet)));
+          if (parsed && typeof parsed === 'object') {
+            actions.push({
+              tool: String(parsed.tool || parsed.name || 'unknown'),
+              command: String(parsed.command || parsed.cmd || parsed.input || ''),
+              raw: pretty(parsed),
+            });
+          }
+        } catch {
+          // Keep scanning; some model outputs contain malformed ACTION blocks.
+        }
+        cursor = actionAt + 'ACTION:'.length;
+      }
+      for (const match of text.matchAll(/Unsupported tool requested:\s*([^\n]+)/g)) {
+        actions.push({ tool: match[1].trim(), command: 'unsupported', raw: match[0] });
+      }
+      return actions;
+    }
+
+    function findJsonObjectEnd(text) {
+      let depth = 0;
+      let quoted = false;
+      let escaped = false;
+      for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === '\\' && quoted) {
+          escaped = true;
+          continue;
+        }
+        if (char === '"') quoted = !quoted;
+        if (quoted) continue;
+        if (char === '{') depth += 1;
+        if (char === '}') {
+          depth -= 1;
+          if (depth === 0) return index + 1;
+        }
+      }
+      return text.length;
+    }
+
+    function filteredRuns() {
+      const query = state.search.trim().toLowerCase();
+      return runsForRunFilter().filter((run) => {
+        if (state.run !== 'all' && run.path !== state.run) return false;
+        return !query || JSON.stringify(run).toLowerCase().includes(query);
+      });
+    }
+
+    function runMethods(run) {
+      return unique(run.results.map((row) => row.method).concat(run.examples.map((example) => example.method)));
+    }
+
+    function matchesBenchmark(run) {
+      return state.benchmark === 'all' || run.benchmark === state.benchmark;
+    }
+
+    function matchesModel(run) {
+      return state.model === 'all' || run.model === state.model || run.resolved_model === state.model;
+    }
+
+    function matchesMethod(run) {
+      return state.method === 'all' || runMethods(run).includes(state.method);
+    }
+
+    function runsForModelFilter() {
+      return state.data.runs.filter((run) => matchesBenchmark(run));
+    }
+
+    function runsForMethodFilter() {
+      return runsForModelFilter().filter((run) => matchesModel(run));
+    }
+
+    function runsForRunFilter() {
+      return runsForMethodFilter().filter((run) => matchesMethod(run));
+    }
+
+    function currentRun() {
+      const runs = filteredRuns();
+      return runs[0] || null;
+    }
+
+    function currentExample(run) {
+      if (!run || !run.examples.length) return null;
+      return run.examples[Math.min(state.exampleIndex, run.examples.length - 1)] || run.examples[0];
+    }
+
+    function setOptions(select, values, selected, allLabel) {
+      select.innerHTML = `<option value="all">${allLabel}</option>${values.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join('')}`;
+      select.value = values.includes(selected) ? selected : 'all';
+    }
+
+    function render() {
+      renderFilters();
+      const runs = filteredRuns();
+      const run = currentRun();
+      const example = currentExample(run);
+      renderStats(runs);
+      renderRunList(runs);
+      renderRunPanel(run);
+      renderExampleSelect(run);
+      renderTabs(example);
+      renderTab(example);
+    }
+
+    function renderFilters() {
+      const runs = state.data.runs;
+      const benchmarks = unique(runs.map((run) => run.benchmark));
+      if (state.benchmark !== 'all' && !benchmarks.includes(state.benchmark)) state.benchmark = 'all';
+
+      const models = unique(runsForModelFilter().flatMap((run) => [run.model, run.resolved_model]));
+      if (state.model !== 'all' && !models.includes(state.model)) state.model = 'all';
+
+      const methods = unique(runsForMethodFilter().flatMap((run) => runMethods(run)));
+      if (state.method !== 'all' && !methods.includes(state.method)) state.method = 'all';
+
+      const runPaths = runsForRunFilter().map((run) => run.path);
+      if (state.run !== 'all' && !runPaths.includes(state.run)) state.run = 'all';
+
+      setOptions($('benchmarkFilter'), benchmarks, state.benchmark, 'All benchmarks');
+      setOptions($('modelFilter'), models, state.model, 'All models');
+      setOptions($('methodFilter'), methods, state.method, 'All methods');
+      setOptions($('runFilter'), runPaths, state.run, 'Latest matching run');
+      $('searchFilter').value = state.search;
+    }
+
+    function renderStats(runs) {
+      const examples = runs.reduce((total, run) => total + run.examples.length, 0);
+      const rows = runs.flatMap((run) => run.results);
+      const correct = rows.filter((row) => row.correct === true || row.correct === 'True').length;
+      const errors = rows.filter((row) => row.error).length;
+      $('stats').innerHTML = [
+        ['Runs', runs.length],
+        ['Examples', examples],
+        ['Correct rows', correct],
+        ['Rows with errors', errors],
+      ].map(([label, value]) => `<div class="stat"><span class="subtle">${label}</span><strong>${value}</strong></div>`).join('');
+    }
+
+    function renderRunList(runs) {
+      const active = currentRun();
+      $('runList').innerHTML = runs.map((run) => `
+        <button class="run-button ${active && active.path === run.path ? 'active' : ''}" type="button" data-run-path="${esc(run.path)}">
+          <strong>${esc(run.run_id)}</strong>
+          <div class="subtle">${esc(run.benchmark)} / ${esc(run.model)}</div>
+          <div>${run.examples.length} examples · ${run.results.length} result rows</div>
+        </button>
+      `).join('') || '<div class="empty">No runs match the filters.</div>';
+      document.querySelectorAll('[data-run-path]').forEach((button) => {
+        button.addEventListener('click', () => {
+          state.run = button.dataset.runPath;
+          state.exampleIndex = 0;
+          state.agent = 'all';
+          state.eventAgent = 'all';
+          render();
+        });
+      });
+    }
+
+    function renderRunPanel(run) {
+      if (!run) {
+        $('runPanel').innerHTML = '<div class="empty">No run selected.</div>';
+        return;
+      }
+      const methods = Object.entries(run.summary || {}).map(([method, item]) => `<span class="pill">${esc(method)} · acc ${round(item.accuracy)}</span>`).join('');
+      $('runPanel').innerHTML = `
+        <h2>${esc(run.benchmark_display_name)} · ${esc(run.run_id)}</h2>
+        <div class="subtle">${esc(run.path)}</div>
+        <p><span class="pill">${esc(run.model)}</span><span class="pill">${esc(run.resolved_model)}</span>${methods}</p>
+        <details><summary>Run config</summary><pre>${esc(pretty(run.run_config))}</pre></details>
+        <details><summary>Results CSV preview</summary><pre>${esc(pretty(run.csv_rows))}</pre></details>
+      `;
+    }
+
+    function renderExampleSelect(run) {
+      if (!run || !run.examples.length) {
+        $('exampleFilter').innerHTML = '<option>No examples</option>';
+        return;
+      }
+      $('exampleFilter').innerHTML = run.examples.map((example, index) => {
+        const status = example.correct === true || example.correct === 'True' ? 'correct' : example.error ? 'error' : 'unclear';
+        return `<option value="${index}">#${esc(example.index)} ${esc(example.method)} · ${status}</option>`;
+      }).join('');
+      $('exampleFilter').value = String(Math.min(state.exampleIndex, run.examples.length - 1));
+    }
+
+    function renderAgentFilter(example) {
+      const agentNames = unique((example?.agents || []).map((agent) => agent.name));
+      if (state.agent !== 'all' && !agentNames.includes(state.agent)) state.agent = 'all';
+      return `<div class="field"><label for="agentFilter">Subagent</label><select id="agentFilter" onchange="setAgentFilter(this.value)"><option value="all">All subagents</option>${agentNames.map((name) => `<option value="${esc(name)}" ${state.agent === name ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></div>`;
+    }
+
+    function renderEventAgentFilter(example) {
+      const agentNames = unique((example?.agents || []).map((agent) => agent.name));
+      if (state.eventAgent !== 'all' && !agentNames.includes(state.eventAgent)) state.eventAgent = 'all';
+      return `<div class="field"><label for="eventAgentFilter">Event agent</label><select id="eventAgentFilter" onchange="setEventAgentFilter(this.value)"><option value="all">All event agents</option>${agentNames.map((name) => `<option value="${esc(name)}" ${state.eventAgent === name ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></div>`;
+    }
+
+    function setAgentFilter(value) {
+      state.agent = value;
+      state.tab = 'Agents';
+      render();
+    }
+
+    function setEventAgentFilter(value) {
+      state.eventAgent = value;
+      state.tab = 'Events';
+      render();
+    }
+
+    function renderTabs(example) {
+      const tabs = ['Overview', 'Orchestrator', 'Prompt', 'Output', 'Agents', 'Events', 'Tools', 'Raw'];
+      $('tabs').innerHTML = tabs.map((tab) => `<button class="tab ${state.tab === tab ? 'active' : ''}" type="button" data-tab="${tab}">${tab}</button>`).join('');
+      document.querySelectorAll('[data-tab]').forEach((button) => {
+        button.addEventListener('click', () => {
+          state.tab = button.dataset.tab;
+          renderTabs(example);
+          renderTab(example);
+        });
+      });
+    }
+
+    function renderTab(example) {
+      if (!example) {
+        $('tabContent').innerHTML = '<div class="empty">This run has no JSON trace examples.</div>';
+        return;
+      }
+      const renderers = { Overview: renderOverview, Orchestrator: renderOrchestrator, Prompt: renderPrompt, Output: renderOutput, Agents: renderAgents, Events: renderEvents, Tools: renderTools, Raw: renderRaw };
+      $('tabContent').innerHTML = renderers[state.tab](example);
+    }
+
+    function renderOverview(example) {
+      return `
+        <div class="grid">
+          <div>
+            <h3>Result</h3>
+            <p>
+              <span class="pill">pred: ${esc(example.pred)}</span>
+              <span class="pill">gold: ${esc(example.gold)}</span>
+              <span class="pill ${example.correct ? 'good' : 'bad'}">correct: ${esc(example.correct)}</span>
+            </p>
+            ${example.error ? `<pre class="bad">${esc(example.error)}</pre>` : '<p class="subtle">No error recorded.</p>'}
+          </div>
+          <div>
+            <h3>Agents</h3>
+            ${(example.agents || []).map((agent) => `<span class="pill">${esc(agent.name)} · ${agent.steps.length} steps</span>`).join('') || '<p class="subtle">No agent traces.</p>'}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderPrompt(example) {
+      return `<pre>${esc(example.prompt)}</pre>`;
+    }
+
+    function renderOrchestrator(example) {
+      const orchestrator = example.orchestrator || {};
+      const rawSections = [
+        orchestrator.prompt ? `<details><summary>Raw orchestrator prompt</summary><pre>${esc(orchestrator.prompt)}</pre></details>` : '',
+        orchestrator.raw_output ? `<details open><summary>Raw orchestrator output</summary><pre>${esc(orchestrator.raw_output)}</pre></details>` : '<div class="empty">Raw orchestrator output is not present in this trace. Current runs save the validated orchestrator plan, reason, selected agents, and assignments.</div>',
+      ].join('');
+      return `
+        <div class="grid">
+          <div>
+            <h3>Decision</h3>
+            <p>
+              <span class="pill">mode: ${esc(orchestrator.plan?.mode)}</span>
+              <span class="pill">subagent mode: ${esc(orchestrator.plan?.subagent_mode)}</span>
+              <span class="pill">task type: ${esc(orchestrator.plan?.task_type)}</span>
+            </p>
+            <pre>${esc(orchestrator.reason || orchestrator.plan?.reason || '')}</pre>
+          </div>
+          <div>
+            <h3>Selected subagents</h3>
+            ${(orchestrator.selected_agents || []).map((agent) => `
+              <div class="mini-panel">
+                <strong>${esc(agent.name || agent.agent_name)}</strong>
+                <div class="subtle">${esc(agent.role || '')}</div>
+                <p>${esc(agent.subtask || agent.task || '')}</p>
+              </div>
+            `).join('') || '<p class="subtle">No selected agents recorded.</p>'}
+          </div>
+        </div>
+        <details open><summary>Validated orchestrator plan</summary><pre>${esc(pretty(orchestrator.plan || {}))}</pre></details>
+        <details><summary>Agent assignments</summary><pre>${esc(pretty(orchestrator.assignments || []))}</pre></details>
+        ${rawSections}
+      `;
+    }
+
+    function renderOutput(example) {
+      return `<pre>${esc(example.raw_output)}</pre>`;
+    }
+
+    function renderAgents(example) {
+      const agents = (example.agents || []).filter((agent) => state.agent === 'all' || agent.name === state.agent);
+      const agentBlocks = agents.map((agent) => `
+        <div class="agent">
+          <h3>${esc(agent.name)}</h3>
+          <details><summary>Assignment</summary><pre>${esc(pretty(agent.assignment))}</pre></details>
+          ${(agent.steps || []).map((step) => `
+            <div class="step">
+              <strong>Step ${esc(step.step)} ${step.is_reactive ? '<span class="pill warn">reactive</span>' : ''}</strong>
+              <details><summary>Prompt</summary><pre>${esc(step.prompt)}</pre></details>
+              <details open><summary>Response</summary><pre>${esc(step.raw_response)}</pre></details>
+              <details><summary>Parsed output</summary><pre>${esc(pretty(step.parsed_output))}</pre></details>
+              <details><summary>Inbox and published events</summary><pre>${esc(pretty({ inbox_events: step.inbox_events, published_events: step.published_events, used_event_ids: step.used_event_ids }))}</pre></details>
+            </div>
+          `).join('') || '<p class="subtle">No steps.</p>'}
+          <details><summary>Final output</summary><pre>${esc(agent.final_output)}</pre></details>
+          <details><summary>Event receipts</summary><pre>${esc(pretty(agent.event_receipts))}</pre></details>
+        </div>
+      `).join('') || '<div class="empty">No agent trace data.</div>';
+      return `${renderAgentFilter(example)}${agentBlocks}`;
+    }
+
+    function renderEvents(example) {
+      const events = (example.events || []).filter((event) => eventMatchesAgent(event, example.receipts || []));
+      const renderedEvents = events.map((event) => renderEventFlow(event, example.receipts || [])).join('') || '<div class="empty">No event log matches this filter.</div>';
+      const receipts = (example.receipts || []).filter((receipt) => state.eventAgent === 'all' || receipt.agent_name === state.eventAgent || receipt.source === state.eventAgent);
+      return `${renderEventAgentFilter(example)}${renderedEvents}<h3>Receipts</h3><pre>${esc(pretty(receipts))}</pre>`;
+    }
+
+    function eventMatchesAgent(event, receipts) {
+      if (state.eventAgent === 'all') return true;
+      return event.source === state.eventAgent ||
+        event.target === state.eventAgent ||
+        receipts.some((receipt) => receipt.event_id === event.event_id && receipt.agent_name === state.eventAgent);
+    }
+
+    function renderEventFlow(event, receipts) {
+      const eventReceipts = receipts.filter((receipt) => receipt.event_id === event.event_id);
+      const typeClass = ['finding', 'critique', 'warning'].includes(event.event_type) ? event.event_type : '';
+      const receivedBy = eventReceipts.length
+        ? eventReceipts.map((receipt) => `
+            <span class="pill ${receipt.accepted ? 'good' : 'bad'}">
+              ${esc(receipt.agent_name)} ${receipt.accepted ? 'accepted' : `ignored: ${receipt.ignored_reason || 'no reason'}`}
+              ${receipt.used_in_step ? ` · used step ${esc(receipt.used_in_step)}` : ''}
+            </span>
+          `).join('')
+        : '<span class="pill">no receipts recorded</span>';
+      return `
+        <div class="event ${typeClass}">
+          <div class="flow">
+            <span class="pill ${typeClass === 'finding' ? 'good' : typeClass === 'warning' ? 'bad' : typeClass === 'critique' ? 'warn' : ''}">${esc(event.event_type)}</span>
+            <strong>${esc(event.source)}</strong>
+            <span class="flow-arrow">-></span>
+            <strong>${esc(event.target)}</strong>
+          </div>
+          <div class="flow">${receivedBy}</div>
+          <pre>${esc(event.content)}</pre>
+        </div>
+      `;
+    }
+
+    function renderTools(example) {
+      const tools = [];
+      (example.agents || []).forEach((agent) => {
+        (agent.tools || []).forEach((tool) => tools.push({ agent: agent.name, step: 'final', ...tool }));
+        (agent.steps || []).forEach((step) => (step.tools || []).forEach((tool) => tools.push({ agent: agent.name, step: step.step, ...tool })));
+      });
+      (example.events || []).forEach((event) => (event.tools || []).forEach((tool) => tools.push({ agent: event.source, step: 'event', ...tool })));
+      return tools.map((tool) => `
+        <div class="event">
+          <span class="pill">${esc(tool.agent)}</span>
+          <span class="pill">step ${esc(tool.step)}</span>
+          <span class="pill">${esc(tool.tool)}</span>
+          <pre>${esc(tool.command || tool.raw)}</pre>
+        </div>
+      `).join('') || '<div class="empty">No ACTION tool calls detected in this trace.</div>';
+    }
+
+    function renderRaw(example) {
+      return `<pre>${esc(example.raw_trace_excerpt)}</pre>`;
+    }
+
+    $('loadDefaultButton').addEventListener('click', loadDefaultOutputFolder);
+    $('openFolderButton').addEventListener('click', openOutputFolder);
+    $('rescanButton').addEventListener('click', rescanCurrentFolder);
+    $('folderInput').addEventListener('change', (event) => loadFromFileInput(event.target.files));
+    $('benchmarkFilter').addEventListener('change', (event) => { state.benchmark = event.target.value; state.model = 'all'; state.method = 'all'; state.run = 'all'; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; render(); });
+    $('modelFilter').addEventListener('change', (event) => { state.model = event.target.value; state.method = 'all'; state.run = 'all'; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; render(); });
+    $('methodFilter').addEventListener('change', (event) => { state.method = event.target.value; state.run = 'all'; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; render(); });
+    $('runFilter').addEventListener('change', (event) => { state.run = event.target.value; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; render(); });
+    $('searchFilter').addEventListener('input', (event) => { state.search = event.target.value; render(); });
+    $('exampleFilter').addEventListener('change', (event) => { state.exampleIndex = Number(event.target.value || 0); state.agent = 'all'; state.eventAgent = 'all'; render(); });
+
+    configureProtocolMode();
+    render();
+    if (!isFileProtocol()) loadDefaultOutputFolder();
+    if (isFileProtocol()) {
+      $('sourceStatus').textContent = 'Browser blocks automatic default loading for file:// pages. Click Open output folder and select the output folder.';
+    }
+  </script>
+</body>
+</html>
