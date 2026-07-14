@@ -45,6 +45,7 @@ async def run_workflow(
     enable_workspace_tools: bool = False,
     docker_workspace: Any | None = None,
     feedback_tool: Any | None = None,
+    final_guard_tool: Any | None = None,
 ) -> GraphState:
     workflow = build_workflow()
     event_streamer = InMemoryEventStreamer()
@@ -80,4 +81,6 @@ async def run_workflow(
         initial_state["docker_workspace"] = docker_workspace
     if feedback_tool is not None:
         initial_state["feedback_tool"] = feedback_tool
+    if final_guard_tool is not None:
+        initial_state["final_guard_tool"] = final_guard_tool
     return await workflow.ainvoke(initial_state)

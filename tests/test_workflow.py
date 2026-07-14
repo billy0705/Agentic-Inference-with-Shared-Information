@@ -298,6 +298,25 @@ async def test_easy_direct_orchestrator_response_uses_direct_answer_node():
 
 
 @pytest.mark.asyncio
+async def test_workspace_tools_force_multi_agent_runtime_even_for_direct_orchestrator_response():
+    workspace = WorkflowFakeDockerWorkspace()
+    state = await run_workflow(
+        task="What is an API? Inspect the repository.",
+        llm=WorkflowToolLLM(),
+        max_steps_per_agent=2,
+        total_runtime_timeout=10,
+        stream_to_console=False,
+        enable_workspace_tools=True,
+        docker_workspace=workspace,
+    )
+
+    assert state["mode"] == "multi_agent"
+    assert "CodingAgent" in state["agent_outputs"]
+    assert workspace.commands == ["printf workflow"]
+    assert state["agent_traces"]
+
+
+@pytest.mark.asyncio
 async def test_non_easy_direct_orchestrator_response_falls_back_to_multi_agent_runtime():
     state = await run_workflow(
         task="Which one of the following implementation strategies should we use?",

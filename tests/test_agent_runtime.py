@@ -68,6 +68,59 @@ class ToolLoopLLM:
         )
 
 
+class FinalGuardRetryLLM:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            return FakeResponse(
+                "FINAL:\nI am done without editing files.\n"
+                "SHARE_FINDING:\nAttempting to finish.\n"
+                "CONFIDENCE:\n0.7\n"
+                "LOCAL_NOTES:\nNeed guard result."
+            )
+        if len(self.prompts) == 2:
+            assert "final_guard_failed" in prompt
+            assert "git diff is empty" in prompt
+            return FakeResponse(
+                'ACTION:\n{"tool": "bash", "command": "printf edited"}\n'
+                "SHARE_FINDING:\nApplying an edit after guard feedback.\n"
+                "CONFIDENCE:\n0.8\n"
+                "LOCAL_NOTES:\nEdit command issued."
+            )
+        assert "printf edited" in prompt
+        return FakeResponse(
+            "FINAL:\nThe repository files were edited in Docker.\n"
+            "SHARE_FINDING:\nWorkspace edit is now present.\n"
+            "CONFIDENCE:\n0.9\n"
+            "LOCAL_NOTES:\nDone."
+        )
+
+
+class FakeFinalGuardTool:
+    name = "fake_final_guard"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(self, *, final_response: str | None = None):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "tool": self.name,
+                "passed": False,
+                "error": "final_guard_failed",
+                "message": "git diff is empty",
+                "stderr": "git diff is empty",
+            }
+        return {
+            "tool": self.name,
+            "passed": True,
+        }
+
+
 class AgentFakeDockerWorkspace(DockerWorkspace):
     def __init__(self) -> None:
         super().__init__(container_name="agent-fake-container")
@@ -257,6 +310,39 @@ async def test_coding_agent_uses_docker_bash_observation_in_tool_loop():
     assert first_step["parsed_output"]["tool_action"]["command"] == "printf hello"
     assert first_step["parsed_output"]["tool_result"]["stdout"] == "hello from docker\n"
     assert second_step["parsed_output"]["status"] == "final"
+
+
+@pytest.mark.asyncio
+async def test_final_guard_rejects_final_and_allows_extra_tool_steps():
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    workspace = AgentFakeDockerWorkspace()
+    guard = FakeFinalGuardTool()
+    llm = FinalGuardRetryLLM()
+    agent = CodingAgent(
+        run_id="run-final-guard",
+        task="Edit files before finishing.",
+        assigned_subtask="Use Docker edits before final answer.",
+        llm=llm,
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        bash_tool=BashTool(workspace),
+        final_guard_tool=guard,
+        workspace_access="write",
+        max_steps=2,
+        step_delay_seconds=0,
+    )
+
+    output = await agent.run()
+
+    assert "repository files were edited" in output
+    assert workspace.commands == ["printf edited"]
+    assert guard.calls == 2
+    trace = trace_logger.export()["CodingAgent"]
+    assert trace["steps"][0]["parsed_output"]["status"] == "continue"
+    assert trace["steps"][0]["parsed_output"]["tool_result"]["error"] == "final_guard_failed"
+    assert trace["steps"][1]["parsed_output"]["tool_action"]["command"] == "printf edited"
+    assert trace["steps"][2]["parsed_output"]["status"] == "final"
 
 
 @pytest.mark.asyncio

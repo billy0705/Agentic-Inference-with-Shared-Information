@@ -5,6 +5,7 @@ import csv
 import json
 import random
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,34 @@ DEFAULT_LOCAL_DATA_FILE = Path("data/swe_bench_verified/test.jsonl")
 SUCCESS_GOLD = "patch_required"
 PATCH_PRODUCED = "patch_produced"
 NO_PATCH = "no_patch"
+
+
+@dataclass
+class SweBenchFinalGuard:
+    workspace: Any
+    repo: str
+
+    name: str = "swebench_final_guard"
+
+    async def run(self, *, final_response: str | None = None) -> dict[str, Any]:
+        del final_response
+        command = build_git_diff_command(
+            self.repo,
+            empty_diff_error="Docker workspace git diff is empty. Modify repository files inside /workspace before FINAL.",
+            output_diff=False,
+        )
+        result = await self.workspace.run_bash(command)
+        payload = result.as_dict() if hasattr(result, "as_dict") else dict(result)
+        payload.update(
+            {
+                "tool": self.name,
+                "passed": result.exit_code == 0,
+            }
+        )
+        if result.exit_code != 0:
+            payload["error"] = "final_guard_failed"
+            payload["message"] = result.stderr or result.stdout or "Docker workspace has no non-empty git diff."
+        return payload
 
 
 def build_benchmark() -> BenchmarkSpec:
@@ -103,17 +132,51 @@ def build_prompt(row: dict[str, Any], rng: random.Random) -> tuple[str, str]:
 
 
 def build_workflow_config(row: dict[str, Any], args: argparse.Namespace) -> BenchmarkWorkflowConfig:
-    del row, args
+    del args
+
+    repo = str(row["repo"])
 
     async def export_git_diff(workspace: Any) -> str:
-        result = await workspace.run_bash("git diff -- .")
+        result = await workspace.run_bash(build_git_diff_command(repo, output_diff=True))
         if result.exit_code != 0:
             raise RuntimeError(f"Could not export git diff from SWE-bench workspace: {result.stderr or result.stdout}")
         return result.stdout
 
     return BenchmarkWorkflowConfig(
         final_candidate_path="__git_diff__",
+        final_guard_factory=lambda workspace: SweBenchFinalGuard(workspace=workspace, repo=repo),
         final_candidate_exporter=export_git_diff,
+    )
+
+
+def build_git_diff_command(
+    repo: str,
+    *,
+    output_diff: bool,
+    empty_diff_error: str = "SWE-bench workspace git diff was empty; the agent did not modify repository files.",
+) -> str:
+    diff_command = "git -C \"$repo_dir\" diff -- ." if output_diff else "git -C \"$repo_dir\" diff --stat -- ."
+    return (
+        "set -euo pipefail\n"
+        "repo_dir=''\n"
+        "if git rev-parse --show-toplevel >/dev/null 2>&1; then\n"
+        "  repo_dir=$(git rev-parse --show-toplevel)\n"
+        "else\n"
+        "  repo_git_dir=$(find . -mindepth 2 -maxdepth 2 -type d -name .git -print -quit)\n"
+        "  if [ -n \"$repo_git_dir\" ]; then\n"
+        "    repo_dir=${repo_git_dir%/.git}\n"
+        "  fi\n"
+        "fi\n"
+        "if [ -z \"$repo_dir\" ]; then\n"
+        f"  echo 'No Git repository found in /workspace. Clone https://github.com/{repo}.git in the Docker workspace before finishing.' >&2\n"
+        "  exit 1\n"
+        "fi\n"
+        "git -C \"$repo_dir\" add -N .\n"
+        "if git -C \"$repo_dir\" diff --quiet -- .; then\n"
+        f"  echo {json.dumps(empty_diff_error)} >&2\n"
+        "  exit 2\n"
+        "fi\n"
+        f"{diff_command}"
     )
 
 

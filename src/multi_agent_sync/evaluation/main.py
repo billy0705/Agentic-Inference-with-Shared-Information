@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import random
 import time
+from pathlib import Path
 from typing import Any
 
 from multi_agent_sync.evaluation import runner
@@ -233,6 +234,9 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                 total_tokens = run_result.total_tokens
                 method_trace = run_result.trace or {}
                 error = ""
+                workspace_trace = method_trace.get("workspace")
+                if returncode != 0 and isinstance(workspace_trace, dict) and workspace_trace.get("export_error"):
+                    error = str(workspace_trace["export_error"])
             except Exception as exc:
                 raw_output = ""
                 returncode = 1
@@ -302,8 +306,9 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
             flush_incremental_artifacts()
             runner.print_result(result)
 
-    summary = runner.summarize_results(results)
     postprocess_swebench_predictions(benchmark, results, methods, args, run_id)
+    flush_incremental_artifacts()
+    summary = runner.summarize_results(results)
     runner.print_summary(benchmark, summary, output_path)
     return results
 
@@ -328,7 +333,87 @@ def postprocess_swebench_predictions(
         swebench_harness.write_predictions_jsonl(predictions_path, predictions)
         if getattr(args, "swebench_run_harness", False):
             command = swebench_harness.build_run_evaluation_command(predictions_path, args)
-            swebench_harness.run_official_evaluation(command, trace_root / f"harness_{runner.safe_filename(method)}.json")
+            artifact_path = trace_root / f"harness_{runner.safe_filename(method)}.json"
+            payload = swebench_harness.run_official_evaluation(command, artifact_path)
+            report, report_path = swebench_harness.load_report_from_payload(payload, artifact_path)
+            apply_swebench_harness_results(
+                results,
+                method=method,
+                report=report,
+                report_path=report_path,
+                artifact_path=artifact_path,
+                stdout=str(payload.get("stdout") or ""),
+            )
+
+
+def apply_swebench_harness_results(
+    results: list[dict[str, Any]],
+    *,
+    method: str,
+    report: dict[str, Any] | None,
+    report_path: Any,
+    artifact_path: Any,
+    stdout: str,
+) -> None:
+    for result in results:
+        if result.get("benchmark") != "swe_bench_verified" or result.get("method") != method:
+            continue
+        metadata = result.get("score_metadata")
+        if not isinstance(metadata, dict):
+            continue
+        metadata["official_evaluation"] = "report_missing" if report is None else "not_submitted"
+        metadata["harness_artifact_path"] = str(artifact_path)
+        if report_path is not None:
+            metadata["harness_report_path"] = str(report_path)
+        if report is None:
+            result["correct"] = False
+            result["error"] = "Official SWE-bench harness ran, but no report JSON was found."
+            result["score_metadata"] = metadata
+            update_swebench_trace_result(result)
+            continue
+
+        instance_id = str(metadata.get("instance_id") or "")
+        status = swebench_harness.instance_official_status(report, instance_id)
+        metadata["official_evaluation"] = status or "not_submitted"
+        result["score_metadata"] = metadata
+        if status == "resolved":
+            result["correct"] = True
+            result["error"] = ""
+            result["returncode"] = 0
+        elif status == "unresolved":
+            result["correct"] = False
+            result["error"] = "Official SWE-bench harness marked this instance unresolved."
+            result["returncode"] = 0
+        elif status == "empty_patch":
+            result["correct"] = False
+            result["pred"] = None
+            result["error"] = "Official SWE-bench harness received an empty patch."
+            result["returncode"] = 1
+        elif status == "error":
+            detail = swebench_harness.extract_instance_error(stdout, instance_id)
+            result["correct"] = False
+            result["error"] = detail or "Official SWE-bench harness reported an evaluation error."
+            result["returncode"] = 1
+        else:
+            result["correct"] = False
+            result["error"] = "Official SWE-bench harness did not submit this instance."
+            result["returncode"] = 1
+        update_swebench_trace_result(result)
+
+
+def update_swebench_trace_result(result: dict[str, Any]) -> None:
+    trace_path = str(result.get("json_trace_path") or "")
+    if not trace_path:
+        return
+    path = Path(trace_path)
+    if not path.exists():
+        return
+    payload = runner.to_jsonable(result)
+    trace_payload = runner.json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(trace_payload, dict):
+        for key in ("pred", "correct", "returncode", "error", "score_metadata"):
+            trace_payload[key] = payload.get(key)
+        path.write_text(runner.json.dumps(trace_payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def build_method_workflow_config(benchmark: BenchmarkSpec, row: dict[str, Any], method: str, args: argparse.Namespace):

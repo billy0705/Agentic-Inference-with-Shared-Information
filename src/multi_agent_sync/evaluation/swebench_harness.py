@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +23,8 @@ def build_predictions(results: list[dict[str, Any]], *, method: str, model_name_
         model_patch = str(metadata.get("model_patch") or "")
         if not instance_id or not model_patch.strip():
             continue
+        if not model_patch.endswith("\n"):
+            model_patch += "\n"
         predictions.append(
             {
                 "instance_id": instance_id,
@@ -52,6 +55,8 @@ def build_run_evaluation_command(predictions_path: Path, args: Any) -> list[str]
         str(getattr(args, "swebench_max_workers", 1)),
         "--run_id",
         str(getattr(args, "swebench_run_id", "multi-agent-sync")),
+        "--report_dir",
+        str(predictions_path.parent),
     ]
     namespace = getattr(args, "swebench_namespace", None)
     if namespace is not None:
@@ -83,6 +88,49 @@ def run_official_evaluation(command: list[str], artifact_path: Path) -> dict[str
             f"{completed.returncode}. See artifact: {artifact_path}"
         )
     return payload
+
+
+def load_report_from_payload(payload: dict[str, Any], artifact_path: Path) -> tuple[dict[str, Any] | None, Path | None]:
+    stdout = str(payload.get("stdout") or "")
+    match = re.search(r"Report written to (?P<path>.+\.json)", stdout)
+    if not match:
+        return None, None
+
+    report_path = Path(match.group("path").strip())
+    if not report_path.is_absolute():
+        candidates = [
+            report_path,
+            artifact_path.parent / report_path,
+            artifact_path.parent / report_path.name,
+        ]
+        report_path = next((candidate.resolve() for candidate in candidates if candidate.exists()), (artifact_path.parent / report_path.name).resolve())
+    if not report_path.exists():
+        return None, report_path
+    return json.loads(report_path.read_text(encoding="utf-8")), report_path
+
+
+def instance_official_status(report: dict[str, Any], instance_id: str) -> str | None:
+    status_fields = [
+        ("resolved", "resolved_ids"),
+        ("unresolved", "unresolved_ids"),
+        ("empty_patch", "empty_patch_ids"),
+        ("error", "error_ids"),
+        ("completed", "completed_ids"),
+    ]
+    for status, field in status_fields:
+        values = report.get(field)
+        if isinstance(values, list) and instance_id in values:
+            return status
+    return None
+
+
+def extract_instance_error(stdout: str, instance_id: str) -> str:
+    marker = f"{instance_id}: >>>>> "
+    index = stdout.find(marker)
+    if index == -1:
+        return ""
+    snippet = stdout[index:].split("\n\n", 1)[0].strip()
+    return snippet
 
 
 def current_python_executable() -> str:

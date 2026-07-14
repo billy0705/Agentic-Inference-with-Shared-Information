@@ -12,7 +12,7 @@ from multi_agent_sync.evaluation import chess, gpqa, gsm8k, ma_proofbench, mmlu_
 from multi_agent_sync.evaluation.benchmarks import swe_bench_verified
 from multi_agent_sync.evaluation.baselines import multiagent_sync
 from multi_agent_sync.evaluation import runner
-from multi_agent_sync.evaluation.types import BenchmarkSpec
+from multi_agent_sync.evaluation.types import BenchmarkSpec, BenchmarkWorkflowConfig
 
 
 def test_baselines_package_exports_evaluation_methods():
@@ -262,6 +262,15 @@ def test_swe_bench_verified_prompt_omits_gold_patches():
     assert "Fix separability_matrix" in prompt
     assert "astropy/astropy" in prompt
     assert "d16bfe05a744909de4b27f5875fe0d4ed41ce607" in prompt
+    assert "Required Docker workflow:" in prompt
+    assert "Your first bash action must clone the repository" in prompt
+    assert "git clone https://github.com/astropy/astropy.git ." in prompt
+    assert "git checkout d16bfe05a744909de4b27f5875fe0d4ed41ce607" in prompt
+    assert "modify the actual repository files inside the Docker workspace" in prompt
+    assert "Do not write a patch only in your FINAL response" in prompt
+    assert "git diff would show a non-empty patch" in prompt
+    assert "The system will export the final patch from the Docker repository with git diff" in prompt
+    assert "Do not return FINAL until the repository exists in /workspace" in prompt
     assert "GOLD_PATCH_SHOULD_NOT_APPEAR" not in prompt
     assert "GOLD_TEST_PATCH_SHOULD_NOT_APPEAR" not in prompt
     assert "diff --git" in prompt
@@ -294,6 +303,7 @@ def test_swe_bench_verified_extracts_prediction_patch_and_scores_prediction_only
 async def test_swe_bench_verified_multiagent_workspace_exports_git_diff(monkeypatch):
     RunnerFakeDockerWorkspace.created = []
     captured_workflow_kwargs = {}
+    bash_commands = []
 
     async def fake_run_workflow(**kwargs):
         captured_workflow_kwargs.update(kwargs)
@@ -315,7 +325,8 @@ async def test_swe_bench_verified_multiagent_workspace_exports_git_diff(monkeypa
         }
 
     async def fake_run_bash(self, command, *, timeout_seconds=None):
-        if command == "git diff -- .":
+        bash_commands.append(command)
+        if "git -C \"$repo_dir\" diff -- ." in command:
             return types.SimpleNamespace(
                 command=command,
                 exit_code=0,
@@ -365,9 +376,62 @@ async def test_swe_bench_verified_multiagent_workspace_exports_git_diff(monkeypa
 
     assert returncode == 0
     assert captured_workflow_kwargs["enable_workspace_tools"] is True
+    assert captured_workflow_kwargs["final_guard_tool"].name == "swebench_final_guard"
     assert "diff --git a/pkg/mod.py b/pkg/mod.py" in raw_output
     assert trace["workspace"]["final_candidate_path"] == "__git_diff__"
     assert trace["workspace"]["final_candidate"].startswith("diff --git")
+    assert any("No Git repository found in /workspace" in command for command in bash_commands)
+    assert all("git clone https://github.com/owner/repo.git" not in command for command in bash_commands)
+
+
+@pytest.mark.asyncio
+async def test_multiagent_workspace_export_error_preserves_trace(monkeypatch):
+    RunnerFakeDockerWorkspace.created = []
+
+    async def fake_run_workflow(**kwargs):
+        return {
+            "final_answer": "Agent finished without cloning.",
+            "run_id": "run",
+            "mode": "multi_agent",
+            "subagent_mode": "fixed",
+            "orchestrator_plan": {
+                "selected_agents": [{"name": "CodingAgent", "subtask": "Use Docker bash."}],
+            },
+            "event_log": [],
+            "agent_outputs": {"CodingAgent": "No repo created."},
+            "agent_traces": {"CodingAgent": {"steps": []}},
+        }
+
+    async def failing_exporter(workspace):
+        raise RuntimeError("No Git repository found in /workspace.")
+
+    monkeypatch.setattr(multiagent_sync, "DockerWorkspace", RunnerFakeDockerWorkspace)
+    monkeypatch.setattr(multiagent_sync, "run_workflow", fake_run_workflow)
+
+    workflow_config = BenchmarkWorkflowConfig(
+        final_candidate_path="__git_diff__",
+        final_candidate_exporter=failing_exporter,
+    )
+    args = argparse.Namespace(
+        max_steps=2,
+        total_runtime_timeout=5,
+        synthesis_timeout=1,
+        workspace_image="python:3.12",
+        workspace_command_timeout=30,
+        workspace_output_limit=12000,
+    )
+
+    raw_output, returncode, trace = await runner.run_multiagent(
+        "Fix the bug.",
+        UsageLLM([]),
+        args,
+        workflow_config=workflow_config,
+    )
+
+    assert returncode == 1
+    assert "Workspace export failed: No Git repository found in /workspace." in raw_output
+    assert trace["agent_outputs"] == {"CodingAgent": "No repo created."}
+    assert trace["workspace"]["export_error"] == "No Git repository found in /workspace."
 
 
 def test_parser_rejects_removed_local_lean_verifier_flags():
@@ -492,6 +556,61 @@ async def test_run_evaluation_writes_swebench_predictions_jsonl(monkeypatch, tmp
     assert prediction["instance_id"] == "owner__repo-1"
     assert prediction["model_name_or_path"] == "fake-model"
     assert prediction["model_patch"].startswith("diff --git")
+    assert prediction["model_patch"].endswith("\n")
+
+
+def test_apply_swebench_harness_results_updates_official_status(tmp_path):
+    trace_path = tmp_path / "example.json"
+    trace_path.write_text(
+        json.dumps(
+            {
+                "pred": "patch_produced",
+                "correct": False,
+                "returncode": 0,
+                "error": "Prediction patch produced; official SWE-bench harness evaluation was not run.",
+                "score_metadata": {"official_evaluation": "not_run"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    results = [
+        {
+            "benchmark": "swe_bench_verified",
+            "method": "multiagent_streaming",
+            "pred": "patch_produced",
+            "correct": False,
+            "returncode": 0,
+            "error": "Prediction patch produced; official SWE-bench harness evaluation was not run.",
+            "score_metadata": {
+                "instance_id": "owner__repo-1",
+                "official_evaluation": "not_run",
+            },
+            "json_trace_path": str(trace_path),
+        }
+    ]
+    report = {
+        "resolved_ids": [],
+        "unresolved_ids": [],
+        "empty_patch_ids": [],
+        "error_ids": ["owner__repo-1"],
+    }
+
+    evaluation.apply_swebench_harness_results(
+        results,
+        method="multiagent_streaming",
+        report=report,
+        report_path=tmp_path / "report.json",
+        artifact_path=tmp_path / "harness.json",
+        stdout="owner__repo-1: >>>>> Patch Apply Failed:\nmalformed patch\n\nAll instances run.",
+    )
+
+    result = results[0]
+    assert result["correct"] is False
+    assert result["returncode"] == 1
+    assert result["score_metadata"]["official_evaluation"] == "error"
+    assert "Patch Apply Failed" in result["error"]
+    updated_trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert updated_trace["score_metadata"]["official_evaluation"] == "error"
 
 
 @pytest.mark.asyncio

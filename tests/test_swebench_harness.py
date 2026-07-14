@@ -7,6 +7,8 @@ from multi_agent_sync.evaluation import swebench_harness
 from multi_agent_sync.evaluation.swebench_harness import (
     build_predictions,
     build_run_evaluation_command,
+    instance_official_status,
+    load_report_from_payload,
     write_predictions_jsonl,
 )
 
@@ -19,7 +21,7 @@ def test_build_predictions_uses_model_patch_metadata_only_for_requested_method()
             "index": 0,
             "score_metadata": {
                 "instance_id": "repo__repo-1",
-                "model_patch": "diff --git a/a.py b/a.py\n",
+                "model_patch": "diff --git a/a.py b/a.py",
             },
         },
         {
@@ -83,6 +85,8 @@ def test_build_run_evaluation_command_targets_verified_dataset(tmp_path):
     assert "SWE-bench/SWE-bench_Verified" in command
     assert "--predictions_path" in command
     assert str(predictions_path) in command
+    assert "--report_dir" in command
+    assert str(tmp_path) in command
     assert "--max_workers" in command
     assert "2" in command
     assert "--run_id" in command
@@ -92,3 +96,23 @@ def test_build_run_evaluation_command_targets_verified_dataset(tmp_path):
     assert "--instance_ids" in command
     instance_id_index = command.index("--instance_ids")
     assert command[instance_id_index + 1 : instance_id_index + 3] == ["repo__repo-1", "repo__repo-2"]
+
+
+def test_load_report_from_payload_and_instance_status(tmp_path):
+    artifact_path = tmp_path / "harness.json"
+    report_path = tmp_path / "report.json"
+    report = {
+        "resolved_ids": ["repo__repo-1"],
+        "unresolved_ids": ["repo__repo-2"],
+        "error_ids": ["repo__repo-3"],
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    payload = {"stdout": f"Report written to {report_path.name}\n"}
+
+    loaded_report, loaded_path = load_report_from_payload(payload, artifact_path)
+
+    assert loaded_report == report
+    assert loaded_path == report_path.resolve()
+    assert instance_official_status(loaded_report, "repo__repo-1") == "resolved"
+    assert instance_official_status(loaded_report, "repo__repo-2") == "unresolved"
+    assert instance_official_status(loaded_report, "repo__repo-3") == "error"

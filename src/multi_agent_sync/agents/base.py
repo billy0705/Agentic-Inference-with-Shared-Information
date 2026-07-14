@@ -55,8 +55,10 @@ class BaseAgent:
     enable_message_streaming: bool = True
     bash_tool: Any | None = None
     feedback_tool: Any | None = None
+    final_guard_tool: Any | None = None
     workspace_access: str = "none"
     tool_observations: list[dict[str, Any]] = field(default_factory=list)
+    final_guard_retry_steps: int = 2
     reactive_steps_enabled: bool = True
     max_reactive_steps: int = 1
     reactive_event_types: set[str] = field(default_factory=lambda: {"finding", "critique", "warning"})
@@ -139,7 +141,9 @@ class BaseAgent:
 
         last_step_index = 0
         final_response_received = False
-        for step_index in range(1, self.max_steps + 1):
+        step_index = 1
+        final_guard_extra_steps = 0
+        while step_index <= self.max_steps + final_guard_extra_steps:
             if time.monotonic() - started_at > self.max_runtime_seconds:
                 await self.publish_warning("Agent runtime limit reached before all steps completed.")
                 break
@@ -149,6 +153,9 @@ class BaseAgent:
             if result.status == "final":
                 final_response_received = True
                 break
+            if self.is_final_guard_retry(result) and final_guard_extra_steps == 0:
+                final_guard_extra_steps = self.final_guard_retry_steps
+            step_index += 1
 
         if not final_response_received:
             await self.maybe_run_reactive_steps(started_at, last_step_index)
@@ -334,6 +341,10 @@ class BaseAgent:
                     lines.append(f"  backend: {observation.get('backend')}")
                 if observation.get("returncode") is not None:
                     lines.append(f"  returncode: {observation.get('returncode')}")
+                if observation.get("error"):
+                    lines.append(f"  error: {observation.get('error')}")
+                if observation.get("message"):
+                    lines.append(f"  message: {observation.get('message')}")
             stdout = str(observation.get("stdout") or "").strip()
             stderr = str(observation.get("stderr") or "").strip()
             verifier_output = str(observation.get("verifier_output") or "").strip()
@@ -438,7 +449,7 @@ class BaseAgent:
     async def parse_and_run_tool_response(self, content: str) -> StepResult:
         parsed = self.parse_step_response(content)
         if parsed.status == "final":
-            return parsed
+            return await self.check_final_response(parsed)
         if not parsed.tool_action:
             return parsed
 
@@ -500,6 +511,30 @@ class BaseAgent:
             tool_action=parsed.tool_action,
             tool_result=result_payload,
         )
+
+    async def check_final_response(self, parsed: StepResult) -> StepResult:
+        if self.final_guard_tool is None or not self.has_workspace_tool:
+            return parsed
+
+        result_payload = await self.final_guard_tool.run(final_response=parsed.summary)
+        if result_payload.get("passed"):
+            return parsed
+
+        self.tool_observations.append(result_payload)
+        guard_name = result_payload.get("tool") or getattr(self.final_guard_tool, "name", "final_guard")
+        message = str(result_payload.get("message") or "Final response rejected by workspace guard.")
+        return StepResult(
+            summary=f"{guard_name} rejected FINAL: {message}",
+            share_finding=parsed.share_finding,
+            confidence=min(parsed.confidence, 0.4),
+            local_notes=parsed.local_notes,
+            status="continue",
+            tool_action={"tool": guard_name, "reason": "final_response_guard"},
+            tool_result=result_payload,
+        )
+
+    def is_final_guard_retry(self, result: StepResult) -> bool:
+        return bool(result.tool_result and result.tool_result.get("error") == "final_guard_failed")
 
     def parse_tool_action(self, text: str) -> dict[str, Any] | None:
         if not text:

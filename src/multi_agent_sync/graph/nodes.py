@@ -8,7 +8,7 @@ from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph.state import GraphState
 from multi_agent_sync.llm import get_llm
-from multi_agent_sync.orchestrator.orchestrator import create_model_based_plan, selected_agents_to_assignments
+from multi_agent_sync.orchestrator.orchestrator import create_fallback_plan, create_model_based_plan, selected_agents_to_assignments
 from multi_agent_sync.prompts import render_prompt
 from multi_agent_sync.tools.bash import BashTool
 from multi_agent_sync.tracing.trace import TraceLogger
@@ -20,6 +20,15 @@ async def orchestrator_node(state: GraphState) -> GraphState:
     llm = state.get("llm") or get_llm()
     subagent_mode = state.get("subagent_mode", "fixed")
     orchestrator_plan = await create_model_based_plan(task, llm, AGENT_REGISTRY, subagent_mode=subagent_mode)
+    if state.get("enable_workspace_tools") and (
+        orchestrator_plan.get("mode") == "direct" or not orchestrator_plan.get("selected_agents")
+    ):
+        orchestrator_plan = create_fallback_plan(
+            task,
+            AGENT_REGISTRY,
+            reason="Workspace tools are enabled, so the workflow must run agents with Docker bash access.",
+            subagent_mode=subagent_mode,
+        )
     selected_agent_specs = orchestrator_plan["selected_agents"]
     assignments = selected_agents_to_assignments(orchestrator_plan, max_steps=state.get("max_steps_per_agent", 3))
     selected_agents = ",".join(agent["name"] for agent in selected_agent_specs) if selected_agent_specs else "none"
@@ -107,6 +116,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     enable_workspace_tools = bool(state.get("enable_workspace_tools", False))
     docker_workspace = state.get("docker_workspace")
     feedback_tool = state.get("feedback_tool")
+    final_guard_tool = state.get("final_guard_tool")
     if enable_workspace_tools and docker_workspace is None:
         raise RuntimeError("Workspace tools were enabled, but no DockerWorkspace was provided.")
 
@@ -145,6 +155,8 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             agent_kwargs["bash_tool"] = BashTool(docker_workspace)
             if feedback_tool is not None:
                 agent_kwargs["feedback_tool"] = feedback_tool
+            if final_guard_tool is not None:
+                agent_kwargs["final_guard_tool"] = final_guard_tool
         if subagent_mode == "dynamic":
             agent_kwargs.update(
                 {

@@ -20,6 +20,7 @@ class BenchmarkWorkflowConfig:
     seed_files: dict[str, str] = field(default_factory=dict)
     final_candidate_path: str | None = None
     feedback_tool_factory: Callable[[Any], Any] | None = None
+    final_guard_factory: Callable[[Any], Any] | None = None
     final_candidate_exporter: Callable[[Any], Any] | None = None
 
 

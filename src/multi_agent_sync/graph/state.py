@@ -33,3 +33,4 @@ class GraphState(TypedDict):
     enable_workspace_tools: NotRequired[bool]
     docker_workspace: NotRequired[Any]
     feedback_tool: NotRequired[Any]
+    final_guard_tool: NotRequired[Any]

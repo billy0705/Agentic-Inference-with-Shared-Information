@@ -20,6 +20,8 @@ async def run_multiagent(
     docker_workspace = None
     try:
         feedback_tool = None
+        final_guard_tool = None
+        returncode = 0
         if workflow_config is not None:
             docker_workspace = await DockerWorkspace.create(
                 image=getattr(args, "workspace_image", "python:3.12"),
@@ -31,6 +33,8 @@ async def run_multiagent(
                 await docker_workspace.write_text(path, content)
             if workflow_config.feedback_tool_factory is not None:
                 feedback_tool = workflow_config.feedback_tool_factory(docker_workspace)
+            if workflow_config.final_guard_factory is not None:
+                final_guard_tool = workflow_config.final_guard_factory(docker_workspace)
 
         state = await run_workflow(
             task=prompt,
@@ -45,6 +49,7 @@ async def run_multiagent(
             enable_workspace_tools=workflow_config is not None,
             docker_workspace=docker_workspace,
             feedback_tool=feedback_tool,
+            final_guard_tool=final_guard_tool,
         )
         raw_output = state["final_answer"]
         trace = extract_workflow_trace(state)
@@ -53,16 +58,21 @@ async def run_multiagent(
                 "final_candidate_path": workflow_config.final_candidate_path,
                 "seed_files": sorted(workflow_config.seed_files),
             }
-            if workflow_config.final_candidate_exporter is not None:
-                final_candidate = await workflow_config.final_candidate_exporter(docker_workspace)
-                trace["workspace"]["final_candidate"] = final_candidate
-                if final_candidate.strip():
-                    raw_output = f"{raw_output}\n\n```diff\n{final_candidate.strip()}\n```"
-            elif workflow_config.final_candidate_path:
-                final_candidate = await docker_workspace.read_text(workflow_config.final_candidate_path)
-                trace["workspace"]["final_candidate"] = final_candidate
-                raw_output = f"{raw_output}\n\n```lean4\n{final_candidate.strip()}\n```"
-        return raw_output, 0, trace
+            try:
+                if workflow_config.final_candidate_exporter is not None:
+                    final_candidate = await workflow_config.final_candidate_exporter(docker_workspace)
+                    trace["workspace"]["final_candidate"] = final_candidate
+                    if final_candidate.strip():
+                        raw_output = f"{raw_output}\n\n```diff\n{final_candidate.strip()}\n```"
+                elif workflow_config.final_candidate_path:
+                    final_candidate = await docker_workspace.read_text(workflow_config.final_candidate_path)
+                    trace["workspace"]["final_candidate"] = final_candidate
+                    raw_output = f"{raw_output}\n\n```lean4\n{final_candidate.strip()}\n```"
+            except Exception as exc:
+                returncode = 1
+                trace["workspace"]["export_error"] = str(exc)
+                raw_output = f"{raw_output}\n\nWorkspace export failed: {exc}".strip()
+        return raw_output, returncode, trace
     finally:
         if docker_workspace is not None:
             await docker_workspace.cleanup()
