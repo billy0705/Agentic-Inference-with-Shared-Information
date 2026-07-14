@@ -11,9 +11,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from multi_agent_sync.evaluation import ma_proofbench
+from multi_agent_sync.evaluation.benchmarks import ma_proofbench
 from multi_agent_sync.evaluation.dataset_files import save_rows
-from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
+from multi_agent_sync.evaluation.lean_feedback import LeanVerifierTool
+from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec, BenchmarkWorkflowConfig
 from multi_agent_sync.prompts import render_prompt
 
 
@@ -64,6 +65,7 @@ def build_lean_benchmark() -> BenchmarkSpec:
         build_prompt=build_lean_prompt,
         extract_answer=extract_lean_answer,
         score_response=score_lean_response,
+        build_workflow_config=build_lean_workflow_config,
     )
 
 
@@ -101,6 +103,26 @@ def build_lean_prompt(row: dict[str, Any], rng: random.Random) -> tuple[str, str
         formal_statement=prompt_statement,
     )
     return prompt, SUCCESS_GOLD
+
+
+def build_lean_workflow_config(row: dict[str, Any], args: argparse.Namespace) -> BenchmarkWorkflowConfig:
+    formal_statement = str(row.get("formal_statement_raw") or row["formal_statement"])
+    header, _ = ma_proofbench.split_lean_header_and_body(formal_statement)
+    initial_code = build_lean_prompt_statement(formal_statement)
+
+    def verify_candidate(code: str) -> ma_proofbench.LeanVerificationResult:
+        normalized_code = ma_proofbench.normalize_lean_candidate(code, header)
+        return ma_proofbench.run_lean_verifier(normalized_code, args)
+
+    return BenchmarkWorkflowConfig(
+        seed_files={ma_proofbench.LEAN_CANDIDATE_PATH: initial_code},
+        final_candidate_path=ma_proofbench.LEAN_CANDIDATE_PATH,
+        feedback_tool_factory=lambda workspace: LeanVerifierTool(
+            workspace=workspace,
+            verify_code=verify_candidate,
+            default_path=ma_proofbench.LEAN_CANDIDATE_PATH,
+        ),
+    )
 
 
 def build_lean_prompt_statement(formal_statement: str) -> str:

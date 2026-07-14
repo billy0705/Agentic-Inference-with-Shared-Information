@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import pytest
 
 from multi_agent_sync.graph.workflow import run_workflow
+from multi_agent_sync.graph.nodes import apply_workspace_access_policy
+from multi_agent_sync.workspace.docker import BashResult, DockerWorkspace
 
 
 @dataclass
@@ -131,6 +133,57 @@ class LateFindingLLM:
         return FakeResponse("SUMMARY:\nNo-op.\nSHARE_FINDING:\n\nCONFIDENCE:\n0.5\nLOCAL_NOTES:\n")
 
 
+class WorkflowToolLLM:
+    def __init__(self) -> None:
+        self.coding_prompts = 0
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if "You are the model-based orchestrator" in prompt:
+            return FakeResponse(orchestrator_response_for_prompt(prompt))
+        if "You are CodingAgent" in prompt and "Docker workspace" in prompt:
+            self.coding_prompts += 1
+            if self.coding_prompts == 1:
+                return FakeResponse(
+                    'ACTION:\n{"tool": "bash", "command": "printf workflow"}\n'
+                    "SHARE_FINDING:\nRunning a Docker-contained workspace inspection.\n"
+                    "CONFIDENCE:\n0.8\n"
+                    "LOCAL_NOTES:\nNeed command output."
+                )
+            return FakeResponse(
+                "FINAL:\nCodingAgent finished after using Docker bash.\n"
+                "SHARE_FINDING:\nDocker bash output was available to the coding agent.\n"
+                "CONFIDENCE:\n0.9\n"
+                "LOCAL_NOTES:\nDone."
+            )
+        if "You are CodingAgent" in prompt:
+            raise AssertionError("CodingAgent should receive the Docker workspace tool prompt")
+        if "Synthesizer" in prompt:
+            return FakeResponse("Synthesized workspace tool answer.")
+        return FakeResponse(
+            "SUMMARY:\nText-only agent step.\n"
+            "SHARE_FINDING:\nText-only finding.\n"
+            "CONFIDENCE:\n0.7\n"
+            "LOCAL_NOTES:\nNo bash used."
+        )
+
+
+class WorkflowFakeDockerWorkspace(DockerWorkspace):
+    def __init__(self) -> None:
+        super().__init__(container_name="workflow-fake-container")
+        self.commands: list[str] = []
+
+    async def run_bash(self, command: str, *, timeout_seconds: float | None = None) -> BashResult:
+        self.commands.append(command)
+        return BashResult(
+            command=command,
+            exit_code=0,
+            stdout="workflow output from docker\n",
+            stderr="",
+            timed_out=False,
+            container_name=self.container_name,
+        )
+
+
 def orchestrator_response_for_prompt(prompt: str) -> str:
     if "What is an API?" in prompt or "Which one of the following" in prompt:
         return """
@@ -245,6 +298,25 @@ async def test_easy_direct_orchestrator_response_uses_direct_answer_node():
 
 
 @pytest.mark.asyncio
+async def test_workspace_tools_force_multi_agent_runtime_even_for_direct_orchestrator_response():
+    workspace = WorkflowFakeDockerWorkspace()
+    state = await run_workflow(
+        task="What is an API? Inspect the repository.",
+        llm=WorkflowToolLLM(),
+        max_steps_per_agent=2,
+        total_runtime_timeout=10,
+        stream_to_console=False,
+        enable_workspace_tools=True,
+        docker_workspace=workspace,
+    )
+
+    assert state["mode"] == "multi_agent"
+    assert "CodingAgent" in state["agent_outputs"]
+    assert workspace.commands == ["printf workflow"]
+    assert state["agent_traces"]
+
+
+@pytest.mark.asyncio
 async def test_non_easy_direct_orchestrator_response_falls_back_to_multi_agent_runtime():
     state = await run_workflow(
         task="Which one of the following implementation strategies should we use?",
@@ -345,6 +417,55 @@ async def test_agent_message_streaming_can_be_disabled():
     ]
     assert not [step for step in verifier_trace["steps"] if step["is_reactive"]]
     assert not any(event.event_type == "message_received" for event in state["event_log"])
+
+
+@pytest.mark.asyncio
+async def test_workflow_injects_docker_bash_tool_into_fixed_coding_agent():
+    workspace = WorkflowFakeDockerWorkspace()
+
+    state = await run_workflow(
+        task="Fix a repository bug.",
+        llm=WorkflowToolLLM(),
+        max_steps_per_agent=2,
+        total_runtime_timeout=5,
+        stream_to_console=False,
+        docker_workspace=workspace,
+        enable_workspace_tools=True,
+    )
+
+    assert workspace.commands == ["printf workflow"]
+    coding_trace = state["agent_traces"]["CodingAgent"]
+    assert coding_trace["assignment"]["workspace_access"] == "write"
+    assert coding_trace["steps"][0]["parsed_output"]["tool_result"]["stdout"] == "workflow output from docker\n"
+    assert state["final_answer"] == "Synthesized workspace tool answer."
+
+
+def test_dynamic_workspace_policy_does_not_let_critical_debate_consume_writer_slot():
+    assignments = apply_workspace_access_policy(
+        [
+            {"agent_name": "CriticalReviewer", "critical_debate": True, "workspace_access": "write"},
+            {"agent_name": "PatchAuthor", "critical_debate": False, "workspace_access": "write"},
+        ],
+        subagent_mode="dynamic",
+        enable_workspace_tools=True,
+    )
+
+    assert assignments[0]["workspace_access"] == "read"
+    assert assignments[1]["workspace_access"] == "write"
+
+
+def test_fixed_workspace_policy_grants_writer_when_coding_agent_is_absent():
+    assignments = apply_workspace_access_policy(
+        [
+            {"agent_name": "SolverAgent"},
+            {"agent_name": "VerifierAgent"},
+        ],
+        subagent_mode="fixed",
+        enable_workspace_tools=True,
+    )
+
+    assert assignments[0]["workspace_access"] == "write"
+    assert assignments[1]["workspace_access"] == "none"
 
 
 @pytest.mark.asyncio

@@ -30,3 +30,7 @@ class GraphState(TypedDict):
     enable_agent_message_streaming: NotRequired[bool]
     stream_to_console: NotRequired[bool]
     no_color: NotRequired[bool]
+    enable_workspace_tools: NotRequired[bool]
+    docker_workspace: NotRequired[Any]
+    feedback_tool: NotRequired[Any]
+    final_guard_tool: NotRequired[Any]

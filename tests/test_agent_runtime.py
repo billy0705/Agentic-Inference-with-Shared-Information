@@ -8,7 +8,9 @@ from multi_agent_sync.agents.critic_agent import CriticAgent
 from multi_agent_sync.agents.research_agent import ResearchAgent
 from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
+from multi_agent_sync.tools.bash import BashTool
 from multi_agent_sync.tracing.trace import TraceLogger
+from multi_agent_sync.workspace.docker import BashResult, DockerWorkspace
 
 
 @dataclass
@@ -40,6 +42,137 @@ class FakeLLM:
                 "LOCAL_NOTES:\nCheck concurrency and validation failure paths."
             )
         return FakeResponse("SUMMARY:\nNo-op.\nSHARE_FINDING:\n\nCONFIDENCE:\n0.5\nLOCAL_NOTES:\n")
+
+
+class ToolLoopLLM:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            assert "Docker workspace" in prompt
+            return FakeResponse(
+                'ACTION:\n{"tool": "bash", "command": "printf hello"}\n'
+                "SHARE_FINDING:\nInspecting the workspace from Docker.\n"
+                "CONFIDENCE:\n0.8\n"
+                "LOCAL_NOTES:\nNeed the command output before finishing."
+            )
+        assert "printf hello" in prompt
+        assert "hello from docker" in prompt
+        return FakeResponse(
+            "FINAL:\nThe Docker command output was observed and the agent can finish.\n"
+            "SHARE_FINDING:\nObserved Docker command output successfully.\n"
+            "CONFIDENCE:\n0.9\n"
+            "LOCAL_NOTES:\nTool loop completed."
+        )
+
+
+class FinalGuardRetryLLM:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            return FakeResponse(
+                "FINAL:\nI am done without editing files.\n"
+                "SHARE_FINDING:\nAttempting to finish.\n"
+                "CONFIDENCE:\n0.7\n"
+                "LOCAL_NOTES:\nNeed guard result."
+            )
+        if len(self.prompts) == 2:
+            assert "final_guard_failed" in prompt
+            assert "git diff is empty" in prompt
+            return FakeResponse(
+                'ACTION:\n{"tool": "bash", "command": "printf edited"}\n'
+                "SHARE_FINDING:\nApplying an edit after guard feedback.\n"
+                "CONFIDENCE:\n0.8\n"
+                "LOCAL_NOTES:\nEdit command issued."
+            )
+        assert "printf edited" in prompt
+        return FakeResponse(
+            "FINAL:\nThe repository files were edited in Docker.\n"
+            "SHARE_FINDING:\nWorkspace edit is now present.\n"
+            "CONFIDENCE:\n0.9\n"
+            "LOCAL_NOTES:\nDone."
+        )
+
+
+class FakeFinalGuardTool:
+    name = "fake_final_guard"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(self, *, final_response: str | None = None):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "tool": self.name,
+                "passed": False,
+                "error": "final_guard_failed",
+                "message": "git diff is empty",
+                "stderr": "git diff is empty",
+            }
+        return {
+            "tool": self.name,
+            "passed": True,
+        }
+
+
+class AgentFakeDockerWorkspace(DockerWorkspace):
+    def __init__(self) -> None:
+        super().__init__(container_name="agent-fake-container")
+        self.commands: list[str] = []
+
+    async def run_bash(self, command: str, *, timeout_seconds: float | None = None) -> BashResult:
+        self.commands.append(command)
+        return BashResult(
+            command=command,
+            exit_code=0,
+            stdout="hello from docker\n",
+            stderr="",
+            timed_out=False,
+            container_name=self.container_name,
+        )
+
+
+class VerifyCandidateLLM:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            assert "verify_candidate" in prompt
+            return FakeResponse(
+                'ACTION:\n{"tool": "verify_candidate", "path": "/workspace/Main.lean"}\n'
+                "SHARE_FINDING:\nChecking the current Lean candidate with the verifier.\n"
+                "CONFIDENCE:\n0.8\n"
+                "LOCAL_NOTES:\nNeed verifier feedback."
+            )
+        assert "unknown tactic" in prompt
+        return FakeResponse(
+            "FINAL:\nVerifier feedback was received and used.\n"
+            "SHARE_FINDING:\nLean verifier feedback was available to the agent.\n"
+            "CONFIDENCE:\n0.9\n"
+            "LOCAL_NOTES:\nDone."
+        )
+
+
+class FakeLeanFeedbackTool:
+    name = "verify_candidate"
+
+    async def run(self, *, path: str | None = None):
+        return {
+            "tool": "verify_candidate",
+            "path": path,
+            "passed": False,
+            "backend": "kimina-server",
+            "returncode": 1,
+            "verifier_output": '{"errors": [{"data": "unknown tactic"}]}',
+        }
 
 
 def build_agents(streamer: InMemoryEventStreamer, run_id: str = "run-agent-test"):
@@ -147,3 +280,95 @@ async def test_agent_stops_processing_events_after_done():
     assert receipt["event_id"] == late_event.event_id
     assert receipt["accepted"] is False
     assert receipt["ignored_reason"] == "agent_done"
+
+
+@pytest.mark.asyncio
+async def test_coding_agent_uses_docker_bash_observation_in_tool_loop():
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    workspace = AgentFakeDockerWorkspace()
+    agent = CodingAgent(
+        run_id="run-tool-loop",
+        task="Inspect a file and finish.",
+        assigned_subtask="Use bash in Docker to inspect the workspace.",
+        llm=ToolLoopLLM(),
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        bash_tool=BashTool(workspace),
+        workspace_access="write",
+        max_steps=2,
+        step_delay_seconds=0,
+    )
+
+    output = await agent.run()
+
+    assert workspace.commands == ["printf hello"]
+    assert "The Docker command output was observed" in output
+    trace = trace_logger.export()["CodingAgent"]
+    first_step = trace["steps"][0]
+    second_step = trace["steps"][1]
+    assert first_step["parsed_output"]["tool_action"]["command"] == "printf hello"
+    assert first_step["parsed_output"]["tool_result"]["stdout"] == "hello from docker\n"
+    assert second_step["parsed_output"]["status"] == "final"
+
+
+@pytest.mark.asyncio
+async def test_final_guard_rejects_final_and_allows_extra_tool_steps():
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    workspace = AgentFakeDockerWorkspace()
+    guard = FakeFinalGuardTool()
+    llm = FinalGuardRetryLLM()
+    agent = CodingAgent(
+        run_id="run-final-guard",
+        task="Edit files before finishing.",
+        assigned_subtask="Use Docker edits before final answer.",
+        llm=llm,
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        bash_tool=BashTool(workspace),
+        final_guard_tool=guard,
+        workspace_access="write",
+        max_steps=2,
+        step_delay_seconds=0,
+    )
+
+    output = await agent.run()
+
+    assert "repository files were edited" in output
+    assert workspace.commands == ["printf edited"]
+    assert guard.calls == 2
+    trace = trace_logger.export()["CodingAgent"]
+    assert trace["steps"][0]["parsed_output"]["status"] == "continue"
+    assert trace["steps"][0]["parsed_output"]["tool_result"]["error"] == "final_guard_failed"
+    assert trace["steps"][1]["parsed_output"]["tool_action"]["command"] == "printf edited"
+    assert trace["steps"][2]["parsed_output"]["status"] == "final"
+
+
+@pytest.mark.asyncio
+async def test_coding_agent_can_request_lean_verifier_feedback_tool():
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    workspace = AgentFakeDockerWorkspace()
+    agent = CodingAgent(
+        run_id="run-lean-feedback",
+        task="Complete a Lean proof.",
+        assigned_subtask="Edit Main.lean and verify it.",
+        llm=VerifyCandidateLLM(),
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        bash_tool=BashTool(workspace),
+        feedback_tool=FakeLeanFeedbackTool(),
+        workspace_access="write",
+        max_steps=2,
+        step_delay_seconds=0,
+    )
+
+    output = await agent.run()
+
+    assert "Verifier feedback was received" in output
+    trace = trace_logger.export()["CodingAgent"]
+    first_step = trace["steps"][0]
+    assert first_step["parsed_output"]["tool_action"]["tool"] == "verify_candidate"
+    assert first_step["parsed_output"]["tool_result"]["backend"] == "kimina-server"
+    assert "unknown tactic" in first_step["parsed_output"]["tool_result"]["verifier_output"]

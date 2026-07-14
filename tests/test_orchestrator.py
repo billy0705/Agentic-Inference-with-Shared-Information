@@ -3,7 +3,12 @@ from dataclasses import dataclass
 import pytest
 
 from multi_agent_sync.agents.registry import AGENT_REGISTRY
-from multi_agent_sync.orchestrator.orchestrator import create_model_based_plan
+from multi_agent_sync.orchestrator.orchestrator import (
+    create_model_based_plan,
+    default_collaboration_protocol,
+    selected_agents_to_assignments,
+    validate_orchestrator_plan,
+)
 
 
 @dataclass
@@ -359,6 +364,50 @@ async def test_dynamic_mode_accepts_orchestrator_named_agents_with_rules():
     assert plan["selected_agents"][0]["description"] == "Focuses on files, tests, runtime flow, and compatibility."
     assert plan["selected_agents"][0]["rules"] == ["Share actionable findings.", "Keep fixed mode compatible."]
     assert plan["selected_agents"][1]["critical_debate"] is True
+
+
+def test_dynamic_plan_preserves_workspace_access_in_assignments():
+    plan = validate_orchestrator_plan(
+        {
+            "mode": "multi_agent",
+            "task_type": "software repair task",
+            "task_summary": "Fix code in a Docker workspace.",
+            "reason": "The task needs file inspection and editing.",
+            "selected_agents": [
+                {
+                    "name": "Patch Author",
+                    "role": "Edits code.",
+                    "description": "Applies the concrete fix.",
+                    "rules": ["Use Docker workspace tools."],
+                    "subtask": "Inspect and edit files.",
+                    "expected_output": "Implemented change summary.",
+                    "critical_debate": False,
+                    "workspace_access": "write",
+                },
+                {
+                    "name": "Critical Reviewer",
+                    "role": "Reviews risks.",
+                    "description": "Finds weak assumptions.",
+                    "rules": ["Publish critiques."],
+                    "subtask": "Review the proposed change.",
+                    "expected_output": "Risk notes.",
+                    "critical_debate": True,
+                    "workspace_access": "none",
+                },
+            ],
+            "collaboration_protocol": default_collaboration_protocol(),
+        },
+        task="Fix a repository bug.",
+        available_agents={},
+        subagent_mode="dynamic",
+    )
+
+    assignments = selected_agents_to_assignments(plan)
+
+    assert assignments[0]["agent_name"] == "PatchAuthor"
+    assert assignments[0]["workspace_access"] == "write"
+    assert assignments[1]["agent_name"] == "CriticalReviewer"
+    assert assignments[1]["workspace_access"] == "none"
 
 
 @pytest.mark.asyncio

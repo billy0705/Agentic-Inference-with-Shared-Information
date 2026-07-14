@@ -8,8 +8,9 @@ from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph.state import GraphState
 from multi_agent_sync.llm import get_llm
-from multi_agent_sync.orchestrator.orchestrator import create_model_based_plan, selected_agents_to_assignments
+from multi_agent_sync.orchestrator.orchestrator import create_fallback_plan, create_model_based_plan, selected_agents_to_assignments
 from multi_agent_sync.prompts import render_prompt
+from multi_agent_sync.tools.bash import BashTool
 from multi_agent_sync.tracing.trace import TraceLogger
 
 
@@ -19,6 +20,15 @@ async def orchestrator_node(state: GraphState) -> GraphState:
     llm = state.get("llm") or get_llm()
     subagent_mode = state.get("subagent_mode", "fixed")
     orchestrator_plan = await create_model_based_plan(task, llm, AGENT_REGISTRY, subagent_mode=subagent_mode)
+    if state.get("enable_workspace_tools") and (
+        orchestrator_plan.get("mode") == "direct" or not orchestrator_plan.get("selected_agents")
+    ):
+        orchestrator_plan = create_fallback_plan(
+            task,
+            AGENT_REGISTRY,
+            reason="Workspace tools are enabled, so the workflow must run agents with Docker bash access.",
+            subagent_mode=subagent_mode,
+        )
     selected_agent_specs = orchestrator_plan["selected_agents"]
     assignments = selected_agents_to_assignments(orchestrator_plan, max_steps=state.get("max_steps_per_agent", 3))
     selected_agents = ",".join(agent["name"] for agent in selected_agent_specs) if selected_agent_specs else "none"
@@ -103,9 +113,19 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     enable_agent_message_streaming = state.get("enable_agent_message_streaming", True)
     trace_logger = state.get("trace_logger") or TraceLogger()
     subagent_mode = state.get("subagent_mode", "fixed")
+    enable_workspace_tools = bool(state.get("enable_workspace_tools", False))
+    docker_workspace = state.get("docker_workspace")
+    feedback_tool = state.get("feedback_tool")
+    final_guard_tool = state.get("final_guard_tool")
+    if enable_workspace_tools and docker_workspace is None:
+        raise RuntimeError("Workspace tools were enabled, but no DockerWorkspace was provided.")
 
     agents = []
-    assignments = selected_agents_to_assignments(state["orchestrator_plan"], max_steps=max_steps)
+    assignments = apply_workspace_access_policy(
+        selected_agents_to_assignments(state["orchestrator_plan"], max_steps=max_steps),
+        subagent_mode=subagent_mode,
+        enable_workspace_tools=enable_workspace_tools,
+    )
     for assignment in assignments:
         agent_name = assignment["agent_name"]
         agent_class = DynamicAgent if subagent_mode == "dynamic" else AGENT_REGISTRY.get(agent_name)
@@ -129,7 +149,14 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             "trace_logger": trace_logger,
             "max_steps": assignment.get("max_steps", max_steps),
             "enable_message_streaming": enable_agent_message_streaming,
+            "workspace_access": assignment.get("workspace_access", "none"),
         }
+        if enable_workspace_tools and assignment.get("workspace_access") != "none":
+            agent_kwargs["bash_tool"] = BashTool(docker_workspace)
+            if feedback_tool is not None:
+                agent_kwargs["feedback_tool"] = feedback_tool
+            if final_guard_tool is not None:
+                agent_kwargs["final_guard_tool"] = final_guard_tool
         if subagent_mode == "dynamic":
             agent_kwargs.update(
                 {
@@ -180,6 +207,42 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
         "agent_outputs": {agent.name: output for agent, output in zip(agents, outputs, strict=False)},
         "agent_traces": trace_logger.export(),
     }
+
+
+def apply_workspace_access_policy(
+    assignments: list[dict[str, object]],
+    *,
+    subagent_mode: str,
+    enable_workspace_tools: bool,
+) -> list[dict[str, object]]:
+    normalized = [dict(assignment) for assignment in assignments]
+    if not enable_workspace_tools:
+        for assignment in normalized:
+            assignment["workspace_access"] = "none"
+        return normalized
+
+    if subagent_mode == "fixed":
+        writer_name = "CodingAgent" if any(assignment.get("agent_name") == "CodingAgent" for assignment in normalized) else None
+        if writer_name is None and normalized:
+            writer_name = str(normalized[0].get("agent_name"))
+        for assignment in normalized:
+            assignment["workspace_access"] = "write" if assignment.get("agent_name") == writer_name else "none"
+        return normalized
+
+    writer_granted = False
+    for assignment in normalized:
+        requested = str(assignment.get("workspace_access") or "none").lower()
+        if requested not in {"none", "read", "write"}:
+            requested = "none"
+        if assignment.get("critical_debate") and requested == "write":
+            requested = "read"
+        if requested == "write":
+            if writer_granted:
+                requested = "read"
+            else:
+                writer_granted = True
+        assignment["workspace_access"] = requested
+    return normalized
 
 
 async def synthesizer_node(state: GraphState) -> GraphState:

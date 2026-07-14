@@ -4,10 +4,12 @@ import argparse
 import asyncio
 import random
 import time
+from pathlib import Path
 from typing import Any
 
-from multi_agent_sync.evaluation import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
 from multi_agent_sync.evaluation import runner
+from multi_agent_sync.evaluation.benchmarks import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath, swe_bench_verified
+from multi_agent_sync.evaluation import swebench_harness
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
 
@@ -27,6 +29,7 @@ def get_benchmarks() -> dict[str, BenchmarkSpec]:
         mmlu_pro.build_benchmark(),
         olymmath.build_benchmark(),
         olymmath.build_lean_benchmark(),
+        swe_bench_verified.build_benchmark(),
     ]
     return {benchmark.name: benchmark for benchmark in benchmarks}
 
@@ -41,7 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated methods to compare. Supported: multiagent_streaming, "
             "multiagent_no_streaming, multiagent_dynamic_streaming, "
-            "multiagent_dynamic_no_streaming, single_agent, plain_llm. Legacy alias: multiagent."
+            "multiagent_dynamic_no_streaming, multiagent_debate, majority_vote, single_agent, plain_llm. "
+            "Legacy alias: multiagent."
         ),
     )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Use 0 for full split.")
@@ -105,6 +109,62 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum Kimina Lean Server workers per verification request.",
     )
     parser.add_argument(
+        "--lean-agent-workspace",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable Docker workspace editing plus Kimina feedback for Lean multi-agent methods.",
+    )
+    parser.add_argument(
+        "--swebench-agent-workspace",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable Docker workspace editing and git diff export for SWE-bench multi-agent methods.",
+    )
+    parser.add_argument(
+        "--swebench-run-harness",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run the official SWE-bench Docker harness after writing prediction JSONL files.",
+    )
+    parser.add_argument(
+        "--swebench-max-workers",
+        type=int,
+        default=1,
+        help="Maximum workers for official SWE-bench harness evaluation.",
+    )
+    parser.add_argument(
+        "--swebench-run-id",
+        default=None,
+        help="Optional run_id passed to the official SWE-bench harness.",
+    )
+    parser.add_argument(
+        "--swebench-namespace",
+        default=None,
+        help="Optional Docker image namespace passed to SWE-bench harness. Use empty string on Mac ARM to build locally.",
+    )
+    parser.add_argument(
+        "--swebench-instance-ids",
+        default="",
+        help="Optional comma-separated instance ids passed to SWE-bench harness.",
+    )
+    parser.add_argument(
+        "--workspace-image",
+        default="python:3.12",
+        help="Docker image for benchmark agent workspaces when enabled.",
+    )
+    parser.add_argument(
+        "--workspace-command-timeout",
+        type=float,
+        default=60.0,
+        help="Per-command timeout in seconds for Docker benchmark workspaces.",
+    )
+    parser.add_argument(
+        "--workspace-output-limit",
+        type=int,
+        default=12000,
+        help="Maximum stdout/stderr characters retained per Docker workspace command.",
+    )
+    parser.add_argument(
         "--local-model",
         action="store_true",
         help="Use local Ollama instead of the OpenAI-compatible API provider.",
@@ -161,7 +221,11 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
             started_at = time.perf_counter()
             method_trace: dict[str, Any] = {}
             try:
-                run_result = await runner.run_method(method, prompt, llm, args)
+                workflow_config = build_method_workflow_config(benchmark, row_dict, method, args)
+                if workflow_config is None:
+                    run_result = await runner.run_method(method, prompt, llm, args)
+                else:
+                    run_result = await runner.run_method(method, prompt, llm, args, workflow_config=workflow_config)
                 raw_output = run_result.raw_output
                 returncode = run_result.returncode
                 elapsed_seconds = run_result.elapsed_seconds
@@ -170,6 +234,9 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
                 total_tokens = run_result.total_tokens
                 method_trace = run_result.trace or {}
                 error = ""
+                workspace_trace = method_trace.get("workspace")
+                if returncode != 0 and isinstance(workspace_trace, dict) and workspace_trace.get("export_error"):
+                    error = str(workspace_trace["export_error"])
             except Exception as exc:
                 raw_output = ""
                 returncode = 1
@@ -239,9 +306,128 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
             flush_incremental_artifacts()
             runner.print_result(result)
 
+    postprocess_swebench_predictions(benchmark, results, methods, args, run_id)
+    flush_incremental_artifacts()
     summary = runner.summarize_results(results)
     runner.print_summary(benchmark, summary, output_path)
     return results
+
+
+def postprocess_swebench_predictions(
+    benchmark: BenchmarkSpec,
+    results: list[dict[str, Any]],
+    methods: list[str],
+    args: argparse.Namespace,
+    run_id: str,
+) -> None:
+    if benchmark.name != "swe_bench_verified":
+        return
+
+    trace_root = runner.resolve_json_trace_root(args, run_id)
+    model_name = runner.resolve_model_name(args)
+    for method in methods:
+        predictions = swebench_harness.build_predictions(results, method=method, model_name_or_path=model_name)
+        if not predictions:
+            continue
+        predictions_path = trace_root / f"predictions_{runner.safe_filename(method)}.jsonl"
+        swebench_harness.write_predictions_jsonl(predictions_path, predictions)
+        if getattr(args, "swebench_run_harness", False):
+            command = swebench_harness.build_run_evaluation_command(predictions_path, args)
+            artifact_path = trace_root / f"harness_{runner.safe_filename(method)}.json"
+            payload = swebench_harness.run_official_evaluation(command, artifact_path)
+            report, report_path = swebench_harness.load_report_from_payload(payload, artifact_path)
+            apply_swebench_harness_results(
+                results,
+                method=method,
+                report=report,
+                report_path=report_path,
+                artifact_path=artifact_path,
+                stdout=str(payload.get("stdout") or ""),
+            )
+
+
+def apply_swebench_harness_results(
+    results: list[dict[str, Any]],
+    *,
+    method: str,
+    report: dict[str, Any] | None,
+    report_path: Any,
+    artifact_path: Any,
+    stdout: str,
+) -> None:
+    for result in results:
+        if result.get("benchmark") != "swe_bench_verified" or result.get("method") != method:
+            continue
+        metadata = result.get("score_metadata")
+        if not isinstance(metadata, dict):
+            continue
+        metadata["official_evaluation"] = "report_missing" if report is None else "not_submitted"
+        metadata["harness_artifact_path"] = str(artifact_path)
+        if report_path is not None:
+            metadata["harness_report_path"] = str(report_path)
+        if report is None:
+            result["correct"] = False
+            result["error"] = "Official SWE-bench harness ran, but no report JSON was found."
+            result["score_metadata"] = metadata
+            update_swebench_trace_result(result)
+            continue
+
+        instance_id = str(metadata.get("instance_id") or "")
+        status = swebench_harness.instance_official_status(report, instance_id)
+        metadata["official_evaluation"] = status or "not_submitted"
+        result["score_metadata"] = metadata
+        if status == "resolved":
+            result["correct"] = True
+            result["error"] = ""
+            result["returncode"] = 0
+        elif status == "unresolved":
+            result["correct"] = False
+            result["error"] = "Official SWE-bench harness marked this instance unresolved."
+            result["returncode"] = 0
+        elif status == "empty_patch":
+            result["correct"] = False
+            result["pred"] = None
+            result["error"] = "Official SWE-bench harness received an empty patch."
+            result["returncode"] = 1
+        elif status == "error":
+            detail = swebench_harness.extract_instance_error(stdout, instance_id)
+            result["correct"] = False
+            result["error"] = detail or "Official SWE-bench harness reported an evaluation error."
+            result["returncode"] = 1
+        else:
+            result["correct"] = False
+            result["error"] = "Official SWE-bench harness did not submit this instance."
+            result["returncode"] = 1
+        update_swebench_trace_result(result)
+
+
+def update_swebench_trace_result(result: dict[str, Any]) -> None:
+    trace_path = str(result.get("json_trace_path") or "")
+    if not trace_path:
+        return
+    path = Path(trace_path)
+    if not path.exists():
+        return
+    payload = runner.to_jsonable(result)
+    trace_payload = runner.json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(trace_payload, dict):
+        for key in ("pred", "correct", "returncode", "error", "score_metadata"):
+            trace_payload[key] = payload.get(key)
+        path.write_text(runner.json.dumps(trace_payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def build_method_workflow_config(benchmark: BenchmarkSpec, row: dict[str, Any], method: str, args: argparse.Namespace):
+    if method in {"plain_llm", "single_agent"}:
+        return None
+    workspace_enabled = (
+        getattr(args, "lean_agent_workspace", False)
+        or (benchmark.name == "swe_bench_verified" and getattr(args, "swebench_agent_workspace", False))
+    )
+    if not workspace_enabled:
+        return None
+    if benchmark.build_workflow_config is None:
+        return None
+    return benchmark.build_workflow_config(row, args)
 
 
 async def async_main(argv: list[str] | None = None) -> None:

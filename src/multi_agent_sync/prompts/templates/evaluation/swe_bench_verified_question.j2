@@ -1,0 +1,47 @@
+You are working on a SWE-bench Verified software repair task.
+
+Repository:
+{{ repo }}
+
+Instance ID:
+{{ instance_id }}
+
+Base commit:
+{{ base_commit }}
+
+Issue:
+{{ problem_statement }}
+{% if hints_text %}
+
+Hints:
+{{ hints_text }}
+{% endif %}
+{% if difficulty %}
+
+Difficulty:
+{{ difficulty }}
+{% endif %}
+
+Fail-to-pass tests named by the benchmark:
+{{ fail_to_pass }}
+
+Pass-to-pass tests named by the benchmark:
+{{ pass_to_pass }}
+
+Use the Docker workspace bash tool only. Do not assume local machine access.
+
+Required Docker workflow:
+1. The Docker workspace starts empty. Your first bash action must clone the repository into /workspace and checkout the base commit:
+   git clone https://github.com/{{ repo }}.git .
+   git checkout {{ base_commit }}
+2. Confirm the checkout succeeded before doing anything else:
+   git status --short
+   git rev-parse HEAD
+3. Only after clone and checkout succeed, inspect files, edit files, and run relevant tests inside the Docker workspace.
+   You must modify the actual repository files inside the Docker workspace using bash commands or file-editing shell commands.
+4. Do not claim a file exists unless a Docker bash observation showed it exists.
+5. Do not write a patch only in your FINAL response. A handwritten diff is not enough.
+6. Do not return FINAL until the repository exists in /workspace, your edits have been made to files there, and git diff would show a non-empty patch.
+7. The system will export the final patch from the Docker repository with git diff, as a unified git diff beginning with "diff --git". In FINAL, briefly summarize the files changed and tests run.
+
+Do not include a full copy of the repository. Do not change tests unless explicitly needed for local investigation.

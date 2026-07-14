@@ -9,8 +9,31 @@ import pytest
 
 from multi_agent_sync.evaluation import main as evaluation
 from multi_agent_sync.evaluation import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath
+from multi_agent_sync.evaluation.benchmarks import swe_bench_verified
+from multi_agent_sync.evaluation.baselines import multiagent_sync
 from multi_agent_sync.evaluation import runner
-from multi_agent_sync.evaluation.types import BenchmarkSpec
+from multi_agent_sync.evaluation.types import BenchmarkSpec, BenchmarkWorkflowConfig
+
+
+def test_baselines_package_exports_evaluation_methods():
+    from multi_agent_sync.evaluation import baselines
+
+    assert baselines.run_plain_llm is not None
+    assert baselines.run_single_agent is not None
+    assert baselines.run_majority_vote is not None
+    assert baselines.run_multiagent_debate is not None
+    assert baselines.run_multiagent is not None
+
+
+def test_benchmarks_package_exports_benchmark_modules():
+    from multi_agent_sync.evaluation import benchmarks
+
+    assert benchmarks.chess.build_benchmark is not None
+    assert benchmarks.gpqa.build_benchmark is not None
+    assert benchmarks.gsm8k.build_benchmark is not None
+    assert benchmarks.ma_proofbench.build_benchmark is not None
+    assert benchmarks.mmlu_pro.build_benchmark is not None
+    assert benchmarks.olymmath.build_benchmark is not None
 
 
 @dataclass
@@ -23,9 +46,43 @@ class UsageResponse:
 class UsageLLM:
     def __init__(self, responses: list[UsageResponse]) -> None:
         self.responses = list(responses)
+        self.prompts: list[str] = []
 
     async def ainvoke(self, prompt: str) -> UsageResponse:
+        self.prompts.append(prompt)
         return self.responses.pop(0)
+
+
+class RunnerFakeDockerWorkspace:
+    created: list["RunnerFakeDockerWorkspace"] = []
+
+    def __init__(self) -> None:
+        self.files: dict[str, str] = {}
+        self.cleaned = False
+        RunnerFakeDockerWorkspace.created.append(self)
+
+    @classmethod
+    async def create(cls, **kwargs):
+        return cls()
+
+    async def write_text(self, path: str, content: str) -> None:
+        self.files[path] = content
+
+    async def read_text(self, path: str) -> str:
+        return self.files[path]
+
+    async def run_bash(self, command: str, *, timeout_seconds=None):
+        return types.SimpleNamespace(
+            command=command,
+            exit_code=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            container_name="fake",
+        )
+
+    async def cleanup(self) -> None:
+        self.cleaned = True
 
 
 def test_parse_methods_accepts_comma_separated_methods():
@@ -46,6 +103,14 @@ def test_parse_methods_accepts_dynamic_multiagent_methods():
 
 def test_parse_methods_accepts_single_agent_method():
     assert runner.parse_methods("single_agent,plain_llm") == ["single_agent", "plain_llm"]
+
+
+def test_parse_methods_accepts_multiagent_debate_method():
+    assert runner.parse_methods("multiagent_debate,plain_llm") == ["multiagent_debate", "plain_llm"]
+
+
+def test_parse_methods_accepts_majority_vote_method():
+    assert runner.parse_methods("majority_vote,single_agent,plain_llm") == ["majority_vote", "single_agent", "plain_llm"]
 
 
 def test_parse_methods_keeps_multiagent_alias_for_streaming():
@@ -154,6 +219,221 @@ def test_parser_accepts_olymmath_benchmarks():
     assert "olymmath_lean" in evaluation.get_benchmarks()
 
 
+def test_parser_accepts_swe_bench_verified_benchmark():
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "swe_bench_verified",
+            "--methods",
+            "multiagent_streaming",
+            "--limit",
+            "1",
+            "--swebench-agent-workspace",
+            "--swebench-run-harness",
+            "--swebench-max-workers",
+            "2",
+        ]
+    )
+
+    assert args.benchmark == "swe_bench_verified"
+    assert args.swebench_agent_workspace is True
+    assert args.swebench_run_harness is True
+    assert args.swebench_max_workers == 2
+    assert "swe_bench_verified" in evaluation.get_benchmarks()
+
+
+def test_swe_bench_verified_prompt_omits_gold_patches():
+    row = {
+        "repo": "astropy/astropy",
+        "instance_id": "astropy__astropy-12907",
+        "base_commit": "d16bfe05a744909de4b27f5875fe0d4ed41ce607",
+        "problem_statement": "Fix separability_matrix for nested CompoundModels.",
+        "hints_text": "Look at separable.py.",
+        "patch": "GOLD_PATCH_SHOULD_NOT_APPEAR",
+        "test_patch": "GOLD_TEST_PATCH_SHOULD_NOT_APPEAR",
+        "FAIL_TO_PASS": '["test_new"]',
+        "PASS_TO_PASS": '["test_existing"]',
+        "difficulty": "15 min - 1 hour",
+    }
+
+    prompt, gold = swe_bench_verified.build_prompt(row, random.Random(0))
+
+    assert gold == "patch_required"
+    assert "Fix separability_matrix" in prompt
+    assert "astropy/astropy" in prompt
+    assert "d16bfe05a744909de4b27f5875fe0d4ed41ce607" in prompt
+    assert "Required Docker workflow:" in prompt
+    assert "Your first bash action must clone the repository" in prompt
+    assert "git clone https://github.com/astropy/astropy.git ." in prompt
+    assert "git checkout d16bfe05a744909de4b27f5875fe0d4ed41ce607" in prompt
+    assert "modify the actual repository files inside the Docker workspace" in prompt
+    assert "Do not write a patch only in your FINAL response" in prompt
+    assert "git diff would show a non-empty patch" in prompt
+    assert "The system will export the final patch from the Docker repository with git diff" in prompt
+    assert "Do not return FINAL until the repository exists in /workspace" in prompt
+    assert "GOLD_PATCH_SHOULD_NOT_APPEAR" not in prompt
+    assert "GOLD_TEST_PATCH_SHOULD_NOT_APPEAR" not in prompt
+    assert "diff --git" in prompt
+
+
+def test_swe_bench_verified_extracts_prediction_patch_and_scores_prediction_only():
+    raw_output = (
+        "I changed the implementation.\n\n"
+        "```diff\n"
+        "diff --git a/pkg/mod.py b/pkg/mod.py\n"
+        "--- a/pkg/mod.py\n"
+        "+++ b/pkg/mod.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+        "```\n"
+    )
+    row = {"instance_id": "repo__repo-1"}
+
+    score = swe_bench_verified.score_response(row, raw_output, argparse.Namespace())
+
+    assert score.pred == "patch_produced"
+    assert score.correct is False
+    assert score.metadata["instance_id"] == "repo__repo-1"
+    assert score.metadata["prediction_only"] is True
+    assert score.metadata["model_patch"].startswith("diff --git")
+
+
+@pytest.mark.asyncio
+async def test_swe_bench_verified_multiagent_workspace_exports_git_diff(monkeypatch):
+    RunnerFakeDockerWorkspace.created = []
+    captured_workflow_kwargs = {}
+    bash_commands = []
+
+    async def fake_run_workflow(**kwargs):
+        captured_workflow_kwargs.update(kwargs)
+        workspace = kwargs["docker_workspace"]
+        workspace.files["__git_diff__"] = (
+            "diff --git a/pkg/mod.py b/pkg/mod.py\n"
+            "--- a/pkg/mod.py\n"
+            "+++ b/pkg/mod.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        return {
+            "final_answer": "Agent finished.",
+            "run_id": "run",
+            "mode": "multi_agent",
+            "subagent_mode": "fixed",
+            "agent_traces": {},
+        }
+
+    async def fake_run_bash(self, command, *, timeout_seconds=None):
+        bash_commands.append(command)
+        if "git -C \"$repo_dir\" diff -- ." in command:
+            return types.SimpleNamespace(
+                command=command,
+                exit_code=0,
+                stdout=self.files["__git_diff__"],
+                stderr="",
+                timed_out=False,
+                container_name="fake",
+            )
+        return types.SimpleNamespace(
+            command=command,
+            exit_code=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            container_name="fake",
+        )
+
+    monkeypatch.setattr(multiagent_sync, "DockerWorkspace", RunnerFakeDockerWorkspace)
+    monkeypatch.setattr(multiagent_sync, "run_workflow", fake_run_workflow)
+    monkeypatch.setattr(RunnerFakeDockerWorkspace, "run_bash", fake_run_bash)
+
+    row = {
+        "repo": "owner/repo",
+        "instance_id": "owner__repo-1",
+        "base_commit": "a" * 40,
+        "problem_statement": "Fix the bug.",
+        "hints_text": "",
+        "FAIL_TO_PASS": "[]",
+        "PASS_TO_PASS": "[]",
+    }
+    workflow_config = swe_bench_verified.build_workflow_config(row, argparse.Namespace())
+    args = argparse.Namespace(
+        max_steps=2,
+        total_runtime_timeout=5,
+        synthesis_timeout=1,
+        workspace_image="python:3.12",
+        workspace_command_timeout=30,
+        workspace_output_limit=12000,
+    )
+
+    raw_output, returncode, trace = await runner.run_multiagent(
+        "Fix the bug.",
+        UsageLLM([]),
+        args,
+        workflow_config=workflow_config,
+    )
+
+    assert returncode == 0
+    assert captured_workflow_kwargs["enable_workspace_tools"] is True
+    assert captured_workflow_kwargs["final_guard_tool"].name == "swebench_final_guard"
+    assert "diff --git a/pkg/mod.py b/pkg/mod.py" in raw_output
+    assert trace["workspace"]["final_candidate_path"] == "__git_diff__"
+    assert trace["workspace"]["final_candidate"].startswith("diff --git")
+    assert any("No Git repository found in /workspace" in command for command in bash_commands)
+    assert all("git clone https://github.com/owner/repo.git" not in command for command in bash_commands)
+
+
+@pytest.mark.asyncio
+async def test_multiagent_workspace_export_error_preserves_trace(monkeypatch):
+    RunnerFakeDockerWorkspace.created = []
+
+    async def fake_run_workflow(**kwargs):
+        return {
+            "final_answer": "Agent finished without cloning.",
+            "run_id": "run",
+            "mode": "multi_agent",
+            "subagent_mode": "fixed",
+            "orchestrator_plan": {
+                "selected_agents": [{"name": "CodingAgent", "subtask": "Use Docker bash."}],
+            },
+            "event_log": [],
+            "agent_outputs": {"CodingAgent": "No repo created."},
+            "agent_traces": {"CodingAgent": {"steps": []}},
+        }
+
+    async def failing_exporter(workspace):
+        raise RuntimeError("No Git repository found in /workspace.")
+
+    monkeypatch.setattr(multiagent_sync, "DockerWorkspace", RunnerFakeDockerWorkspace)
+    monkeypatch.setattr(multiagent_sync, "run_workflow", fake_run_workflow)
+
+    workflow_config = BenchmarkWorkflowConfig(
+        final_candidate_path="__git_diff__",
+        final_candidate_exporter=failing_exporter,
+    )
+    args = argparse.Namespace(
+        max_steps=2,
+        total_runtime_timeout=5,
+        synthesis_timeout=1,
+        workspace_image="python:3.12",
+        workspace_command_timeout=30,
+        workspace_output_limit=12000,
+    )
+
+    raw_output, returncode, trace = await runner.run_multiagent(
+        "Fix the bug.",
+        UsageLLM([]),
+        args,
+        workflow_config=workflow_config,
+    )
+
+    assert returncode == 1
+    assert "Workspace export failed: No Git repository found in /workspace." in raw_output
+    assert trace["agent_outputs"] == {"CodingAgent": "No repo created."}
+    assert trace["workspace"]["export_error"] == "No Git repository found in /workspace."
+
+
 def test_parser_rejects_removed_local_lean_verifier_flags():
     with pytest.raises(SystemExit):
         evaluation.build_parser().parse_args(["--benchmark", "ma_proofbench", "--lean-verifier", "local"])
@@ -225,6 +505,174 @@ async def test_run_evaluation_sets_max_tokens_to_16384(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_evaluation_writes_swebench_predictions_jsonl(monkeypatch, tmp_path):
+    benchmark = BenchmarkSpec(
+        name="swe_bench_verified",
+        display_name="SWE-bench Verified",
+        default_output_filename="swe_bench_verified_results.csv",
+        load_items=lambda args: [
+            {
+                "repo": "owner/repo",
+                "instance_id": "owner__repo-1",
+                "base_commit": "a" * 40,
+                "problem_statement": "Fix the bug.",
+            }
+        ],
+        build_prompt=lambda row, rng: ("Fix the bug.", "patch_required"),
+        extract_answer=swe_bench_verified.extract_answer,
+        score_response=swe_bench_verified.score_response,
+    )
+
+    async def fake_run_method(method, prompt, llm, args, **kwargs):
+        return runner.RunResult(
+            raw_output="```diff\ndiff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n```",
+            returncode=0,
+            elapsed_seconds=0.1,
+            trace={},
+        )
+
+    monkeypatch.setattr(evaluation, "get_benchmarks", lambda: {"swe_bench_verified": benchmark})
+    monkeypatch.setattr(evaluation, "get_llm", lambda model=None, openai=True, max_tokens=None: "fake-llm")
+    monkeypatch.setattr(runner, "run_method", fake_run_method)
+    monkeypatch.setattr(runner, "progress", lambda items, desc: items)
+    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "fake-model")
+
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "swe_bench_verified",
+            "--methods",
+            "multiagent_streaming",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    await evaluation.run_evaluation(args)
+
+    prediction_paths = list(tmp_path.rglob("predictions_multiagent_streaming.jsonl"))
+    assert len(prediction_paths) == 1
+    prediction = json.loads(prediction_paths[0].read_text(encoding="utf-8").splitlines()[0])
+    assert prediction["instance_id"] == "owner__repo-1"
+    assert prediction["model_name_or_path"] == "fake-model"
+    assert prediction["model_patch"].startswith("diff --git")
+    assert prediction["model_patch"].endswith("\n")
+
+
+def test_apply_swebench_harness_results_updates_official_status(tmp_path):
+    trace_path = tmp_path / "example.json"
+    trace_path.write_text(
+        json.dumps(
+            {
+                "pred": "patch_produced",
+                "correct": False,
+                "returncode": 0,
+                "error": "Prediction patch produced; official SWE-bench harness evaluation was not run.",
+                "score_metadata": {"official_evaluation": "not_run"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    results = [
+        {
+            "benchmark": "swe_bench_verified",
+            "method": "multiagent_streaming",
+            "pred": "patch_produced",
+            "correct": False,
+            "returncode": 0,
+            "error": "Prediction patch produced; official SWE-bench harness evaluation was not run.",
+            "score_metadata": {
+                "instance_id": "owner__repo-1",
+                "official_evaluation": "not_run",
+            },
+            "json_trace_path": str(trace_path),
+        }
+    ]
+    report = {
+        "resolved_ids": [],
+        "unresolved_ids": [],
+        "empty_patch_ids": [],
+        "error_ids": ["owner__repo-1"],
+    }
+
+    evaluation.apply_swebench_harness_results(
+        results,
+        method="multiagent_streaming",
+        report=report,
+        report_path=tmp_path / "report.json",
+        artifact_path=tmp_path / "harness.json",
+        stdout="owner__repo-1: >>>>> Patch Apply Failed:\nmalformed patch\n\nAll instances run.",
+    )
+
+    result = results[0]
+    assert result["correct"] is False
+    assert result["returncode"] == 1
+    assert result["score_metadata"]["official_evaluation"] == "error"
+    assert "Patch Apply Failed" in result["error"]
+    updated_trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert updated_trace["score_metadata"]["official_evaluation"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_lean_multiagent_workspace_config_seeds_and_returns_final_file(monkeypatch):
+    RunnerFakeDockerWorkspace.created = []
+    captured_workflow_kwargs = {}
+
+    async def fake_run_workflow(**kwargs):
+        captured_workflow_kwargs.update(kwargs)
+        workspace = kwargs["docker_workspace"]
+        await workspace.write_text(
+            "/workspace/Main.lean",
+            "import Mathlib\n\ntheorem t : True := by\n  trivial\n",
+        )
+        return {
+            "final_answer": "Agent finished.",
+            "run_id": "run",
+            "mode": "multi_agent",
+            "subagent_mode": "fixed",
+            "agent_traces": {},
+        }
+
+    monkeypatch.setattr(multiagent_sync, "DockerWorkspace", RunnerFakeDockerWorkspace)
+    monkeypatch.setattr(multiagent_sync, "run_workflow", fake_run_workflow)
+
+    row = {
+        "id": 1,
+        "split": "level1",
+        "informal_statement": "Show true.",
+        "formal_statement": "import Mathlib\n\ntheorem t : True := by\n  sorry",
+        "header": "import Mathlib",
+        "topic": "Logic",
+        "tag": "Basic",
+        "version": "4.28.0",
+    }
+    workflow_config = ma_proofbench.build_lean_workflow_config(row, argparse.Namespace())
+    args = argparse.Namespace(
+        max_steps=2,
+        total_runtime_timeout=5,
+        synthesis_timeout=1,
+        workspace_image="python:3.12",
+        workspace_command_timeout=30,
+        workspace_output_limit=12000,
+    )
+
+    raw_output, returncode, trace = await runner.run_multiagent(
+        "Complete the Lean proof.",
+        UsageLLM([]),
+        args,
+        workflow_config=workflow_config,
+    )
+
+    assert returncode == 0
+    assert captured_workflow_kwargs["enable_workspace_tools"] is True
+    assert captured_workflow_kwargs["feedback_tool"] is not None
+    assert RunnerFakeDockerWorkspace.created[0].files["/workspace/Main.lean"].endswith("trivial\n")
+    assert RunnerFakeDockerWorkspace.created[0].cleaned is True
+    assert "```lean4\nimport Mathlib\n\ntheorem t : True := by\n  trivial\n```" in raw_output
+    assert trace["workspace"]["final_candidate_path"] == "/workspace/Main.lean"
+
+
+@pytest.mark.asyncio
 async def test_single_agent_stops_when_final_answer_is_parseable():
     llm = UsageLLM(
         [
@@ -259,6 +707,141 @@ async def test_single_agent_respects_max_steps_when_final_answer_is_not_parseabl
     assert result.trace["stopped_reason"] == "max_steps"
     assert result.trace["steps"][1]["status"] == "final"
     assert result.trace["steps"][1]["parsed_answer"] is None
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_runs_three_independent_single_agents_and_votes():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: A", "notes": "First vote."}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": "Second vote."}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": "Third vote."}'),
+        ]
+    )
+    args = argparse.Namespace(
+        max_steps=1,
+        answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
+    )
+
+    result = await runner.run_method("majority_vote", "Question with options.", llm, args)
+
+    assert result.raw_output == "Final Answer: B"
+    assert len(llm.prompts) == 3
+    assert all("Question with options." in prompt for prompt in llm.prompts)
+    assert result.trace["method"] == "majority_vote"
+    assert result.trace["agents"] == 3
+    assert result.trace["parsed_answers"] == ["A", "B", "B"]
+    assert result.trace["voted_answer"] == "B"
+    assert result.trace["fallback_used"] is False
+    assert len(result.trace["agent_runs"]) == 3
+    assert all(agent_run["trace"]["method"] == "single_agent" for agent_run in result.trace["agent_runs"])
+    debug = runner.build_multiagent_debug(result.trace)
+    assert [step["node"] for step in debug["workflow"]] == ["single_agent_votes", "majority_vote"]
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_tie_uses_first_parsed_answer():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: C", "notes": ""}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": ""}'),
+            UsageResponse('{"status": "final", "final_answer": "Final Answer: A", "notes": ""}'),
+        ]
+    )
+    args = argparse.Namespace(
+        max_steps=1,
+        answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
+    )
+
+    result = await runner.run_method("majority_vote", "Question with options.", llm, args)
+
+    assert result.raw_output == "Final Answer: C"
+    assert result.trace["parsed_answers"] == ["C", "B", "A"]
+    assert result.trace["voted_answer"] == "C"
+    assert result.trace["fallback_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_falls_back_to_first_raw_output_when_all_answers_are_unparseable():
+    llm = UsageLLM(
+        [
+            UsageResponse('{"status": "continue", "final_answer": "Unclear first answer", "notes": ""}'),
+            UsageResponse('{"status": "continue", "final_answer": "Unclear second answer", "notes": ""}'),
+            UsageResponse('{"status": "continue", "final_answer": "Unclear third answer", "notes": ""}'),
+        ]
+    )
+    args = argparse.Namespace(max_steps=1, answer_extractor=lambda text: None)
+
+    result = await runner.run_method("majority_vote", "Question with options.", llm, args)
+
+    assert result.raw_output == "Unclear first answer"
+    assert result.trace["parsed_answers"] == [None, None, None]
+    assert result.trace["voted_answer"] is None
+    assert result.trace["fallback_used"] is True
+
+
+@pytest.mark.asyncio
+async def test_multiagent_debate_uses_three_agents_two_rounds_and_selects_final_answer():
+    llm = UsageLLM(
+        [
+            UsageResponse("Agent 1 round 1 says Final Answer: A"),
+            UsageResponse("Agent 2 round 1 says Final Answer: B"),
+            UsageResponse("Agent 3 round 1 says Final Answer: B"),
+            UsageResponse("Agent 1 round 2 says Final Answer: B"),
+            UsageResponse("Agent 2 round 2 says Final Answer: B"),
+            UsageResponse("Agent 3 round 2 says Final Answer: C"),
+        ]
+    )
+    args = argparse.Namespace(
+        benchmark="mmlu_pro",
+        answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
+    )
+
+    result = await runner.run_method("multiagent_debate", "Question with options.", llm, args)
+
+    assert result.raw_output == "Final Answer: B"
+    assert len(llm.prompts) == 6
+    assert all("Question with options." in prompt for prompt in llm.prompts[:3])
+    assert "These are the solutions to the problem from other agents:" in llm.prompts[3]
+    assert "Agent 2 round 1 says Final Answer: B" in llm.prompts[3]
+    assert "Agent 3 round 1 says Final Answer: B" in llm.prompts[3]
+    assert "Agent 1 round 1 says Final Answer: A" in llm.prompts[3]
+    assert result.trace["method"] == "multiagent_debate"
+    assert result.trace["agents"] == 3
+    assert result.trace["rounds"] == 2
+    assert result.trace["parsed_final_answers"] == ["B", "B", "C"]
+    assert result.trace["majority_answer"] == "B"
+    assert len(result.trace["agent_contexts"]) == 3
+    assert len(result.trace["agent_contexts"][0]) == 4
+    debug = runner.build_multiagent_debug(result.trace)
+    assert [step["node"] for step in debug["workflow"]] == ["debate_agents", "debate_answer_selection"]
+
+
+@pytest.mark.asyncio
+async def test_multiagent_debate_math_prompt_matches_upstream_shape():
+    llm = UsageLLM(
+        [
+            UsageResponse(r"Agent 1 round 1 \boxed{1}"),
+            UsageResponse(r"Agent 2 round 1 \boxed{2}"),
+            UsageResponse(r"Agent 3 round 1 \boxed{2}"),
+            UsageResponse(r"Agent 1 round 2 \boxed{2}"),
+            UsageResponse(r"Agent 2 round 2 \boxed{2}"),
+            UsageResponse(r"Agent 3 round 2 \boxed{3}"),
+        ]
+    )
+    args = argparse.Namespace(
+        benchmark="gsm8k",
+        answer_extractor=gsm8k.extract_answer,
+    )
+
+    result = await runner.run_method("multiagent_debate", "What is 1 + 1?", llm, args)
+
+    assert "Can you solve the following math problem? What is 1 + 1? Explain your reasoning." in llm.prompts[0]
+    assert r"Your final answer should be a single numerical number, in the form \boxed{answer}" in llm.prompts[0]
+    assert "Can you double check that your answer is correct." not in llm.prompts[0]
+    assert "Using the solutions from other agents as additional information" in llm.prompts[3]
+    assert "The original math problem is What is 1 + 1?." in llm.prompts[3]
+    assert result.raw_output == "Final Answer: 2"
 
 
 @pytest.mark.asyncio
@@ -1316,7 +1899,9 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
         captured_kwargs.update(kwargs)
         return {"final_answer": f"{method} answer"}
 
-    monkeypatch.setattr(runner, "run_workflow", fake_run_workflow)
+    from multi_agent_sync.evaluation.baselines import multiagent_sync
+
+    monkeypatch.setattr(multiagent_sync, "run_workflow", fake_run_workflow)
     args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
 
     result = await runner.run_method(method, "Question?", UsageLLM([]), args)

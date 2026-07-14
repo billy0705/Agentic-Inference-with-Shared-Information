@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from multi_agent_sync.evaluation.dataset_files import load_or_download_rows
-from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
+from multi_agent_sync.evaluation.lean_feedback import LeanVerifierTool
+from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec, BenchmarkWorkflowConfig
 from multi_agent_sync.prompts import render_prompt
 
 
@@ -27,6 +28,7 @@ SUCCESS_GOLD = "lean_verifies"
 SUCCESS_PRED = "verified"
 FAILED_PRED = "failed"
 LABELS = {"level1", "level2"}
+LEAN_CANDIDATE_PATH = "/workspace/Main.lean"
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,7 @@ def build_benchmark() -> BenchmarkSpec:
         build_prompt=build_prompt,
         extract_answer=extract_answer,
         score_response=score_response,
+        build_workflow_config=build_lean_workflow_config,
     )
 
 
@@ -69,6 +72,25 @@ def build_prompt(row: dict[str, Any], rng: random.Random) -> tuple[str, str]:
         mathlib_version=row.get("version"),
     )
     return prompt, SUCCESS_GOLD
+
+
+def build_lean_workflow_config(row: dict[str, Any], args: argparse.Namespace) -> BenchmarkWorkflowConfig:
+    header = str(row.get("header") or "")
+    initial_code = normalize_lean_candidate(str(row["formal_statement"]), header)
+
+    def verify_candidate(code: str) -> LeanVerificationResult:
+        normalized_code = normalize_lean_candidate(code, header)
+        return run_lean_verifier(normalized_code, args)
+
+    return BenchmarkWorkflowConfig(
+        seed_files={LEAN_CANDIDATE_PATH: initial_code},
+        final_candidate_path=LEAN_CANDIDATE_PATH,
+        feedback_tool_factory=lambda workspace: LeanVerifierTool(
+            workspace=workspace,
+            verify_code=verify_candidate,
+            default_path=LEAN_CANDIDATE_PATH,
+        ),
+    )
 
 
 def extract_answer(text: str) -> str | None:
