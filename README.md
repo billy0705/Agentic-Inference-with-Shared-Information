@@ -30,7 +30,7 @@ The project intentionally does not use AutoGen.
 From the repository root:
 
 ```bash
-cd /Users/billy/Desktop/UTN/Autogen-multiagents
+cd path/to/Agentic-Inference-with-Shared-Information
 uv sync
 ```
 
