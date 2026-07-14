@@ -1,353 +1,265 @@
 # Multi-Agent Sync Prototype
 
-This is a local Python prototype for runtime synchronization between concurrent agents. A LangGraph workflow owns the high-level lifecycle, while agents exchange internal findings through a Kafka-like event streamer while they are still running.
-
-The prototype intentionally does not use AutoGen.
-
-## Why LangGraph
-
-LangGraph is used for the workflow lifecycle:
-
-1. The orchestrator asks the LLM to inspect the task and create a structured plan.
-2. The orchestrator always creates a multi-agent plan.
-3. The runtime starts only the selected concurrent workers.
-4. The synthesizer combines worker outputs and the event log into a final answer.
-
-The graph shape is:
-
-```text
-START -> orchestrator -> run_multi_agent_runtime -> synthesizer -> END
-```
-
-This follows the orchestrator-worker style conceptually: the orchestrator assigns work, workers execute concurrently, and the final node synthesizes results.
-
-## Model-Based Orchestration
-
-The orchestrator no longer uses a fixed keyword classifier or a fixed task-type-to-agent mapping. It asks the configured LLM to return a strict JSON plan with:
-
-- `mode`: `multi_agent`
-- `subagent_mode`: `fixed` or `dynamic`
-- `task_type`: a short free-text label generated for this task
-- `task_summary`
-- `reason`
-- `selected_agents`: a small list of registered agents with concrete subtasks
-- `collaboration_protocol`: event types to share and whether reactive steps are enabled
-
-The runtime constructs only the agents listed in `selected_agents`. In fixed mode, every selected name must exist in `AGENT_REGISTRY`, and every plan includes `CriticAgent` or `VerifierAgent`.
-
-By default the runtime uses fixed subagents:
-
-```bash
-uv run python -m multi_agent_sync --subagent-mode fixed "Build a prototype chess website"
-```
-
-Dynamic subagents can be enabled with:
-
-```bash
-uv run python -m multi_agent_sync --subagent-mode dynamic "Build a prototype chess website"
-```
-
-In dynamic mode, the Orchestrator freely names and describes the subagents for the current task. Each dynamic subagent can include a role, description, rules, concrete subtask, expected output, and `critical_debate` flag. Dynamic multi-agent plans must include at least two subagents and at least one critical debate subagent. Invalid dynamic model output falls back to `TaskWorker` and `CriticalDebateAgent`.
-
-The console stream prints the dynamic subagent plan and shows live message routing as `source -> target`, including `broadcast` events.
-
-The orchestrator validates model output before runtime execution:
-
-- invented agent names are removed
-- `ArchitectAgent` is never required or selected
-- direct mode is disabled and falls back to a deterministic multi-agent plan
-- multi-agent plans with no valid workers fall back to a small deterministic agent set
-- fixed multi-agent plans always include `CriticAgent` or `VerifierAgent`
-- dynamic multi-agent plans always include a critical debate subagent
-- selected agents are limited to at most four
-
-Examples:
-
-- Simple Q&A: a small multi-agent set with critique or verification.
-- Calculation: `SolverAgent`, `VerifierAgent`.
-- Coding or debugging task: usually `CodingAgent`, `CriticAgent`, and `VerifierAgent`.
-- Research or comparison task: usually `ResearchAgent`, `SolverAgent`, and `CriticAgent`.
-- Philosophy, proof, or reasoning task: usually `SolverAgent`, `CriticAgent`, and sometimes `VerifierAgent`.
-
-## Model Providers
-
-The default provider is an OpenAI-compatible API endpoint at `http://localhost:8000/v1` using `langchain-openai`. Set `OPENAI_BASE_URL` to use a different endpoint. The default API model is `openai/gpt-oss-120b`, or `OPENAI_MODEL` when set.
-
-Use a different API model with:
-
-```bash
-uv run python -m multi_agent_sync --model openai/gpt-oss-120b "Build a prototype chess website"
-```
-
-Use a local Ollama model instead with:
-
-```bash
-uv run python -m multi_agent_sync --local-model --model llama3.2 "Build a prototype chess website"
-```
-
-## Internal Finding Synchronization
-
-Each agent has its own assigned subtask and runs several local LLM steps. After each step, it may publish a useful finding. Other agents subscribe to the event streamer and can include those findings in later prompts.
-
-Example multi-agent flow:
-
-1. `ResearchAgent` publishes that real-time chess needs move synchronization.
-2. `CodingAgent` receives that event during its own run and may use it in a later step.
-3. `CriticAgent` receives both findings and may publish a critique about server-side move validation.
-
-Agents do not call each other directly. All agent-to-agent communication goes through `EventStreamer`.
-
-## Why EventStreamer Exists
-
-LangGraph state is useful for lifecycle state, but reducer-style graph state alone is not enough for live runtime sharing between workers. If workers only merge state after completion, they cannot react to each other's discoveries while still working.
-
-`EventStreamer` gives the runtime a separate communication channel:
-
-- append-only event log
-- per-event-type subscriptions
-- subscribe-all hooks for terminal streaming
-- async dispatch to multiple subscribers
-- bounded draining and handler timeouts
-
-## Event Model
-
-Events are structured Pydantic models with:
-
-- `event_id`
-- `run_id`
-- `source`
-- `target`
-- `event_type`
-- `content`
-- `confidence`
-- `metadata`
-- `timestamp`
-
-Supported event types include `task_started`, `plan_created`, `agent_started`, `finding`, `message_received`, `question`, `warning`, `critique`, `error`, `agent_done`, and `final_summary`.
-
-## In-Memory Streamer
-
-`InMemoryEventStreamer` is the first local Kafka-like implementation. It stores every event in an append-only list, then dispatches callbacks for the event type and callbacks registered with `subscribe_all`.
-
-The implementation uses asyncio tasks, catches failing handlers, applies handler timeouts, and provides `drain()` so callers can wait for currently pending callback tasks without looping forever.
-
-## Kafka Extension
-
-`KafkaEventStreamer` is a stub for future extension. The intended mapping is:
-
-```text
-finding    -> agent.finding
-warning    -> agent.warning
-critique   -> agent.critique
-agent_done -> agent.done
-```
-
-To replace the local streamer later, implement the same `EventStreamer` interface with Kafka producers/consumers. The graph and agents should not need structural changes because they depend on the interface, not the in-memory implementation.
-
-Redis Streams or NATS can follow the same pattern: map `event_type` to a stream/topic/subject, preserve `run_id`, and keep `event_id` for deduplication.
-
-## Agents
-
-The prototype includes five possible workers:
-
-- `ResearchAgent`: investigates architecture, assumptions, options, and constraints.
-- `CodingAgent`: plans modules, APIs, dependencies, and implementation shape.
-- `CriticAgent`: reviews findings for risks, race conditions, missing cases, and safety issues.
-- `SolverAgent`: solves math, science, physics, calculation, and direct reasoning problems.
-- `VerifierAgent`: checks numerical correctness, unit conversion, assumptions, contradictions, and overclaiming.
-
-Each agent:
-
-- subscribes to relevant events
-- ignores its own events
-- tracks `seen_event_ids`
-- avoids duplicate event processing
-- limits steps with `max_steps`
-- limits runtime with `max_runtime_seconds`
-- limits observed events with `max_events_per_agent`
-- publishes `agent_started`, findings or critiques, and `agent_done`
-
-## Traces
-
-`TraceLogger` is separate from `EventStreamer`.
-
-`EventStreamer` is for runtime communication between agents. `TraceLogger` is for debugging and experiment analysis. It records each agent step with:
-
-- inbox events available to the step
-- full prompt
-- raw LLM response
-- parsed output
-- events published by that step
-- timing data
-
-Full prompts and raw responses are not published to the event stream.
-
-## Run Artifacts
-
-Each CLI run saves artifacts under:
-
-```text
-runs/<timestamp>/
-  task.txt
-  final_answer.md
-  event_log.jsonl
-  agent_traces.json
-  orchestrator_plan.json
-```
-
-## Console Streaming
-
-The console streamer subscribes to all events and prints them while the run is active:
-
-```text
-[0000.10] [task_started] coordinator: Build a prototype chess website
-[0001.20] [plan_created] orchestrator: mode=multi_agent, task_type=software prototype task, selected_agents=ResearchAgent,CodingAgent,CriticAgent
-[0001.30] [agent_started] ResearchAgent: Researching architecture choices
-[0002.10] [finding] ResearchAgent: Real-time chess needs move synchronization
-[0002.30] [message_received] CodingAgent: received finding from ResearchAgent
-[0003.50] [critique] CriticAgent: Need server-side move validation
-[0005.00] [final_summary] Synthesizer: Final answer generated.
-```
-
-Events are not buffered until the end; they stream as subscribers receive them.
+Local Python prototype for running a LangGraph-based multi-agent workflow and benchmark evaluations.
+
+The project intentionally does not use AutoGen.
+
+## Contents
+
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [Environment Variables](#environment-variables)
+- [Run the Multi-Agent CLI](#run-the-multi-agent-cli)
+- [Run Evaluations](#run-evaluations)
+- [Lean / MA-ProofBench / OlymMATH-LEAN](#lean--ma-proofbench--olymmath-lean)
+- [SWE-bench Verified](#swe-bench-verified)
+- [Artifacts](#artifacts)
+- [Tests](#tests)
+
+## Requirements
+
+- Python 3.12+
+- `uv`
+- A model backend:
+  - OpenAI-compatible API server, defaulting to `http://localhost:8000/v1`
+  - or Ollama for local models
+- Docker, only if using Docker workspace features, Lean agent workspace feedback, or SWE-bench workspace repair
 
 ## Setup
 
-The project was originally created with:
-
-```bash
-uv init multi-agent-sync-prototype
-cd multi-agent-sync-prototype
-uv add langgraph langchain langchain-ollama pydantic rich pytest pytest-asyncio
-```
-
-The project files now live at the repository root:
+From the repository root:
 
 ```bash
 cd /Users/billy/Desktop/UTN/Autogen-multiagents
+uv sync
 ```
 
-Run from that root directory:
+If `uv sync` is not available in your `uv` version, this also works:
+
+```bash
+uv run python -m pytest --version
+```
+
+That command will create the environment from `pyproject.toml` / `uv.lock` before running.
+
+## Environment Variables
+
+### OpenAI-compatible provider
+
+Used by default.
+
+```bash
+export OPENAI_BASE_URL=http://localhost:8000/v1
+export OPENAI_MODEL=openai/gpt-oss-120b
+```
+
+Notes:
+
+- `OPENAI_BASE_URL` defaults to `http://localhost:8000/v1`.
+- `OPENAI_MODEL` defaults to `openai/gpt-oss-120b` for the main CLI.
+- Evaluation defaults to `--model auto`, which checks `${OPENAI_BASE_URL}/models` and uses the first model id.
+- `OPENAI_MODEL_LOOKUP_TIMEOUT` controls evaluation auto-detection timeout in seconds. Default: `2`.
+
+Example:
+
+```bash
+export OPENAI_MODEL_LOOKUP_TIMEOUT=5
+```
+
+### Ollama provider
+
+Used when passing `--local-model`.
+
+```bash
+export OLLAMA_MODEL=qwen3:4b
+```
+
+Example Ollama setup:
+
+```bash
+ollama pull qwen3:4b
+```
+
+### Hugging Face datasets
+
+Some datasets are downloaded from Hugging Face and cached under `data/`.
+
+```bash
+export HF_TOKEN=<your-token>
+```
+
+`HF_TOKEN` is required for gated GPQA access unless you provide a local `--data-file`.
+
+### Lean / Kimina
+
+Required for verifier-based Lean scoring.
+
+```bash
+export KIMINA_CLIENT_PATH=/path/to/MA-ProofBench/kimina-lean-server/client
+```
+
+Set this only if `kimina_client` is not importable in the current environment.
+
+## Run the Multi-Agent CLI
+
+Basic run:
 
 ```bash
 uv run python -m multi_agent_sync "Build a prototype chess website"
 ```
 
-Optional arguments:
+Equivalent console script:
 
 ```bash
-uv run python -m multi_agent_sync --local-model --model qwen3:4b --max-steps 3 --no-color "Build a prototype chess website"
+uv run multi-agent-sync "Build a prototype chess website"
 ```
 
-Run tests:
+Use a specific OpenAI-compatible model:
 
 ```bash
-uv run pytest
+uv run python -m multi_agent_sync --model openai/gpt-oss-120b "Build a prototype chess website"
 ```
 
-Tests use fake LLMs, so they do not require an Ollama server.
-
-## Evaluation
-
-Run GPQA-Diamond against the multi-agent workflow with agent-to-agent message streaming, the same workflow without agent-to-agent message streaming, the Du et al. multi-agent debate baseline, an independent majority-vote single-agent baseline, the iterative single-agent baseline, and a direct LLM baseline:
+Use Ollama:
 
 ```bash
-uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,multiagent_debate,majority_vote,single_agent,plain_llm --limit 10
+uv run python -m multi_agent_sync --local-model --model qwen3:4b "Build a prototype chess website"
 ```
 
-Run GSM8K test-set math word problems with the same methods:
+Use dynamic subagents:
 
 ```bash
-uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no_streaming,multiagent_debate,majority_vote,plain_llm --limit 10
+uv run python -m multi_agent_sync --subagent-mode dynamic "Build a prototype chess website"
 ```
 
-Run BIG-bench chess state-tracking examples with the same methods:
+Limit runtime and agent steps:
 
 ```bash
-uv run evaluation --benchmark chess --methods multiagent_streaming,multiagent_no_streaming,majority_vote,single_agent,plain_llm --limit 10
+uv run python -m multi_agent_sync \
+  --max-steps 3 \
+  --total-runtime-timeout 600 \
+  "Build a prototype chess website"
 ```
 
-Run MMLU-Pro test-set multiple-choice questions with the same methods:
+Enable Docker workspace tools for eligible agents:
 
 ```bash
-uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent_no_streaming,multiagent_debate,majority_vote,plain_llm --limit 10
+uv run python -m multi_agent_sync \
+  --docker-workspace \
+  --workspace-image python:3.12 \
+  --workspace-source . \
+  "Fix the failing tests in this project"
 ```
 
-Run MA-ProofBench Lean theorem-proving problems with the same methods:
+Useful CLI flags:
+
+- `--model <model>`: model name for the selected provider
+- `--local-model`: use Ollama instead of the OpenAI-compatible provider
+- `--subagent-mode fixed|dynamic`: choose fixed registered agents or dynamic subagents
+- `--max-steps <n>`: maximum inference steps per agent
+- `--total-runtime-timeout <seconds>`: total multi-agent runtime limit
+- `--runs-dir <path>`: where CLI run artifacts are written
+- `--no-color`: disable colored terminal output
+- `--docker-workspace`: enable Docker bash workspace tools
+
+## Run Evaluations
+
+The evaluation command is:
 
 ```bash
-uv run evaluation --benchmark ma_proofbench --methods multiagent_streaming,multiagent_no_streaming,majority_vote,plain_llm --limit 10
+uv run evaluation --benchmark <benchmark> --methods <methods> --limit <n>
 ```
 
-Run OlymMATH natural-language Olympiad problems with answer-key scoring:
+Supported benchmarks:
+
+- `gpqa`
+- `gsm8k`
+- `chess`
+- `mmlu_pro`
+- `ma_proofbench`
+- `olymmath`
+- `olymmath_lean`
+- `swe_bench_verified`
+
+Supported methods:
+
+- `multiagent_streaming`
+- `multiagent_no_streaming`
+- `multiagent_dynamic_streaming`
+- `multiagent_dynamic_no_streaming`
+- `multiagent_debate`
+- `majority_vote`
+- `single_agent`
+- `plain_llm`
+- `multiagent` legacy alias for `multiagent_streaming`
+
+Run a small GPQA evaluation:
 
 ```bash
-uv run evaluation --benchmark olymmath --olymmath-subset en-hard --methods multiagent_streaming,multiagent_no_streaming,multiagent_debate,majority_vote,plain_llm --limit 10
+uv run evaluation \
+  --benchmark gpqa \
+  --methods multiagent_streaming,multiagent_no_streaming,plain_llm \
+  --limit 10
 ```
 
-Run OlymMATH-LEAN theorem-proving problems with verifier-based scoring:
+Run with Ollama:
 
 ```bash
-uv run evaluation --benchmark olymmath_lean --methods plain_llm --limit 10 --kimina-host 127.0.0.1 --kimina-port 8001
+uv run evaluation \
+  --benchmark gsm8k \
+  --methods multiagent_streaming,plain_llm \
+  --local-model \
+  --model qwen3:4b \
+  --limit 10
 ```
 
-To compare fixed subagents, dynamic subagents, the iterative single-agent baseline, and the direct baseline in one run:
+Run fixed and dynamic multi-agent variants together:
 
 ```bash
-uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,multiagent_dynamic_streaming,multiagent_dynamic_no_streaming,single_agent,plain_llm --limit 10
+uv run evaluation \
+  --benchmark gpqa \
+  --methods multiagent_streaming,multiagent_no_streaming,multiagent_dynamic_streaming,multiagent_dynamic_no_streaming,plain_llm \
+  --limit 10
 ```
 
-The benchmark writes each run under `output/<benchmark>/<model>/<run_id>/`, such as `output/ma_proofbench/gpt-oss-120b/20260624T130000Z_ab12cd34/`. Provider prefixes are omitted from the model folder, so `google/gemma-4-26B-A4B-it` writes under `gemma-4-26B-A4B-it`. The run folder contains the per-question results CSV, summary JSON, correctness matrix CSV, run config, and per-example traces, and these artifacts are updated after each completed question-method run. `multiagent` remains as a legacy alias for fixed `multiagent_streaming`. `multiagent_debate` ports the Du et al. multi-agent debate baseline with the upstream defaults of 3 agents and 2 debate rounds: each agent first answers independently, then each agent sees the other agents' previous answers and updates its answer. The final score uses a majority vote over the parsed final answers, matching the upstream evaluation scripts. `majority_vote` runs 3 independent `single_agent` attempts with no communication, then returns the most frequent parsed answer; ties use the first parsed answer, and all-unparseable runs fall back to the first raw output. `single_agent` runs one model for up to `--max-steps`, feeding prior attempts back into the next step; it stops early only when the model marks the answer final and the benchmark extractor can parse it. Use `--output result.csv` to name the CSV inside the run folder, or `--output-dir other-output` to change the root directory.
-
-Evaluation defaults to `--model auto` for the OpenAI-compatible provider. In auto mode it queries `<OPENAI_BASE_URL or http://localhost:8000/v1>/models` and uses the first returned model id. If the endpoint is unavailable or returns no model ids, it switches to the local Ollama provider with `OLLAMA_MODEL`, then `qwen3:4b`. Pass `--model <model-id>` to skip auto-detection. Use `--local-model --model <ollama-model>` to evaluate with Ollama instead of the OpenAI-compatible API provider.
-
-The correctness matrix is written inside the run folder as `correctness.csv`. Rows are task ids, columns are method names, and each cell is `T`, `F`, or blank if that method has not finished that task yet.
-
-JSON traces are saved by default under the run folder in `examples/`. Each per-example method trace stores the resolved model name, settings, question, answer choices, prompt, raw output, token usage, selected subagents, messages sent by agents, a compact workflow, and the full method trace. It does not duplicate the entire benchmark row. Use `--no-save-json-traces` to disable JSON artifacts.
-
-To compare where methods disagree after a run:
+Run common benchmarks:
 
 ```bash
-uv run python scripts/compare_eval_traces.py output/<benchmark>/<model>/<run_id>
+uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+uv run evaluation --benchmark chess --methods multiagent_streaming,single_agent,plain_llm --limit 10
+uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10
+uv run evaluation --benchmark olymmath --olymmath-subset en-hard --methods multiagent_streaming,plain_llm --limit 10
 ```
 
-GPQA on Hugging Face is gated. By default, the evaluator uses `data/gpqa/gpqa_diamond.csv` when that file exists; otherwise it tries Hugging Face and saves the downloaded file there for later runs. Authenticate with an account that has dataset access, set `HF_TOKEN`, or pass your own local GPQA-style file with:
+Use a local benchmark file:
 
 ```bash
-uv run evaluation --benchmark gpqa --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/gpqa.csv
+uv run evaluation \
+  --benchmark gpqa \
+  --methods multiagent_streaming,plain_llm \
+  --data-file /path/to/gpqa.csv \
+  --limit 10
 ```
 
-Local `.csv`, `.jsonl`, and `.ndjson` files must include `Question`, `Correct Answer`, `Incorrect Answer 1`, `Incorrect Answer 2`, and `Incorrect Answer 3`.
+Useful evaluation flags:
 
-GSM8K uses the public Hugging Face dataset `openai/gsm8k`, config `main`, split `test`. By default, the evaluator uses `data/gsm8k/gsm8k_test.jsonl` when it exists; otherwise it downloads and saves that file there. Rows contain `question` and `answer`; the gold answer is the final numeric value after the `####` marker in `answer`. The evaluator normalizes equivalent numeric formatting, so values like `10`, `10.0`, and `$10.00` score the same. To use a local GSM8K-shaped file:
+- `--model <model>`: model name, or `auto` for OpenAI-compatible model detection
+- `--local-model`: use Ollama
+- `--output-dir <path>`: output root, default `output`
+- `--output <file-or-path>`: CSV output name/path
+- `--save-json-traces` / `--no-save-json-traces`: write per-example traces
+- `--max-steps <n>`: max steps for multi-agent and single-agent methods
+- `--total-runtime-timeout <seconds>`: per-example multi-agent timeout
+- `--synthesis-timeout <seconds>`: synthesizer timeout
+- `--seed <n>`: answer shuffle seed
 
-```bash
-uv run evaluation --benchmark gsm8k --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/gsm8k.jsonl
-```
+## Lean / MA-ProofBench / OlymMATH-LEAN
 
-Local GSM8K `.csv`, `.jsonl`, and `.ndjson` files must include `question` and `answer`.
+Lean benchmarks use Kimina Lean Server for verification.
 
-Chess uses the BIG-bench `chess_state_tracking/synthetic_short` task. By default, the evaluator uses `data/chess/synthetic_short_task.json` when it exists; otherwise it downloads the upstream BIG-bench task JSON and saves it there. Rows contain `input` and `target`, where `input` is the UCI move prefix ending with the starting square, and `target` is the list of valid destination squares. The model output is defined as exactly one destination square matching `[a-h][1-8]`, preferably written as `Final Answer: <square>`. A response is correct when the extracted square is one of the target squares. To use a local chess file:
+### 1. Start Kimina Lean Server
 
-```bash
-uv run evaluation --benchmark chess --methods multiagent_streaming,multiagent_no_streaming,single_agent,plain_llm --limit 10 --data-file /path/to/task.json
-```
-
-Local chess `.json`, `.jsonl`, and `.ndjson` files must include `input` and `target`. A `.json` file can be the original BIG-bench task object with an `examples` list.
-
-MMLU-Pro uses the public Hugging Face dataset `TIGER-Lab/MMLU-Pro`, split `test` only. By default, the evaluator uses `data/mmlu_pro/mmlu_pro_test.jsonl` when it exists; otherwise it downloads and saves that file there. Rows contain `question`, `options`, `answer`, and optionally `answer_index`, `category`, `cot_content`, `question_id`, and `src`. The evaluator keeps the dataset option order, labels the available options from `A` through at most `J`, and scores against the `answer` letter. To use a local MMLU-Pro-shaped file:
-
-```bash
-uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent_no_streaming,plain_llm --limit 10 --data-file /path/to/mmlu_pro.jsonl
-```
-
-Local MMLU-Pro `.csv`, `.jsonl`, and `.ndjson` files must include `question`, `options`, and `answer`. For CSV files, `options` must be a JSON list string.
-
-MA-ProofBench uses the public Hugging Face dataset `openbmb/MA-ProofBench`, split `test`. By default, the evaluator uses `data/ma_proofbench/ma_proofbench_test.jsonl` when it exists; otherwise it downloads and saves that file there. Rows contain `id`, `split`, `informal_statement`, `formal_statement`, `header`, `topic`, `tag`, and `version`. The default level is `all`; use `--ma-proofbench-level level1` or `--ma-proofbench-level level2` to run one tier. The evaluator preserves dataset order and defaults to `--attempts 1`.
-
-MA-ProofBench scoring is verifier-based. The evaluator extracts the final Lean code block, merges the dataset `header`, rejects outputs containing `sorry`, checks that the target theorem statement was not changed, and then verifies the proof. A proof is correct only when verification reports a complete proof with no errors and no sorries.
-
-By default, MA-ProofBench uses Kimina Lean Server, matching the upstream benchmark workflow. Start the server first:
+In a separate directory:
 
 ```bash
 git clone https://github.com/OpenBMB/MA-ProofBench.git
@@ -361,32 +273,251 @@ prisma generate
 python -m server
 ```
 
-Then run the benchmark from this repository:
+The evaluation commands below assume the server is available at `127.0.0.1:8001`.
+
+If the Python client is not importable:
 
 ```bash
-uv run evaluation --benchmark ma_proofbench --methods plain_llm --limit 10 --kimina-host 127.0.0.1 --kimina-port 8001
+export KIMINA_CLIENT_PATH=/path/to/MA-ProofBench/kimina-lean-server/client
 ```
 
-If `kimina_client` is not importable, install the Kimina Lean Server client package or set `KIMINA_CLIENT_PATH` to its client directory before running evaluation.
-
-Local MA-ProofBench `.csv`, `.jsonl`, and `.ndjson` files must include `id`, `split`, `informal_statement`, `formal_statement`, `header`, `topic`, `tag`, and `version`.
-
-OlymMATH uses the public Hugging Face dataset `RUC-AIBOX/OlymMATH`. The natural-language benchmark supports `--olymmath-subset en-easy`, `en-hard`, `zh-easy`, and `zh-hard`, corresponding to the upstream JSONL files `OlymMATH-EN-EASY.jsonl`, `OlymMATH-EN-HARD.jsonl`, `OlymMATH-ZH-EASY.jsonl`, and `OlymMATH-ZH-HARD.jsonl`. Rows contain `problem`, `answer`, `subject`, and `unique_id`. The evaluator prompts for a final answer in `Final Answer: <answer>` format, normalizes common LaTeX answer forms, and scores against the released answer key.
-
-The OlymMATH paper reports rule-based answer evaluation for EASY/HARD and formal verification for LEAN. It does not provide one universal natural-language solver prompt; for Lean, the appendix prompt is for generating formalizations during benchmark construction, while model evaluation uses theorem-proving model prompt templates. This repository therefore uses local prompts that match the benchmark contracts: final answer extraction for EASY/HARD, and complete Lean code generation for LEAN.
-
-OlymMATH-LEAN loads the upstream `OlymMATH-LEAN.jsonl` subset. By default, OlymMATH files are loaded from or downloaded into `data/OlymMATH/`, such as `data/OlymMATH/OlymMATH-EN-HARD.jsonl` and `data/OlymMATH/OlymMATH-LEAN.jsonl`; when any default OlymMATH file is missing, the evaluator downloads all missing OlymMATH default files in one pass. Rows contain `unique_id`, `subject`, `formal_statement`, `formal_statement_raw`, `formal_proof`, `en_informal`, `zh_informal`, and natural-language proof fields. Scoring reuses the Lean verifier workflow: extract a Lean code block, reject `sorry`, ensure the theorem statement is unchanged, then verify with Kimina Lean Server. To use local OlymMATH files:
+### 2. Run MA-ProofBench
 
 ```bash
-uv run evaluation --benchmark olymmath --olymmath-subset en-hard --methods plain_llm --limit 10 --data-file /path/to/OlymMATH-EN-HARD.jsonl
-uv run evaluation --benchmark olymmath_lean --methods plain_llm --limit 10 --data-file /path/to/OlymMATH-LEAN.jsonl
+uv run evaluation \
+  --benchmark ma_proofbench \
+  --methods plain_llm \
+  --limit 10 \
+  --kimina-host 127.0.0.1 \
+  --kimina-port 8001
 ```
+
+Run one difficulty level:
+
+```bash
+uv run evaluation \
+  --benchmark ma_proofbench \
+  --ma-proofbench-level level1 \
+  --methods multiagent_streaming,plain_llm \
+  --limit 10 \
+  --kimina-host 127.0.0.1 \
+  --kimina-port 8001
+```
+
+Enable Lean agent workspace feedback:
+
+```bash
+uv run evaluation \
+  --benchmark ma_proofbench \
+  --methods multiagent_streaming \
+  --lean-agent-workspace \
+  --workspace-image python:3.12 \
+  --limit 5 \
+  --kimina-host 127.0.0.1 \
+  --kimina-port 8001
+```
+
+### 3. Run OlymMATH-LEAN
+
+```bash
+uv run evaluation \
+  --benchmark olymmath_lean \
+  --methods plain_llm \
+  --limit 10 \
+  --kimina-host 127.0.0.1 \
+  --kimina-port 8001
+```
+
+Lean-specific flags:
+
+- `--lean-timeout <seconds>`: verifier timeout per candidate, default `60`
+- `--kimina-host <host>`: default `127.0.0.1`
+- `--kimina-port <port>`: default `8001`
+- `--kimina-max-workers <n>`: Kimina workers per request
+- `--lean-agent-workspace`: enable Docker workspace editing plus verifier feedback for Lean multi-agent methods
+
+## SWE-bench Verified
+
+SWE-bench can be run in two stages:
+
+1. Generate prediction patches.
+2. Optionally run the official SWE-bench harness to score them.
+
+### 1. Install SWE-bench harness dependencies
+
+The official harness is not listed as a core dependency in this project. Install it in the environment you will use for evaluation:
+
+```bash
+uv pip install swebench
+```
+
+Docker must be running for the official harness.
+
+### 2. Generate prediction patches
+
+Simple patch generation:
+
+```bash
+uv run evaluation \
+  --benchmark swe_bench_verified \
+  --methods plain_llm \
+  --limit 1
+```
+
+Run multi-agent repair with a Docker workspace:
+
+```bash
+uv run evaluation \
+  --benchmark swe_bench_verified \
+  --methods multiagent_streaming \
+  --swebench-agent-workspace \
+  --workspace-image python:3.12 \
+  --workspace-command-timeout 120 \
+  --limit 1
+```
+
+This writes prediction JSONL files under the run output directory, for example:
+
+```text
+output/swe_bench_verified/<model>/<run_id>/predictions_multiagent_streaming.jsonl
+```
+
+### 3. Run the official harness
+
+Run patch generation and official evaluation in one command:
+
+```bash
+uv run evaluation \
+  --benchmark swe_bench_verified \
+  --methods multiagent_streaming \
+  --swebench-agent-workspace \
+  --swebench-run-harness \
+  --swebench-max-workers 1 \
+  --limit 1
+```
+
+Evaluate specific instance ids:
+
+```bash
+uv run evaluation \
+  --benchmark swe_bench_verified \
+  --methods multiagent_streaming \
+  --swebench-agent-workspace \
+  --swebench-run-harness \
+  --swebench-instance-ids astropy__astropy-12907 \
+  --limit 1
+```
+
+On Mac ARM, you may need to force local image builds by passing an empty namespace:
+
+```bash
+uv run evaluation \
+  --benchmark swe_bench_verified \
+  --methods multiagent_streaming \
+  --swebench-agent-workspace \
+  --swebench-run-harness \
+  --swebench-namespace "" \
+  --limit 1
+```
+
+SWE-bench flags:
+
+- `--swebench-agent-workspace`: enable Docker workspace editing and git diff export
+- `--swebench-run-harness`: run `swebench.harness.run_evaluation`
+- `--swebench-max-workers <n>`: official harness worker count
+- `--swebench-run-id <id>`: run id passed to the official harness
+- `--swebench-namespace <namespace>`: Docker image namespace for the official harness
+- `--swebench-instance-ids <ids>`: comma-separated or space-separated instance ids
+
+Local SWE-bench data files can be `.csv`, `.jsonl`, or `.ndjson` and must include:
+
+- `repo`
+- `instance_id`
+- `base_commit`
+- `problem_statement`
+
+Example:
+
+```bash
+uv run evaluation \
+  --benchmark swe_bench_verified \
+  --methods plain_llm \
+  --data-file /path/to/swe_bench_verified.jsonl \
+  --limit 1
+```
+
+## Artifacts
+
+### Multi-agent CLI artifacts
+
+CLI runs write to `runs/<timestamp>/` by default:
+
+```text
+runs/<timestamp>/
+  task.txt
+  final_answer.md
+  event_log.jsonl
+  agent_traces.json
+  orchestrator_plan.json
+```
+
+Change the root directory:
+
+```bash
+uv run python -m multi_agent_sync --runs-dir my-runs "Build a prototype chess website"
+```
+
+### Evaluation artifacts
+
+Evaluation runs write to:
+
+```text
+output/<benchmark>/<model>/<run_id>/
+```
+
+Typical files:
+
+```text
+<benchmark>_results.csv
+correctness.csv
+run_config.json
+summary.json
+examples/*.json
+predictions_<method>.jsonl
+harness_<method>.json
+```
+
+Compare traces after a run:
+
+```bash
+uv run python scripts/compare_eval_traces.py output/<benchmark>/<model>/<run_id>
+```
+
+Summarize CSV results:
+
+```bash
+uv run python scripts/summarize_csv_results.py output/<benchmark>/<model>/<run_id>/<benchmark>_results.csv
+```
+
+## Tests
+
+Run all tests:
+
+```bash
+uv run pytest
+```
+
+Run a focused test file:
+
+```bash
+uv run pytest tests/test_evaluation.py
+```
+
+Tests use fake LLMs and do not require a model server.
 
 ## Current Limitations
 
-- The streamer is in-memory and process-local.
-- There is no real Kafka, Redis Streams, or NATS integration yet.
+- The event streamer is in-memory and process-local.
+- External event streamer backends are not implemented yet.
 - There is no web UI.
-- The orchestrator depends on the configured LLM and falls back deterministically when the model plan is invalid.
-- Terminal streaming is best-effort and depends on async callback scheduling.
-- The final CLI demo requires the selected model provider to be running.
+- The CLI and evaluations require the selected model provider to be available unless tests are using fake LLMs.

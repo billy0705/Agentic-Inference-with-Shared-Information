@@ -9,7 +9,7 @@ from multi_agent_sync.events.streamer import EventHandler, EventStreamer
 
 
 class InMemoryEventStreamer(EventStreamer):
-    """Async append-only event streamer with Kafka-like publish/subscribe semantics."""
+    """Async append-only event streamer with publish/subscribe semantics."""
 
     def __init__(self, handler_timeout: float = 2.0) -> None:
         self._event_log: list[AgentEvent] = []
