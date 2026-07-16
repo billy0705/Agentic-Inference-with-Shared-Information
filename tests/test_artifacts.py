@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from multi_agent_sync.artifacts import save_run_artifacts
+from multi_agent_sync.artifacts import build_token_usage_by_step, format_token_usage_by_step, save_run_artifacts
 from multi_agent_sync.graph.workflow import run_workflow
 
 
@@ -43,6 +43,8 @@ async def test_save_run_artifacts_writes_expected_files(tmp_path):
     assert (run_dir / "final_answer.md").read_text()
     assert (run_dir / "event_log.jsonl").read_text().strip()
     assert json.loads((run_dir / "agent_traces.json").read_text())
+    assert json.loads((run_dir / "token_usage_by_step.json").read_text())
+    assert "Token usage by step" in (run_dir / "token_usage_by_step.txt").read_text()
     sync_report = json.loads((run_dir / "sync_report.json").read_text())
     assert "messages_sent" in sync_report
     assert "agent_pairs" in sync_report
@@ -54,3 +56,52 @@ async def test_save_run_artifacts_writes_expected_files(tmp_path):
         "CriticAgent",
         "VerifierAgent",
     ]
+
+
+def test_build_token_usage_by_step_extracts_each_agent_step():
+    report = build_token_usage_by_step(
+        {
+            "ResearchAgent": {
+                "steps": [
+                    {
+                        "step": 1,
+                        "token_usage": {
+                            "prompt_tokens": 12,
+                            "completion_tokens": 5,
+                            "total_tokens": 17,
+                        },
+                    }
+                ]
+            },
+            "CodingAgent": {
+                "steps": [
+                    {
+                        "step": 1,
+                        "token_usage": {
+                            "prompt_tokens": None,
+                            "completion_tokens": None,
+                            "total_tokens": None,
+                        },
+                    }
+                ]
+            },
+        }
+    )
+
+    assert report == [
+        {"agent": "ResearchAgent", "step": 1, "prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17},
+        {"agent": "CodingAgent", "step": 1, "prompt_tokens": None, "completion_tokens": None, "total_tokens": None},
+    ]
+
+
+def test_format_token_usage_by_step_includes_every_step():
+    report = [
+        {"agent": "ResearchAgent", "step": 1, "prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17},
+        {"agent": "CodingAgent", "step": 2, "prompt_tokens": None, "completion_tokens": None, "total_tokens": None},
+    ]
+
+    assert format_token_usage_by_step(report) == (
+        "Token usage by step\n"
+        "- ResearchAgent step 1: prompt=12, completion=5, total=17\n"
+        "- CodingAgent step 2: prompt=unknown, completion=unknown, total=unknown"
+    )

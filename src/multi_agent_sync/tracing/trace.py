@@ -31,6 +31,7 @@ class AgentStepTrace:
     used_event_ids: list[str]
     prompt: str
     raw_response: str
+    token_usage: dict[str, int | None]
     parsed_output: dict[str, Any]
     published_events: list[dict[str, Any]]
     started_at: float
@@ -68,6 +69,7 @@ class TraceLogger:
         used_event_ids: list[str],
         prompt: str,
         raw_response: str,
+        token_usage: dict[str, int | None],
         parsed_output: dict[str, Any],
         published_events: list[AgentEvent],
         started_at: float,
@@ -86,6 +88,7 @@ class TraceLogger:
                 used_event_ids=list(used_event_ids),
                 prompt=prompt,
                 raw_response=raw_response,
+                token_usage=dict(token_usage),
                 parsed_output=dict(parsed_output),
                 published_events=[event.model_dump(mode="json") for event in published_events],
                 started_at=started_at,

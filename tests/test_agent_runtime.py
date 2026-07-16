@@ -16,6 +16,8 @@ from multi_agent_sync.workspace.docker import BashResult, DockerWorkspace
 @dataclass
 class FakeResponse:
     content: str
+    usage_metadata: dict[str, int] | None = None
+    response_metadata: dict | None = None
 
 
 class FakeLLM:
@@ -280,6 +282,41 @@ async def test_agent_stops_processing_events_after_done():
     assert receipt["event_id"] == late_event.event_id
     assert receipt["accepted"] is False
     assert receipt["ignored_reason"] == "agent_done"
+
+
+@pytest.mark.asyncio
+async def test_agent_step_trace_records_token_usage_from_llm_response_metadata():
+    class UsageLLM:
+        async def ainvoke(self, prompt: str) -> FakeResponse:
+            return FakeResponse(
+                "FINAL:\nToken usage is recorded.\n"
+                "SHARE_FINDING:\n\n"
+                "CONFIDENCE:\n0.8\n"
+                "LOCAL_NOTES:\nDone.",
+                usage_metadata={"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            )
+
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    agent = ResearchAgent(
+        run_id="run-token-usage",
+        task="Record token usage.",
+        assigned_subtask="Finish once.",
+        llm=UsageLLM(),
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        max_steps=1,
+        step_delay_seconds=0,
+    )
+
+    await agent.run()
+
+    step = trace_logger.export()["ResearchAgent"]["steps"][0]
+    assert step["token_usage"] == {
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+        "total_tokens": 18,
+    }
 
 
 @pytest.mark.asyncio

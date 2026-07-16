@@ -6,7 +6,7 @@ import os
 
 from rich.console import Console
 
-from multi_agent_sync.artifacts import save_run_artifacts
+from multi_agent_sync.artifacts import build_token_usage_by_step, format_token_usage_by_step, save_run_artifacts
 from multi_agent_sync.graph.workflow import run_workflow
 from multi_agent_sync.llm import get_llm
 from multi_agent_sync.workspace.docker import DockerWorkspace
@@ -99,6 +99,7 @@ async def async_main(args: argparse.Namespace) -> None:
         console = Console(no_color=args.no_color)
         console.print("\n[bold]Final answer[/bold]")
         console.print(state["final_answer"])
+        console.print(f"\n{format_token_usage_by_step(build_token_usage_by_step(state.get('agent_traces', {})))}")
         run_dir = save_run_artifacts(state, root_dir=args.runs_dir)
         console.print(f"\nRun artifacts: {run_dir}")
     finally:

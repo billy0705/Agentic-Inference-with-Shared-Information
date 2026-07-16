@@ -517,11 +517,31 @@
         published_events: Array.isArray(step.published_events) ? step.published_events : [],
         inbox_events: Array.isArray(step.inbox_events) ? step.inbox_events : [],
         used_event_ids: Array.isArray(step.used_event_ids) ? step.used_event_ids : [],
+        token_usage: normalizeTokenUsage(step.token_usage),
         duration_seconds: step.duration_seconds,
         is_reactive: Boolean(step.is_reactive),
         reactive_reason: step.reactive_reason || '',
         tools: findToolActions(rawResponse),
       };
+    }
+
+    function normalizeTokenUsage(tokenUsage) {
+      const usage = tokenUsage && typeof tokenUsage === 'object' ? tokenUsage : {};
+      return {
+        prompt_tokens: usage.prompt_tokens ?? null,
+        completion_tokens: usage.completion_tokens ?? null,
+        total_tokens: usage.total_tokens ?? null,
+      };
+    }
+
+    function formatTokenUsage(tokenUsage) {
+      const usage = normalizeTokenUsage(tokenUsage);
+      return `prompt=${formatTokenValue(usage.prompt_tokens)}, completion=${formatTokenValue(usage.completion_tokens)}, total=${formatTokenValue(usage.total_tokens)}`;
+    }
+
+    function formatTokenValue(value) {
+      if (value === null || value === undefined || value === '') return 'unknown';
+      return String(value);
     }
 
     function normalizeEvents(methodTrace) {
@@ -864,6 +884,7 @@
           ${(agent.steps || []).map((step) => `
             <div class="step">
               <strong>Step ${esc(step.step)} ${step.is_reactive ? '<span class="pill warn">reactive</span>' : ''}</strong>
+              <div class="subtle">Token usage: ${esc(formatTokenUsage(step.token_usage))}</div>
               <details><summary>Prompt</summary><pre>${esc(step.prompt)}</pre></details>
               <details open><summary>Response</summary><pre>${esc(step.raw_response)}</pre></details>
               <details><summary>Parsed output</summary><pre>${esc(pretty(step.parsed_output))}</pre></details>

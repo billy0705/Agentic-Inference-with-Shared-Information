@@ -10,6 +10,7 @@ from typing import Any
 from multi_agent_sync.events.event import AgentEvent, EventType
 from multi_agent_sync.events.streamer import EventStreamer
 from multi_agent_sync.prompts import render_prompt
+from multi_agent_sync.token_usage import extract_token_usage
 
 
 @dataclass
@@ -224,6 +225,7 @@ class BaseAgent:
         )
         response = await self.llm.ainvoke(prompt)
         content = getattr(response, "content", str(response))
+        token_usage = extract_token_usage(response)
         result = (
             await self.parse_and_run_tool_response(content)
             if self.has_workspace_tool
@@ -235,6 +237,7 @@ class BaseAgent:
             "used_event_ids": used_event_ids,
             "prompt": prompt,
             "raw_response": content,
+            "token_usage": token_usage.as_dict(),
             "started_at": started_at,
             "ended_at": ended_at,
         }
@@ -570,6 +573,7 @@ class BaseAgent:
             used_event_ids=self._last_step_trace_data.get("used_event_ids", []),
             prompt=self._last_step_trace_data.get("prompt", ""),
             raw_response=self._last_step_trace_data.get("raw_response", ""),
+            token_usage=self._last_step_trace_data.get("token_usage", {}),
             parsed_output=result.as_dict(),
             published_events=published_events,
             started_at=self._last_step_trace_data.get("started_at", time.time()),

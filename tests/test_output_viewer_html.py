@@ -22,6 +22,9 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "method_trace" in html
     assert "agent_traces" in html
     assert "event_receipts" in html
+    assert "token_usage" in html
+    assert "formatTokenUsage" in html
+    assert "Token usage" in html
     assert "ACTION:" in html
     assert "normalizeOrchestrator" in html
     assert "runsForModelFilter" in html
