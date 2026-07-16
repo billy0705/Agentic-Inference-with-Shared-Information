@@ -165,11 +165,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=12000,
         help="Maximum stdout/stderr characters retained per Docker workspace command.",
     )
-    parser.add_argument(
-        "--local-model",
-        action="store_true",
-        help="Use local Ollama instead of the OpenAI-compatible API provider.",
-    )
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent for multiagent runs.")
     parser.add_argument(
         "--single-agent-min-steps",
@@ -202,7 +197,7 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
     rng = random.Random(args.seed)
     resolved_model = runner.resolve_model_name(args)
     setattr(args, "resolved_model", resolved_model)
-    llm = get_llm(resolved_model, openai=not args.local_model, max_tokens=EVALUATION_MAX_TOKENS)
+    llm = get_llm(resolved_model, openai=not getattr(args, "local_model", False), max_tokens=EVALUATION_MAX_TOKENS)
     run_id = runner.create_run_id()
     output_path = runner.resolve_output_path(benchmark, args, run_id=run_id)
     run_config = runner.build_run_config(benchmark, args, methods, run_id=run_id, output_path=output_path)

@@ -22,7 +22,6 @@ The project intentionally does not use AutoGen.
 - `uv`
 - A model backend:
   - OpenAI-compatible API server, defaulting to `http://localhost:8000/v1`
-  - or Ollama for local models
 - Docker, only if using Docker workspace features, Lean agent workspace feedback, or SWE-bench workspace repair
 
 ## Setup
@@ -58,26 +57,13 @@ Notes:
 - `OPENAI_BASE_URL` defaults to `http://localhost:8000/v1`.
 - `OPENAI_MODEL` defaults to `openai/gpt-oss-120b` for the main CLI.
 - Evaluation defaults to `--model auto`, which checks `${OPENAI_BASE_URL}/models` and uses the first model id.
+- If `${OPENAI_BASE_URL}/models` is unavailable during auto-detection, evaluation exits with a message instead of falling back to a local model.
 - `OPENAI_MODEL_LOOKUP_TIMEOUT` controls evaluation auto-detection timeout in seconds. Default: `2`.
 
 Example:
 
 ```bash
 export OPENAI_MODEL_LOOKUP_TIMEOUT=5
-```
-
-### Ollama provider
-
-Used when passing `--local-model`.
-
-```bash
-export OLLAMA_MODEL=qwen3:4b
-```
-
-Example Ollama setup:
-
-```bash
-ollama pull qwen3:4b
 ```
 
 ### Hugging Face datasets
@@ -120,12 +106,6 @@ Use a specific OpenAI-compatible model:
 uv run python -m multi_agent_sync --model openai/gpt-oss-120b "Build a prototype chess website"
 ```
 
-Use Ollama:
-
-```bash
-uv run python -m multi_agent_sync --local-model --model qwen3:4b "Build a prototype chess website"
-```
-
 Use dynamic subagents:
 
 ```bash
@@ -154,7 +134,6 @@ uv run python -m multi_agent_sync \
 Useful CLI flags:
 
 - `--model <model>`: model name for the selected provider
-- `--local-model`: use Ollama instead of the OpenAI-compatible provider
 - `--subagent-mode fixed|dynamic`: choose fixed registered agents or dynamic subagents
 - `--max-steps <n>`: maximum inference steps per agent
 - `--total-runtime-timeout <seconds>`: total multi-agent runtime limit
@@ -202,17 +181,6 @@ uv run evaluation \
   --limit 10
 ```
 
-Run with Ollama:
-
-```bash
-uv run evaluation \
-  --benchmark gsm8k \
-  --methods multiagent_streaming,plain_llm \
-  --local-model \
-  --model qwen3:4b \
-  --limit 10
-```
-
 Run fixed and dynamic multi-agent variants together:
 
 ```bash
@@ -244,7 +212,6 @@ uv run evaluation \
 Useful evaluation flags:
 
 - `--model <model>`: model name, or `auto` for OpenAI-compatible model detection
-- `--local-model`: use Ollama
 - `--output-dir <path>`: output root, default `output`
 - `--output <file-or-path>`: CSV output name/path
 - `--save-json-traces` / `--no-save-json-traces`: write per-example traces

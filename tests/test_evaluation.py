@@ -467,6 +467,11 @@ def test_parser_rejects_removed_local_lean_verifier_flags():
         evaluation.build_parser().parse_args(["--benchmark", "ma_proofbench", "--lean-workdir", "lean_ma_proofbench"])
 
 
+def test_evaluation_parser_rejects_disabled_local_model_entrypoint():
+    with pytest.raises(SystemExit):
+        evaluation.build_parser().parse_args(["--benchmark", "gpqa", "--local-model"])
+
+
 def test_json_trace_saving_is_enabled_by_default():
     args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
     disabled_args = evaluation.build_parser().parse_args(["--benchmark", "gpqa", "--no-save-json-traces"])
@@ -1231,18 +1236,17 @@ def test_auto_model_resolution_uses_first_api_model(monkeypatch):
     assert captured == {"url": "http://localhost:8000/v1/models", "timeout": 0.5}
 
 
-def test_auto_model_resolution_falls_back_when_api_lookup_fails(monkeypatch, capsys):
+def test_auto_model_resolution_exits_when_api_lookup_fails(monkeypatch):
     def failing_urlopen(request, timeout):
         raise OSError("server unavailable")
 
     monkeypatch.setattr(runner, "urlopen", failing_urlopen)
-    monkeypatch.setenv("OLLAMA_MODEL", "local/fallback-model")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:8000/v1")
 
     args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
 
-    assert runner.resolve_model_name(args) == "local/fallback-model"
-    assert args.local_model is True
-    assert "using local model: local/fallback-model" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="No OpenAI-compatible LLM service found"):
+        runner.resolve_model_name(args)
 
 
 def test_gpqa_owns_answer_extraction():
@@ -1951,7 +1955,7 @@ async def test_ma_proofbench_score_hook_is_used_by_runner(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "progress", lambda items, desc: items)
 
     args = evaluation.build_parser().parse_args(
-        ["--benchmark", "fake_proof", "--methods", "plain_llm", "--output-dir", str(tmp_path)]
+        ["--benchmark", "fake_proof", "--methods", "plain_llm", "--model", "fake-model", "--output-dir", str(tmp_path)]
     )
 
     results = await evaluation.run_evaluation(args)

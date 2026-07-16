@@ -163,7 +163,7 @@ def build_run_config(
         "settings": {
             "model": args.model,
             "resolved_model": resolve_model_name(args),
-            "local_model": args.local_model,
+            "local_model": getattr(args, "local_model", False),
             "limit": args.limit,
             "attempts": getattr(args, "attempts", 1),
             "ma_proofbench_level": getattr(args, "ma_proofbench_level", None),
@@ -197,7 +197,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "method": method,
         "model": args.model,
         "resolved_model": resolve_model_name(args),
-        "local_model": args.local_model,
+        "local_model": getattr(args, "local_model", False),
         "subagent_mode": method_subagent_mode(method),
         "message_streaming": method_message_streaming(method),
         "max_steps": args.max_steps,
@@ -234,13 +234,17 @@ def resolve_model_name(args: argparse.Namespace) -> str:
         return str(cached)
     if args.model and args.model != "auto":
         return args.model
-    if args.local_model:
+    if getattr(args, "local_model", False):
         return resolve_local_model_name()
     detected_model = resolve_auto_openai_model_name()
     if detected_model is not None:
         return detected_model
-    setattr(args, "local_model", True)
-    return resolve_local_model_name()
+    base_url = get_openai_base_url()
+    raise SystemExit(
+        f"No OpenAI-compatible LLM service found at {base_url}/models. "
+        "Start your vLLM/OpenAI-compatible server or set OPENAI_BASE_URL. "
+        "Local model fallback is disabled for the default entrypoints."
+    )
 
 
 def resolve_local_model_name() -> str:
@@ -248,7 +252,6 @@ def resolve_local_model_name() -> str:
 
 
 def resolve_auto_openai_model_name() -> str | None:
-    local_fallback = resolve_local_model_name()
     base_url = get_openai_base_url()
     timeout = float(os.getenv("OPENAI_MODEL_LOOKUP_TIMEOUT", "2"))
     try:
@@ -256,12 +259,12 @@ def resolve_auto_openai_model_name() -> str | None:
         with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        print(f"Could not auto-detect model from {base_url}/models ({exc}); using local model: {local_fallback}")
+        print(f"Could not auto-detect model from {base_url}/models ({exc}).")
         return None
 
     model_id = first_model_id(payload)
     if model_id is None:
-        print(f"No model id found in {base_url}/models response; using local model: {local_fallback}")
+        print(f"No model id found in {base_url}/models response.")
         return None
 
     print(f"Auto-detected model from API: {model_id}")

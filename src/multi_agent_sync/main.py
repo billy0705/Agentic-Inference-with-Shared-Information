@@ -16,11 +16,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the LangGraph multi-agent synchronization prototype.")
     parser.add_argument("task", nargs="+", help="Task to assign to the multi-agent runtime.")
     parser.add_argument("--model", default=None, help="Model name to use for the selected provider.")
-    parser.add_argument(
-        "--local-model",
-        action="store_true",
-        help="Use the local Ollama provider instead of the OpenAI-compatible API provider.",
-    )
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent.")
     parser.add_argument(
         "--subagent-mode",
@@ -67,13 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def async_main(args: argparse.Namespace) -> None:
-    if args.model and args.local_model:
-        os.environ["OLLAMA_MODEL"] = args.model
-    elif args.model:
+    if args.model:
         os.environ["OPENAI_MODEL"] = args.model
 
     task = " ".join(args.task)
-    llm = get_llm(args.model, openai=not args.local_model)
+    llm = get_llm(args.model, openai=True)
     docker_workspace = None
     try:
         if args.docker_workspace:
