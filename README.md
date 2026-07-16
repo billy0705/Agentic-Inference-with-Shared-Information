@@ -146,8 +146,10 @@ Useful CLI flags:
 The evaluation command is:
 
 ```bash
-uv run evaluation --benchmark <benchmark> --methods <methods> --limit <n>
+uv run evaluation --benchmark <benchmark> --methods <methods>
 ```
+
+By default, evaluation runs the full benchmark split. Add `--limit <n>` to run only the first `n` examples.
 
 Supported benchmarks:
 
@@ -212,6 +214,7 @@ uv run evaluation \
 Useful evaluation flags:
 
 - `--model <model>`: model name, or `auto` for OpenAI-compatible model detection
+- `--limit <n>`: number of examples to evaluate; default `0` runs the full split
 - `--output-dir <path>`: output root, default `output`
 - `--output <file-or-path>`: CSV output name/path
 - `--save-json-traces` / `--no-save-json-traces`: write per-example traces

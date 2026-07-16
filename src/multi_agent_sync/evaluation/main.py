@@ -14,7 +14,7 @@ from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
 
 
-DEFAULT_LIMIT = 10
+DEFAULT_LIMIT = 0
 RANDOM_SEED = 42
 DEFAULT_METHODS = "multiagent_streaming,multiagent_no_streaming,plain_llm"
 EVALUATION_MAX_TOKENS = 16384
@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Legacy alias: multiagent."
         ),
     )
-    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Use 0 for full split.")
+    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Defaults to 0 for full split.")
     parser.add_argument(
         "--attempts",
         type=int,

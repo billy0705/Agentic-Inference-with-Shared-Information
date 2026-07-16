@@ -150,6 +150,12 @@ def test_parser_accepts_simple_benchmark_command_shape():
     assert args.data_file == "hotpotqa.jsonl"
 
 
+def test_evaluation_parser_defaults_to_full_benchmark_limit():
+    args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
+
+    assert args.limit == 0
+
+
 def test_parser_accepts_gsm8k_benchmark():
     args = evaluation.build_parser().parse_args(
         [
