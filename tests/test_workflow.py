@@ -68,7 +68,7 @@ class DynamicFakeLLM:
                 }
                 """
             )
-        if "You are CriticalDebateAgent" in prompt:
+        if "Agent name:\nCriticalDebateAgent" in prompt:
             assert "Finds missing assumptions and edge cases." in prompt
             assert "Publish critique events." in prompt
             return FakeResponse(
@@ -77,7 +77,7 @@ class DynamicFakeLLM:
                 "CONFIDENCE:\n0.85\n"
                 "LOCAL_NOTES:\nCritique complete."
             )
-        if "You are ImplementationPlanner" in prompt:
+        if "Agent name:\nImplementationPlanner" in prompt:
             assert "Identifies files, tests, and integration points." in prompt
             assert "Share implementation findings." in prompt
             return FakeResponse(
@@ -106,7 +106,7 @@ class LateFindingLLM:
             return FakeResponse(orchestrator_response_for_prompt(prompt))
         if "Synthesizer" in prompt:
             return FakeResponse("Synthesized answer from traced agent communication.")
-        if "You are SolverAgent" in prompt:
+        if "Agent name:\nSolverAgent" in prompt:
             await asyncio.sleep(0.01)
             return FakeResponse(
                 "SUMMARY:\nSolver computed the threshold.\n"
@@ -114,7 +114,7 @@ class LateFindingLLM:
                 "CONFIDENCE:\n0.9\n"
                 "LOCAL_NOTES:\nSolver notes."
             )
-        if "You are VerifierAgent" in prompt and "reactive follow-up step" in prompt:
+        if "Agent name:\nVerifierAgent" in prompt and "reactive follow-up step" in prompt:
             assert "Solver late finding for verifier." in prompt
             return FakeResponse(
                 "SUMMARY:\nReactive verifier used SolverAgent finding.\n"
@@ -122,7 +122,7 @@ class LateFindingLLM:
                 "CONFIDENCE:\n0.95\n"
                 "LOCAL_NOTES:\nReactive verification completed."
             )
-        if "You are VerifierAgent" in prompt:
+        if "Agent name:\nVerifierAgent" in prompt:
             await asyncio.sleep(0.05)
             return FakeResponse(
                 "SUMMARY:\nVerifier started before SolverAgent finding was available.\n"
@@ -484,7 +484,9 @@ async def test_agent_traces_include_prompt_response_parsed_output_and_published_
     assert solver_trace["assignment"]["agent_name"] == "SolverAgent"
     assert step["agent_name"] == "SolverAgent"
     assert step["step"] == 1
-    assert "Overall user task" in step["prompt"]
+    assert "[GLOBAL STATIC PREFIX]\nCalculate 2 + 2." in step["prompt"]
+    assert "Agent name:\nSolverAgent" in step["prompt"]
+    assert "[STEP DYNAMIC SUFFIX]" in step["prompt"]
     assert "SUMMARY:" in step["raw_response"]
     assert step["parsed_output"]["share_finding"] == "Share a concise implementation-relevant finding."
     assert step["published_events"]

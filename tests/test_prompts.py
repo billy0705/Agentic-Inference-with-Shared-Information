@@ -117,9 +117,20 @@ async def test_agent_prompt_is_rendered_from_template():
 
     prompt = await agent.build_prompt(step_index=1, relevant_events=[])
 
-    assert "You are ResearchAgent." in prompt
-    assert "Overall user task:\nBuild a chess website" in prompt
+    expected_sections = [
+        "[GLOBAL STATIC PREFIX]",
+        "[AGENT STATIC PREFIX]",
+        "[STEP DYNAMIC SUFFIX]",
+    ]
+    section_positions = [prompt.index(section) for section in expected_sections]
+
+    assert section_positions == sorted(section_positions)
+    assert "[GLOBAL STATIC PREFIX]\nBuild a chess website" in prompt
+    assert "Agent name:\nResearchAgent" in prompt
     assert "Assigned subtask:\nResearch synchronization" in prompt
+    assert "Current step:\n1 of 3" in prompt
+    assert "Local notes:\n- None yet." in prompt
+    assert "Recent relevant events:\n- No relevant external findings yet." in prompt
     assert "Respond with concise summaries only." in prompt
     assert "Respond with concise summaries only." not in inspect.getsource(ResearchAgent.build_prompt)
 

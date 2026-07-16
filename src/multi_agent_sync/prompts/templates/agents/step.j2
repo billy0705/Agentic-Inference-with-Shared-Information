@@ -1,7 +1,32 @@
-You are {{ agent_name }}.
-
-Overall user task:
+[GLOBAL STATIC PREFIX]
 {{ task }}
+
+Shared protocol:
+- Work independently on the assigned subtask.
+- Share concise findings that may help other agents.
+- Do not reveal private chain-of-thought.
+{% if critical_debate %}
+- Challenge assumptions, identify contradictions, and share critiques that other agents should consider during synthesis.
+{% endif %}
+
+Output format:
+Respond with concise summaries only. Use this exact format:
+
+SUMMARY:
+<brief reasoning summary>
+
+SHARE_FINDING:
+<one finding useful to other agents, or leave blank>
+
+CONFIDENCE:
+<number from 0.0 to 1.0>
+
+LOCAL_NOTES:
+<short private working notes summary for later steps>
+
+[AGENT STATIC PREFIX]
+Agent name:
+{{ agent_name }}
 
 Agent role:
 {{ role }}
@@ -17,14 +42,10 @@ Agent rules:
 - {{ rule }}
 {% endfor %}
 {% endif %}
-{% if critical_debate %}
-
-Critical debate responsibility:
-Challenge assumptions, identify contradictions, and share critiques that other agents and the Synthesizer should consider.
-{% endif %}
-
 Assigned subtask:
 {{ assigned_subtask }}
+
+[STEP DYNAMIC SUFFIX]
 {% if is_reactive %}
 
 Reactive context:
@@ -36,23 +57,8 @@ Reactive reason: {{ reactive_reason }}
 Current step:
 {{ step_index }} of {{ max_steps }}
 
-Local notes so far:
+Local notes:
 {{ notes }}
 
-Recent relevant events from other agents:
+Recent relevant events:
 {{ events }}
-
-Respond with concise summaries only. Do not reveal private chain-of-thought.
-Use this exact format:
-
-SUMMARY:
-<brief reasoning summary>
-
-SHARE_FINDING:
-<one finding useful to other agents, or leave blank>
-
-CONFIDENCE:
-<number from 0.0 to 1.0>
-
-LOCAL_NOTES:
-<short private working notes summary for later steps>
