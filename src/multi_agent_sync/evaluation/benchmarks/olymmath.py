@@ -150,6 +150,10 @@ def extract_answer(text: str) -> str | None:
     if boxed:
         return normalize_answer_text(boxed)
 
+    found_json_answer, json_answer = extract_json_like_final_answer(text)
+    if found_json_answer:
+        return normalize_answer_text(json_answer) if json_answer is not None else None
+
     strict_patterns = [
         r"Final\s+Answer\s*:\s*(?P<answer>.+)",
         r"Final\s+answer\s*:\s*(?P<answer>.+)",
@@ -167,6 +171,29 @@ def extract_answer(text: str) -> str | None:
         if len(line) <= 200:
             return normalize_answer_text(line)
     return None
+
+
+def extract_json_like_final_answer(text: str) -> tuple[bool, str | None]:
+    final_answer_match = re.search(
+        r"[\"']final_answer[\"']\s*:\s*[\"'](?P<answer>[^\"']*)[\"']",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not final_answer_match:
+        return False, None
+
+    status_match = re.search(
+        r"[\"']status[\"']\s*:\s*[\"'](?P<status>[^\"']*)[\"']",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if status_match and status_match.group("status").strip().lower() == "continue":
+        return True, None
+
+    answer = final_answer_match.group("answer").strip()
+    if not answer or answer.lower() in {"n/a", "na", "none", "null"}:
+        return True, None
+    return True, answer
 
 
 def score_response(row: dict[str, Any], raw_output: str, args: argparse.Namespace) -> BenchmarkScore:
@@ -449,9 +476,15 @@ def safe_eval_numeric_expression(expression: str) -> float | None:
         value = eval(compile(tree, "<olymmath-answer>", "eval"), {"__builtins__": {}}, names)
     except Exception:
         return None
-    if not isinstance(value, int | float) or not math.isfinite(float(value)):
+    if not isinstance(value, int | float):
         return None
-    return float(value)
+    try:
+        numeric_value = float(value)
+    except OverflowError:
+        return None
+    if not math.isfinite(numeric_value):
+        return None
+    return numeric_value
 
 
 def numeric_ast_is_safe(tree: ast.AST) -> bool:

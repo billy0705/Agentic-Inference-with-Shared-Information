@@ -1357,6 +1357,37 @@ def test_olymmath_extract_answer_normalizes_latex_answers(raw_output, expected):
     assert benchmark.extract_answer(raw_output) == expected
 
 
+@pytest.mark.parametrize(
+    ("raw_output", "expected"),
+    [
+        ('{\n  "status": "final",\n  "final_answer": "1",\n  "notes": "done"\n}', "1"),
+        (
+            '{\n  "status": "final",\n  "final_answer": "4\\sqrt{15} - 14",\n  "notes": "done"\n}',
+            "4*sqrt(15)-14",
+        ),
+        (
+            '```json\n{\n  "status": "final",\n  "final_answer": "789363276",\n  "notes": "done"\n}\n```',
+            "789363276",
+        ),
+    ],
+)
+def test_olymmath_extract_answer_reads_json_like_final_answer(raw_output, expected):
+    benchmark = olymmath.build_benchmark()
+
+    assert benchmark.extract_answer(raw_output) == expected
+
+
+def test_olymmath_extract_answer_ignores_json_like_missing_final_answer():
+    benchmark = olymmath.build_benchmark()
+
+    assert (
+        benchmark.extract_answer(
+            '```json\n{\n  "status": "continue",\n  "final_answer": "N/A",\n  "notes": "still solving"\n}\n```'
+        )
+        is None
+    )
+
+
 def test_olymmath_score_response_uses_normalized_answer_match():
     score = olymmath.score_response(
         {
@@ -1395,6 +1426,22 @@ def test_olymmath_score_response_accepts_common_numeric_equivalents(gold, raw_ou
     )
 
     assert score.correct is True
+
+
+def test_olymmath_score_response_handles_integer_too_large_for_float():
+    score = olymmath.score_response(
+        {
+            "problem": "Find a value.",
+            "answer": "1",
+            "subject": "Algebra",
+            "unique_id": "OlymMATH-EASY-0-EN",
+        },
+        "Final Answer: 10^10000",
+        argparse.Namespace(),
+    )
+
+    assert score.correct is False
+    assert score.pred == "10^10000"
 
 
 def test_olymmath_question_context_uses_problem_and_metadata():
