@@ -13,7 +13,8 @@ Options:
 
 Important:
 - Think carefully.
-- Your final answer must be exactly one of {{ label_choices }}.
-- At the end, write the final answer in this exact format:
+- The answer value must be exactly one capital letter from {{ label_choices }}. Do not include option text, punctuation, brackets, or explanation in the answer value.
+- If another wrapper asks you to return JSON, set its answer field to only that one capital letter, for example `"final_answer": "A"`.
+- If you are not returning JSON, end with the final answer in this exact format:
 
 Final Answer: {{ final_answer_format }}

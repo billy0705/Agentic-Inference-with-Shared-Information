@@ -25,6 +25,12 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "token_usage" in html
     assert "formatTokenUsage" in html
     assert "Token usage" in html
+    assert "normalizeSingleAgentTrace" in html
+    assert "methodTrace.method === 'single_agent'" in html
+    assert "SingleAgent" in html
+    assert "normalizeSingleAgentStep(step, methodTrace)" in html
+    assert "step.prompt || methodTrace.prompt" in html
+    assert "open_prompt" in html
     assert "ACTION:" in html
     assert "normalizeOrchestrator" in html
     assert "runsForModelFilter" in html

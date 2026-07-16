@@ -171,6 +171,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent for multiagent runs.")
     parser.add_argument(
+        "--single-agent-min-steps",
+        type=int,
+        default=3,
+        help="Minimum inference steps for single_agent and majority_vote single-agent voters.",
+    )
+    parser.add_argument(
+        "--single-agent-max-steps",
+        type=int,
+        default=7,
+        help="Maximum inference steps for single_agent and majority_vote single-agent voters.",
+    )
+    parser.add_argument(
         "--total-runtime-timeout",
         type=float,
         default=600.0,

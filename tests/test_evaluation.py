@@ -105,6 +105,13 @@ def test_parse_methods_accepts_single_agent_method():
     assert runner.parse_methods("single_agent,plain_llm") == ["single_agent", "plain_llm"]
 
 
+def test_evaluation_parser_sets_single_agent_step_defaults():
+    args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
+
+    assert args.single_agent_min_steps == 3
+    assert args.single_agent_max_steps == 7
+
+
 def test_parse_methods_accepts_multiagent_debate_method():
     assert runner.parse_methods("multiagent_debate,plain_llm") == ["multiagent_debate", "plain_llm"]
 
@@ -676,18 +683,58 @@ async def test_lean_multiagent_workspace_config_seeds_and_returns_final_file(mon
 async def test_single_agent_stops_when_final_answer_is_parseable():
     llm = UsageLLM(
         [
-            UsageResponse('{"status": "continue", "final_answer": "", "notes": "Need to inspect the board."}'),
-            UsageResponse('{"status": "final", "final_answer": "Final Answer: h3", "notes": "Legal destination found."}'),
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: h3", '
+                '"final_reason": "Legal move found, but minimum review steps are not complete.", '
+                '"notes": "Initial answer."}',
+                usage_metadata={"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+            ),
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: h3", '
+                '"final_reason": "Reviewed the board and h3 remains legal.", '
+                '"notes": "Self-review kept the answer."}',
+                usage_metadata={"input_tokens": 12, "output_tokens": 5, "total_tokens": 17},
+            ),
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: h3", '
+                '"final_reason": "The answer survived two prior reviews and matches the requested format.", '
+                '"notes": "Ready to score."}',
+                usage_metadata={"input_tokens": 14, "output_tokens": 6, "total_tokens": 20},
+            ),
         ]
     )
-    args = argparse.Namespace(max_steps=3, answer_extractor=lambda text: "h3" if "h3" in text else None)
+    args = argparse.Namespace(answer_extractor=lambda text: "h3" if "h3" in text else None)
 
     result = await runner.run_method("single_agent", "Complete the chess move.", llm, args)
 
-    assert result.raw_output == "Final Answer: h3"
-    assert len(result.trace["steps"]) == 2
+    assert result.raw_output == (
+        "Reason: The answer survived two prior reviews and matches the requested format.\n"
+        "Final Answer: h3"
+    )
+    assert len(result.trace["steps"]) == 3
     assert result.trace["stopped_reason"] == "final_answer_parseable"
-    assert result.trace["steps"][1]["parsed_answer"] == "h3"
+    assert result.trace["single_agent_min_steps"] == 3
+    assert result.trace["single_agent_max_steps"] == 7
+    assert result.trace["steps"][0]["final_blocked_reason"] == "minimum_steps_not_reached"
+    assert result.trace["steps"][1]["final_blocked_reason"] == "minimum_steps_not_reached"
+    assert result.trace["steps"][2]["final_accepted"] is True
+    assert result.trace["steps"][2]["parsed_answer"] == "h3"
+    assert "Complete the chess move." in result.trace["steps"][0]["prompt"]
+    assert "Previous step for self-revision:" in result.trace["steps"][1]["prompt"]
+    assert "Output: Final Answer: h3" in result.trace["steps"][1]["prompt"]
+    assert "Reason: Legal move found, but minimum review steps are not complete." in result.trace["steps"][1]["prompt"]
+    assert "Legal move found, but minimum review steps are not complete." not in result.trace["steps"][2]["prompt"]
+    assert "Reason: Reviewed the board and h3 remains legal." in result.trace["steps"][2]["prompt"]
+    assert result.trace["steps"][0]["token_usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 4,
+        "total_tokens": 14,
+    }
+    assert result.trace["steps"][2]["token_usage"] == {
+        "prompt_tokens": 14,
+        "completion_tokens": 6,
+        "total_tokens": 20,
+    }
 
 
 @pytest.mark.asyncio
@@ -698,7 +745,7 @@ async def test_single_agent_respects_max_steps_when_final_answer_is_not_parseabl
             UsageResponse('{"status": "final", "final_answer": "Final Answer: i9", "notes": "Invalid square."}'),
         ]
     )
-    args = argparse.Namespace(max_steps=2, answer_extractor=lambda text: None)
+    args = argparse.Namespace(single_agent_min_steps=1, single_agent_max_steps=2, answer_extractor=lambda text: None)
 
     result = await runner.run_method("single_agent", "Complete the chess move.", llm, args)
 
@@ -710,16 +757,59 @@ async def test_single_agent_respects_max_steps_when_final_answer_is_not_parseabl
 
 
 @pytest.mark.asyncio
-async def test_majority_vote_runs_three_independent_single_agents_and_votes():
+async def test_single_agent_rejects_final_without_substantive_reason():
     llm = UsageLLM(
         [
-            UsageResponse('{"status": "final", "final_answer": "Final Answer: A", "notes": "First vote."}'),
-            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": "Second vote."}'),
-            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": "Third vote."}'),
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: C", '
+                '"final_reason": "confidence 0.9", "notes": "Only confidence."}'
+            ),
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: C", '
+                '"final_reason": "The answer matches option C after checking the prompt constraints.", '
+                '"notes": "Reason added."}'
+            ),
         ]
     )
     args = argparse.Namespace(
-        max_steps=1,
+        single_agent_min_steps=1,
+        single_agent_max_steps=2,
+        answer_extractor=lambda text: "C" if "Final Answer: C" in text else None,
+    )
+
+    result = await runner.run_method("single_agent", "Question with options.", llm, args)
+
+    assert len(result.trace["steps"]) == 2
+    assert result.trace["steps"][0]["final_blocked_reason"] == "final_reason_required"
+    assert result.trace["steps"][0]["final_reason"] == "confidence 0.9"
+    assert result.trace["steps"][1]["final_accepted"] is True
+    assert result.trace["stopped_reason"] == "final_answer_parseable"
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_runs_three_independent_single_agents_and_votes():
+    llm = UsageLLM(
+        [
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: A", '
+                '"final_reason": "The first independent voter selects A after checking the prompt.", '
+                '"notes": "First vote."}'
+            ),
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: B", '
+                '"final_reason": "The second independent voter selects B after checking the prompt.", '
+                '"notes": "Second vote."}'
+            ),
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: B", '
+                '"final_reason": "The third independent voter selects B after checking the prompt.", '
+                '"notes": "Third vote."}'
+            ),
+        ]
+    )
+    args = argparse.Namespace(
+        single_agent_min_steps=1,
+        single_agent_max_steps=1,
         answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
     )
 
@@ -743,13 +833,23 @@ async def test_majority_vote_runs_three_independent_single_agents_and_votes():
 async def test_majority_vote_tie_uses_first_parsed_answer():
     llm = UsageLLM(
         [
-            UsageResponse('{"status": "final", "final_answer": "Final Answer: C", "notes": ""}'),
-            UsageResponse('{"status": "final", "final_answer": "Final Answer: B", "notes": ""}'),
-            UsageResponse('{"status": "final", "final_answer": "Final Answer: A", "notes": ""}'),
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: C", '
+                '"final_reason": "The first voter selects C after checking the options.", "notes": ""}'
+            ),
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: B", '
+                '"final_reason": "The second voter selects B after checking the options.", "notes": ""}'
+            ),
+            UsageResponse(
+                '{"status": "final", "final_answer": "Final Answer: A", '
+                '"final_reason": "The third voter selects A after checking the options.", "notes": ""}'
+            ),
         ]
     )
     args = argparse.Namespace(
-        max_steps=1,
+        single_agent_min_steps=1,
+        single_agent_max_steps=1,
         answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
     )
 
@@ -770,7 +870,7 @@ async def test_majority_vote_falls_back_to_first_raw_output_when_all_answers_are
             UsageResponse('{"status": "continue", "final_answer": "Unclear third answer", "notes": ""}'),
         ]
     )
-    args = argparse.Namespace(max_steps=1, answer_extractor=lambda text: None)
+    args = argparse.Namespace(single_agent_min_steps=1, single_agent_max_steps=1, answer_extractor=lambda text: None)
 
     result = await runner.run_method("majority_vote", "Question with options.", llm, args)
 
@@ -1257,6 +1357,8 @@ def test_mmlu_pro_build_prompt_preserves_dataset_option_order_and_gold_letter():
     assert "H. Option H" in prompt
     assert "J. Option J" in prompt
     assert "Final Answer: <A/B/C/D/E/F/G/H/I/J>" in prompt
+    assert "answer field to only that one capital letter" in prompt
+    assert '"final_answer": "A"' in prompt
 
 
 def test_mmlu_pro_build_prompt_accepts_test_rows_with_fewer_than_ten_options():
@@ -1294,6 +1396,15 @@ def test_mmlu_pro_build_prompt_accepts_test_rows_with_fewer_than_ten_options():
         ("The answer is option H.", "H"),
         ("Answer: j", "J"),
         ("(C)", "C"),
+        ('{"status": "final", "final_answer": "A", "notes": "done"}', "A"),
+        ('```json\n{"status": "final", "final_answer": "D"}\n```', "D"),
+        ('{"final_answer": "Option I"}', "I"),
+        ('{"final_answer": "Final Answer: J"}', "J"),
+        ('Result:\n{"status": "final", "final_answer": "B"}', "B"),
+        ('```json\n{\n  "status": "final",\n  "final_answer": "A",\n  "final_reason": "line one\nline two"\n}\n```', "A"),
+        ('{"final_answer": "Option D", "final_reason": "invalid\njson"}', "D"),
+        ("Reason: mentions options A and B, then chooses the legally correct one.\nI", "I"),
+        ("Reason: after comparing all choices, option F is best.\nOption F", "F"),
     ],
 )
 def test_mmlu_pro_extract_answer_accepts_a_through_j(raw_output, expected):

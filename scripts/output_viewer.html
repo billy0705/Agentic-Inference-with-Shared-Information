@@ -485,6 +485,9 @@
     }
 
     function normalizeAgents(methodTrace) {
+      if (methodTrace.method === 'single_agent') {
+        return normalizeSingleAgentTrace(methodTrace);
+      }
       const traces = methodTrace.agent_traces && typeof methodTrace.agent_traces === 'object' ? methodTrace.agent_traces : {};
       const outputs = methodTrace.agent_outputs && typeof methodTrace.agent_outputs === 'object' ? methodTrace.agent_outputs : {};
       const names = [];
@@ -507,6 +510,51 @@
       });
     }
 
+    function normalizeSingleAgentTrace(methodTrace) {
+      const steps = Array.isArray(methodTrace.steps) ? methodTrace.steps : [];
+      return [{
+        name: 'SingleAgent',
+        assignment: {
+          method: 'single_agent',
+          min_steps: methodTrace.single_agent_min_steps,
+          max_steps: methodTrace.single_agent_max_steps,
+          stopped_reason: methodTrace.stopped_reason || '',
+        },
+        steps: steps.filter((step) => step && typeof step === 'object').map((step) => normalizeSingleAgentStep(step, methodTrace)),
+        event_receipts: [],
+        unused_received_events: [],
+        final_output: truncateText(methodTrace.raw_output || ''),
+        tools: findToolActions(String(methodTrace.raw_output || '')),
+      }];
+    }
+
+    function normalizeSingleAgentStep(step, methodTrace) {
+      const rawResponse = truncateText(step.raw_response || step.output || '');
+      return {
+        step: step.step,
+        prompt: truncateText(step.prompt || methodTrace.prompt || ''),
+        raw_response: rawResponse,
+        parsed_output: {
+          status: step.status,
+          output: step.output,
+          notes: step.notes,
+          parsed_answer: step.parsed_answer,
+          final_reason: step.final_reason,
+          final_accepted: step.final_accepted,
+          final_blocked_reason: step.final_blocked_reason,
+        },
+        published_events: [],
+        inbox_events: [],
+        used_event_ids: [],
+        token_usage: normalizeTokenUsage(step.token_usage),
+        open_prompt: true,
+        duration_seconds: step.duration_seconds,
+        is_reactive: false,
+        reactive_reason: '',
+        tools: findToolActions(rawResponse),
+      };
+    }
+
     function normalizeStep(step) {
       const rawResponse = truncateText(step.raw_response || '');
       return {
@@ -518,6 +566,7 @@
         inbox_events: Array.isArray(step.inbox_events) ? step.inbox_events : [],
         used_event_ids: Array.isArray(step.used_event_ids) ? step.used_event_ids : [],
         token_usage: normalizeTokenUsage(step.token_usage),
+        open_prompt: false,
         duration_seconds: step.duration_seconds,
         is_reactive: Boolean(step.is_reactive),
         reactive_reason: step.reactive_reason || '',
@@ -885,7 +934,8 @@
             <div class="step">
               <strong>Step ${esc(step.step)} ${step.is_reactive ? '<span class="pill warn">reactive</span>' : ''}</strong>
               <div class="subtle">Token usage: ${esc(formatTokenUsage(step.token_usage))}</div>
-              <details><summary>Prompt</summary><pre>${esc(step.prompt)}</pre></details>
+              <details ${step.open_prompt ? 'open' : ''}><summary>Prompt</summary><pre>${esc(step.prompt)}</pre></details>
+              ${step.parsed_output?.output ? `<details open><summary>Output</summary><pre>${esc(step.parsed_output.output)}</pre></details>` : ''}
               <details open><summary>Response</summary><pre>${esc(step.raw_response)}</pre></details>
               <details><summary>Parsed output</summary><pre>${esc(pretty(step.parsed_output))}</pre></details>
               <details><summary>Inbox and published events</summary><pre>${esc(pretty({ inbox_events: step.inbox_events, published_events: step.published_events, used_event_ids: step.used_event_ids }))}</pre></details>

@@ -58,6 +58,57 @@ def extract_answer(text: str) -> str | None:
     if not text:
         return None
 
+    json_answer = extract_json_answer(text)
+    if json_answer is not None:
+        return json_answer
+
+    return extract_label_from_text(text)
+
+
+def extract_json_answer(text: str) -> str | None:
+    stripped = strip_markdown_json_fence(text.strip())
+    jsonish_answer = extract_jsonish_answer_field(stripped)
+    if jsonish_answer is not None:
+        return jsonish_answer
+
+    decoder = json.JSONDecoder()
+    for start in [0, *[match.start() for match in re.finditer(r"\{", stripped)]]:
+        try:
+            payload, _ = decoder.raw_decode(stripped[start:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for key in ("final_answer", "answer"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                label = extract_label_from_text(value, allow_direct=True)
+                if label is not None:
+                    return label
+        return None
+    return None
+
+
+def extract_jsonish_answer_field(text: str) -> str | None:
+    for key in ("final_answer", "answer"):
+        pattern = rf'"{key}"\s*:\s*"(?P<value>[^"]+)"'
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        label = extract_label_from_text(match.group("value"), allow_direct=True)
+        if label is not None:
+            return label
+    return None
+
+
+def strip_markdown_json_fence(text: str) -> str:
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def extract_label_from_text(text: str, *, allow_direct: bool = False) -> str | None:
     label_pattern = rf"(?P<label>[{''.join(LABELS)}])"
     strict_patterns = [
         rf"Final\s+Answer\s*:\s*\(?{label_pattern}\)?",
@@ -73,11 +124,29 @@ def extract_answer(text: str) -> str | None:
         if match:
             return match.group("label").upper()
 
+    final_line_label = extract_final_line_label(text)
+    if final_line_label is not None:
+        return final_line_label
+
+    if allow_direct:
+        option_match = re.fullmatch(rf"(?:option\s+)?\(?\s*([{''.join(LABELS)}])\s*\)?\.?", text.strip(), flags=re.IGNORECASE)
+        if option_match:
+            return option_match.group(1).upper()
+
     stripped = text.strip()
     direct_match = re.fullmatch(rf"\(?\s*([{''.join(LABELS)}])\s*\)?\.?", stripped, flags=re.IGNORECASE)
     if direct_match:
         return direct_match.group(1).upper()
     return None
+
+
+def extract_final_line_label(text: str) -> str | None:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None
+    final_line = lines[-1]
+    match = re.fullmatch(rf"(?:option\s+)?\(?\s*([{''.join(LABELS)}])\s*\)?\.?", final_line, flags=re.IGNORECASE)
+    return match.group(1).upper() if match else None
 
 
 def load_mmlu_pro_dataset(limit: int | None, data_file: str | None = None) -> list[dict[str, Any]] | Any:

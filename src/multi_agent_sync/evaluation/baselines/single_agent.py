@@ -6,10 +6,15 @@ import re
 from typing import Any
 
 from multi_agent_sync.prompts import render_prompt
+from multi_agent_sync.token_usage import extract_token_usage
+
+
+DEFAULT_SINGLE_AGENT_MIN_STEPS = 3
+DEFAULT_SINGLE_AGENT_MAX_STEPS = 7
 
 
 async def run_single_agent(prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int, dict[str, Any]]:
-    max_steps = max(1, int(getattr(args, "max_steps", 3)))
+    min_steps, max_steps = resolve_single_agent_step_limits(args)
     answer_extractor = getattr(args, "answer_extractor", None)
     if not callable(answer_extractor):
         answer_extractor = lambda text: text.strip() if text.strip() else None
@@ -22,29 +27,45 @@ async def run_single_agent(prompt: str, llm: Any, args: argparse.Namespace) -> t
         step_prompt = render_prompt(
             "evaluation/single_agent_step.j2",
             benchmark_prompt=prompt,
-            previous_steps=steps,
+            previous_step=steps[-1] if steps else None,
         )
         response = await llm.ainvoke(step_prompt)
+        token_usage = extract_token_usage(response)
         content = getattr(response, "content", str(response)).strip()
         parsed_payload = parse_single_agent_payload(content)
         status = parsed_payload.get("status")
         final_answer = str(parsed_payload.get("final_answer") or "").strip()
+        final_reason = str(parsed_payload.get("final_reason") or "").strip()
         notes = str(parsed_payload.get("notes") or "").strip()
         candidate_output = final_answer or content
         parsed_answer = answer_extractor(candidate_output)
-        raw_output = candidate_output
+        human_output = format_single_agent_output(candidate_output, final_reason)
+        raw_output = human_output
+        final_blocked_reason = final_block_reason(
+            step_index=step_index,
+            min_steps=min_steps,
+            status=status,
+            parsed_answer=parsed_answer,
+            final_reason=final_reason,
+        )
+        final_accepted = status == "final" and parsed_answer is not None and final_blocked_reason is None
 
         step_trace = {
             "step": step_index,
             "status": status,
+            "prompt": step_prompt,
+            "token_usage": token_usage.as_dict(),
             "output": candidate_output,
+            "final_reason": final_reason,
+            "final_accepted": final_accepted,
+            "final_blocked_reason": final_blocked_reason,
             "notes": notes,
             "parsed_answer": parsed_answer,
             "raw_response": content,
         }
         steps.append(step_trace)
 
-        if status == "final" and parsed_answer is not None:
+        if final_accepted:
             stopped_reason = "final_answer_parseable"
             break
 
@@ -52,9 +73,73 @@ async def run_single_agent(prompt: str, llm: Any, args: argparse.Namespace) -> t
         "method": "single_agent",
         "prompt": prompt,
         "raw_output": raw_output,
+        "single_agent_min_steps": min_steps,
+        "single_agent_max_steps": max_steps,
         "steps": steps,
         "stopped_reason": stopped_reason,
     }
+
+
+def resolve_single_agent_step_limits(args: argparse.Namespace) -> tuple[int, int]:
+    min_steps = _positive_int_or_default(
+        getattr(args, "single_agent_min_steps", None),
+        DEFAULT_SINGLE_AGENT_MIN_STEPS,
+    )
+    max_steps = _positive_int_or_default(
+        getattr(args, "single_agent_max_steps", None),
+        DEFAULT_SINGLE_AGENT_MAX_STEPS,
+    )
+    if max_steps < min_steps:
+        max_steps = min_steps
+    return min_steps, max_steps
+
+
+def format_single_agent_output(output: str, reason: str) -> str:
+    output = output.strip()
+    reason = reason.strip()
+    if reason:
+        return f"Reason: {reason}\n{output}".strip()
+    return output
+
+
+def _positive_int_or_default(value: Any, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
+def final_block_reason(
+    *,
+    step_index: int,
+    min_steps: int,
+    status: Any,
+    parsed_answer: str | None,
+    final_reason: str,
+) -> str | None:
+    if status != "final" or parsed_answer is None:
+        return None
+    if step_index < min_steps:
+        return "minimum_steps_not_reached"
+    if not is_substantive_final_reason(final_reason):
+        return "final_reason_required"
+    return None
+
+
+def is_substantive_final_reason(final_reason: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9\s]", " ", final_reason.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return False
+    confidence_only_patterns = (
+        r"^(confidence|confident)(\s+[0-9]+)*\s*%?$",
+        r"^(high|medium|low)\s+confidence$",
+        r"^[0-9.]+\s*%?$",
+    )
+    return not any(re.fullmatch(pattern, normalized) for pattern in confidence_only_patterns)
 
 
 def parse_single_agent_payload(content: str) -> dict[str, Any]:
@@ -83,5 +168,6 @@ def parse_single_agent_payload(content: str) -> dict[str, Any]:
     return {
         "status": status,
         "final_answer": payload.get("final_answer") or "",
+        "final_reason": payload.get("final_reason") or "",
         "notes": payload.get("notes") or "",
     }
