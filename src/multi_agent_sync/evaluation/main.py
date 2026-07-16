@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from multi_agent_sync.evaluation import runner
-from multi_agent_sync.evaluation.benchmarks import chess, gpqa, gsm8k, ma_proofbench, mmlu_pro, olymmath, swe_bench_verified
+from multi_agent_sync.evaluation.benchmarks import chess, gpqa, gsm8k, hotpotqa, ma_proofbench, mmlu_pro, olymmath, swe_bench_verified
 from multi_agent_sync.evaluation import swebench_harness
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
@@ -22,6 +22,7 @@ EVALUATION_MAX_TOKENS = 16384
 
 def get_benchmarks() -> dict[str, BenchmarkSpec]:
     benchmarks = [
+        hotpotqa.build_benchmark(),
         gpqa.build_benchmark(),
         gsm8k.build_benchmark(),
         chess.build_benchmark(),

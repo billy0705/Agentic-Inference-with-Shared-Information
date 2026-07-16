@@ -31,6 +31,7 @@ def test_benchmarks_package_exports_benchmark_modules():
     assert benchmarks.chess.build_benchmark is not None
     assert benchmarks.gpqa.build_benchmark is not None
     assert benchmarks.gsm8k.build_benchmark is not None
+    assert benchmarks.hotpotqa.build_benchmark is not None
     assert benchmarks.ma_proofbench.build_benchmark is not None
     assert benchmarks.mmlu_pro.build_benchmark is not None
     assert benchmarks.olymmath.build_benchmark is not None
@@ -133,20 +134,20 @@ def test_parser_accepts_simple_benchmark_command_shape():
     args = evaluation.build_parser().parse_args(
         [
             "--benchmark",
-            "gpqa",
+            "hotpotqa",
             "--methods",
             "multiagent_streaming,multiagent_no_streaming,plain_llm",
             "--limit",
             "10",
             "--data-file",
-            "gpqa.csv",
+            "hotpotqa.jsonl",
         ]
     )
 
-    assert args.benchmark == "gpqa"
+    assert args.benchmark == "hotpotqa"
     assert args.methods == "multiagent_streaming,multiagent_no_streaming,plain_llm"
     assert args.limit == 10
-    assert args.data_file == "gpqa.csv"
+    assert args.data_file == "hotpotqa.jsonl"
 
 
 def test_parser_accepts_gsm8k_benchmark():
@@ -163,6 +164,22 @@ def test_parser_accepts_gsm8k_benchmark():
 
     assert args.benchmark == "gsm8k"
     assert "gsm8k" in evaluation.get_benchmarks()
+
+
+def test_parser_accepts_hotpotqa_benchmark():
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "hotpotqa",
+            "--methods",
+            "plain_llm",
+            "--limit",
+            "10",
+        ]
+    )
+
+    assert args.benchmark == "hotpotqa"
+    assert "hotpotqa" in evaluation.get_benchmarks()
 
 
 def test_parser_accepts_chess_benchmark():
