@@ -4,7 +4,7 @@ import random
 import pytest
 
 from multi_agent_sync.agents.research_agent import ResearchAgent
-from multi_agent_sync.evaluation import gpqa, gsm8k, mmlu_pro
+from multi_agent_sync.evaluation import gpqa, gsm8k, hotpotqa, mmlu_pro
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph import nodes
 from multi_agent_sync.orchestrator import orchestrator
@@ -57,6 +57,30 @@ def test_gsm8k_prompt_is_rendered_from_template():
     assert "Natalia sold 48 clips" in prompt
     assert "Final Answer: <number>" in prompt
     assert "You are solving a grade-school math word problem." not in inspect.getsource(gsm8k.build_prompt)
+
+
+def test_hotpotqa_prompt_is_rendered_from_template():
+    prompt, gold = hotpotqa.build_prompt(
+        {
+            "question": "What city is the capital of France?",
+            "answer": "Paris",
+            "context": {
+                "title": ["France", "Paris"],
+                "sentences": [
+                    ["France is a country in Europe.", "Its capital is Paris."],
+                    ["Paris is the capital and most populous city of France."],
+                ],
+            },
+        },
+        random.Random(0),
+    )
+
+    assert gold == "paris"
+    assert "What city is the capital of France?" in prompt
+    assert "Title: France" in prompt
+    assert "Title: Paris" in prompt
+    assert "Final Answer: <short answer>" in prompt
+    assert "You are answering a HotpotQA multi-hop question." not in inspect.getsource(hotpotqa.build_prompt)
 
 
 def test_mmlu_pro_prompt_is_rendered_from_template():
