@@ -32,30 +32,6 @@ async def orchestrator_node(state: GraphState) -> GraphState:
         )
     selected_agent_specs = orchestrator_plan["selected_agents"]
     assignments = selected_agents_to_assignments(orchestrator_plan, max_steps=state.get("max_steps_per_agent", 3))
-    selected_agents = ",".join(agent["name"] for agent in selected_agent_specs) if selected_agent_specs else "none"
-
-    await streamer.publish(
-        AgentEvent(
-            run_id=state["run_id"],
-            source="coordinator",
-            event_type="task_started",
-            content=task,
-        )
-    )
-    await streamer.publish(
-        AgentEvent(
-            run_id=state["run_id"],
-            source="orchestrator",
-            event_type="plan_created",
-            content=(
-                f"mode={orchestrator_plan['mode']}, task_type={orchestrator_plan['task_type']}, "
-                f"selected_agents={selected_agents}"
-            ),
-            metadata=orchestrator_plan,
-        )
-    )
-    await streamer.drain(timeout=1)
-
     return {
         **state,
         "event_streamer": streamer,
@@ -87,16 +63,6 @@ async def direct_answer_node(state: GraphState) -> GraphState:
         final_answer = "Direct answer timed out before the LLM returned a response."
 
     final_answer = apply_missing_options_guard(state["task"], final_answer)
-    await streamer.publish(
-        AgentEvent(
-            run_id=state["run_id"],
-            source="Synthesizer",
-            event_type="final_summary",
-            content="Final answer generated.",
-        )
-    )
-    await streamer.drain(timeout=2)
-
     return {
         **state,
         "event_streamer": streamer,
@@ -252,7 +218,7 @@ async def synthesizer_node(state: GraphState) -> GraphState:
     event_lines = "\n".join(
         f"- [{event.event_type}] {event.source}: {event.content}"
         for event in state.get("event_log", [])
-        if event.event_type in {"finding", "warning", "critique", "agent_done"}
+        if event.event_type in {"finding", "warning", "critique"}
     )
     output_lines = "\n".join(f"- {name}: {output}" for name, output in state.get("agent_outputs", {}).items())
     synthesizer_mode = state.get("synthesizer_mode", "generic")
@@ -285,14 +251,6 @@ async def synthesizer_node(state: GraphState) -> GraphState:
         )
     final_answer = apply_missing_options_guard(state["task"], final_answer)
 
-    await streamer.publish(
-        AgentEvent(
-            run_id=state["run_id"],
-            source="Synthesizer",
-            event_type="final_summary",
-            content="Final answer generated.",
-        )
-    )
     await streamer.drain(timeout=2)
     event_log = await streamer.get_events(run_id=state["run_id"])
 

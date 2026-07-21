@@ -61,14 +61,14 @@ async def test_direct_mode_is_allowed_for_easy_factual_tasks():
 
 
 @pytest.mark.asyncio
-async def test_direct_mode_for_non_easy_task_falls_back_to_multi_agent():
+async def test_orchestrator_direct_mode_is_respected_for_non_easy_tasks():
     llm = StaticLLM(
         """
         {
           "mode": "direct",
           "task_type": "software implementation task",
           "task_summary": "The user asks for code changes.",
-          "reason": "The model incorrectly selected direct mode.",
+          "reason": "The orchestrator judged that a single concrete implementation answer is enough for this request.",
           "selected_agents": [],
           "collaboration_protocol": {
             "event_types_to_share": ["finding", "critique", "warning"],
@@ -81,10 +81,10 @@ async def test_direct_mode_for_non_easy_task_falls_back_to_multi_agent():
 
     plan = await create_model_based_plan("Implement a benchmark runner and tests.", llm, AGENT_REGISTRY)
 
-    assert plan["mode"] == "multi_agent"
+    assert plan["mode"] == "direct"
     assert plan["subagent_mode"] == "fixed"
-    assert len(plan["selected_agents"]) >= 2
-    assert {"CriticAgent", "VerifierAgent"} & set(agent_names(plan))
+    assert plan["selected_agents"] == []
+    assert plan["reason"] == "The orchestrator judged that a single concrete implementation answer is enough for this request."
 
 
 @pytest.mark.asyncio

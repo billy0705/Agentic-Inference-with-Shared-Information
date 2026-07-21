@@ -154,5 +154,19 @@ def test_orchestrator_prompt_is_rendered_from_template():
     assert "Build a chess app" in prompt
     assert '"mode": "multi_agent"' in prompt
     assert '"mode": "direct"' in prompt
-    assert "Only use direct mode for easy factual tasks." in prompt
+    assert "You may choose direct mode when the task can be answered well by one direct response." in prompt
+    assert "The reason must explain why direct or multi_agent was selected." in prompt
     assert "You are the model-based orchestrator" not in inspect.getsource(orchestrator.build_orchestrator_prompt)
+
+
+def test_dynamic_orchestrator_prompt_allows_direct_and_requires_detailed_subagents():
+    prompt = orchestrator.build_dynamic_orchestrator_prompt("Analyze this benchmark result.")
+
+    assert "You are the dynamic subagent orchestrator" in prompt
+    assert "You may choose direct mode when the task can be answered well by one direct response." in prompt
+    assert "The reason must explain why direct or multi_agent was selected." in prompt
+    assert "Do not use direct mode just because confidence is high." in prompt
+    assert '"mode": "direct"' in prompt
+    assert '"role": "specific expertise and responsibility for this subagent"' in prompt
+    assert '"description": "detailed operating description' in prompt
+    assert "Analyze this benchmark result." in prompt

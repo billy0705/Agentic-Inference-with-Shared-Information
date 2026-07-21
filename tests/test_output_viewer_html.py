@@ -47,6 +47,8 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "open_prompt" in html
     assert "ACTION:" in html
     assert "normalizeOrchestrator" in html
+    assert "Routing decision reason" in html
+    assert "Agent description" in html
     assert "runsForModelFilter" in html
     assert "runsForMethodFilter" in html
     assert "runMethods" in html
@@ -65,6 +67,13 @@ def test_static_output_viewer_exposes_required_filters_and_tabs():
     assert "renderEventAgentFilter" in html
     assert "setAgentFilter" in html
     assert "setEventAgentFilter" in html
+    assert "renderEventTypeFilter" in html
+    assert "setEventTypeFilter" in html
+    assert 'eventType: \'communication\'' in html
+    assert "Communication only" in html
+    assert "Lifecycle only" in html
+    assert "All event types" in html
+    assert "eventTypeIsVisible" in html
 
     for tab in ("Overview", "Orchestrator", "Prompt", "Output", "Agents", "Synthesizer", "Events", "Tools", "Raw"):
         assert tab in html

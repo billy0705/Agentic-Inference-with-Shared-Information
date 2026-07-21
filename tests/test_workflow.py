@@ -284,7 +284,8 @@ async def test_langgraph_workflow_runs_from_start_to_end():
     assert state["final_answer"]
     assert state["mode"] == "multi_agent"
     assert state["agent_traces"]
-    assert any(event.event_type == "final_summary" and event.content == "Final answer generated." for event in state["event_log"])
+    lifecycle_types = {"task_started", "plan_created", "agent_started", "final_summary"}
+    assert not any(event.event_type in lifecycle_types for event in state["event_log"])
 
 
 @pytest.mark.asyncio
@@ -300,12 +301,8 @@ async def test_easy_direct_orchestrator_response_uses_direct_answer_node():
     assert state["agent_outputs"] == {}
     assert state["agent_traces"] == {}
     assert state["final_answer"] == "A direct answer from one LLM call."
-    assert any(
-        event.event_type == "plan_created"
-        and "mode=direct" in event.content
-        and "selected_agents=none" in event.content
-        for event in state["event_log"]
-    )
+    assert state["orchestrator_plan"]["mode"] == "direct"
+    assert not any(event.event_type in {"task_started", "plan_created", "final_summary"} for event in state["event_log"])
 
 
 @pytest.mark.asyncio
@@ -328,7 +325,7 @@ async def test_workspace_tools_force_multi_agent_runtime_even_for_direct_orchest
 
 
 @pytest.mark.asyncio
-async def test_non_easy_direct_orchestrator_response_falls_back_to_multi_agent_runtime():
+async def test_non_easy_direct_orchestrator_response_uses_direct_answer_runtime():
     state = await run_workflow(
         task="Which one of the following implementation strategies should we use?",
         llm=FakeLLM(),
@@ -336,10 +333,11 @@ async def test_non_easy_direct_orchestrator_response_falls_back_to_multi_agent_r
         stream_to_console=False,
     )
 
-    assert state["mode"] == "multi_agent"
-    assert set(state["agent_outputs"]) == {"CodingAgent", "CriticAgent", "VerifierAgent"}
-    assert state["agent_traces"]
-    assert "A concise final plan that combines research, coding, and critique outputs." in state["final_answer"]
+    assert state["mode"] == "direct"
+    assert state["agent_outputs"] == {}
+    assert state["agent_traces"] == {}
+    assert state["reason"] == "The task is simple enough for one LLM response."
+    assert "A direct answer from one LLM call." in state["final_answer"]
 
 
 @pytest.mark.asyncio
@@ -521,6 +519,7 @@ async def test_summarize_outputs_synthesizer_prompt_and_response_are_traced():
     assert len(llm.synthesizer_prompts) == 1
     assert "Do not solve the task again." in llm.synthesizer_prompts[0]
     assert "summarize the selected output" in llm.synthesizer_prompts[0]
+    assert "[agent_done]" not in llm.synthesizer_prompts[0]
     assert state["synthesizer_trace"]["prompt"] == llm.synthesizer_prompts[0]
     assert state["synthesizer_trace"]["raw_response"] == "Final Answer: summarized-agent-output"
     assert state["synthesizer_trace"]["final_answer"] == "Final Answer: summarized-agent-output"
@@ -551,7 +550,7 @@ async def test_workflow_uses_fallback_when_synthesizer_times_out():
 
     assert "Synthesis timed out" in state["final_answer"]
     assert any(event.event_type == "warning" and event.source == "Synthesizer" for event in state["event_log"])
-    assert any(event.event_type == "final_summary" and event.content == "Final answer generated." for event in state["event_log"])
+    assert not any(event.event_type == "final_summary" for event in state["event_log"])
 
 
 def test_autogen_dependency_is_not_used():

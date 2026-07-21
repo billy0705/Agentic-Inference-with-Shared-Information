@@ -138,7 +138,6 @@ class BaseAgent:
         if self.trace_logger is not None:
             self.trace_logger.start_agent(self.name, self.assignment or self._default_assignment())
         started_at = time.monotonic()
-        await self.publish_event("agent_started", self.assigned_subtask)
 
         last_step_index = 0
         final_response_received = False

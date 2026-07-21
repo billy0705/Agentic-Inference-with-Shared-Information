@@ -112,6 +112,8 @@
   <script>
     const DEFAULT_OUTPUT_ROOT = '../output/';
     const TEXT_LIMIT = 300000;
+    const COMMUNICATION_EVENT_TYPES = ['finding', 'critique', 'warning', 'question'];
+    const LIFECYCLE_EVENT_TYPES = ['task_started', 'plan_created', 'agent_started', 'final_summary'];
     const state = {
       files: [],
       folderHandle: null,
@@ -123,6 +125,7 @@
       exampleIndex: 0,
       agent: 'all',
       eventAgent: 'all',
+      eventType: 'communication',
       tab: 'Overview',
       search: '',
     };
@@ -291,6 +294,7 @@
       state.exampleIndex = 0;
       state.agent = 'all';
       state.eventAgent = 'all';
+      state.eventType = 'communication';
       $('sourceStatus').textContent = `${statusText} ${state.data.runs.length} runs found.`;
       render();
     }
@@ -913,6 +917,7 @@
           state.exampleIndex = 0;
           state.agent = 'all';
           state.eventAgent = 'all';
+          state.eventType = 'communication';
           render();
         });
       });
@@ -952,9 +957,34 @@
     }
 
     function renderEventAgentFilter(example) {
-      const agentNames = unique((example?.agents || []).map((agent) => agent.name));
+      const eventNames = (example?.events || []).flatMap((event) => [event.source, event.target === 'broadcast' ? '' : event.target]);
+      const receiptNames = (example?.receipts || []).flatMap((receipt) => [receipt.agent_name, receipt.source]);
+      const agentNames = unique([...(example?.agents || []).map((agent) => agent.name), ...eventNames, ...receiptNames]);
       if (state.eventAgent !== 'all' && !agentNames.includes(state.eventAgent)) state.eventAgent = 'all';
       return `<div class="field"><label for="eventAgentFilter">Event agent</label><select id="eventAgentFilter" onchange="setEventAgentFilter(this.value)"><option value="all">All event agents</option>${agentNames.map((name) => `<option value="${esc(name)}" ${state.eventAgent === name ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></div>`;
+    }
+
+    function renderEventTypeFilter(example) {
+      const eventTypes = unique([
+        ...(example?.events || []).map((event) => event.event_type),
+        ...(example?.receipts || []).map((receipt) => receipt.event_type),
+      ]);
+      if (state.eventType.startsWith('type:') && !eventTypes.includes(state.eventType.slice(5))) {
+        state.eventType = 'communication';
+      }
+      return `
+        <div class="field">
+          <label for="eventTypeFilter">Event type</label>
+          <select id="eventTypeFilter" onchange="setEventTypeFilter(this.value)">
+            <option value="communication" ${state.eventType === 'communication' ? 'selected' : ''}>Communication only</option>
+            <option value="lifecycle" ${state.eventType === 'lifecycle' ? 'selected' : ''}>Lifecycle only</option>
+            <option value="agent_done" ${state.eventType === 'agent_done' ? 'selected' : ''}>Agent done only</option>
+            <option value="message_received" ${state.eventType === 'message_received' ? 'selected' : ''}>Message receipts only</option>
+            <option value="all" ${state.eventType === 'all' ? 'selected' : ''}>All event types</option>
+            ${eventTypes.map((type) => `<option value="type:${esc(type)}" ${state.eventType === `type:${type}` ? 'selected' : ''}>${esc(type)}</option>`).join('')}
+          </select>
+        </div>
+      `;
     }
 
     function setAgentFilter(value) {
@@ -965,6 +995,12 @@
 
     function setEventAgentFilter(value) {
       state.eventAgent = value;
+      state.tab = 'Events';
+      render();
+    }
+
+    function setEventTypeFilter(value) {
+      state.eventType = value;
       state.tab = 'Events';
       render();
     }
@@ -1029,12 +1065,13 @@
       return `
         <div class="grid">
           <div>
-            <h3>Decision</h3>
+            <h3>Routing Decision</h3>
             <p>
               <span class="pill">mode: ${esc(orchestrator.plan?.mode)}</span>
               <span class="pill">subagent mode: ${esc(orchestrator.plan?.subagent_mode)}</span>
               <span class="pill">task type: ${esc(orchestrator.plan?.task_type)}</span>
             </p>
+            <h4>Routing decision reason</h4>
             <pre>${esc(orchestrator.reason || orchestrator.plan?.reason || '')}</pre>
           </div>
           <div>
@@ -1042,8 +1079,11 @@
             ${(orchestrator.selected_agents || []).map((agent) => `
               <div class="mini-panel">
                 <strong>${esc(agent.name || agent.agent_name)}</strong>
-                <div class="subtle">${esc(agent.role || '')}</div>
+                ${agent.role ? `<div><strong>Role</strong><br>${esc(agent.role)}</div>` : ''}
+                ${agent.description ? `<div><strong>Agent description</strong><br>${esc(agent.description)}</div>` : ''}
                 <p>${esc(agent.subtask || agent.task || '')}</p>
+                ${agent.expected_output ? `<div><strong>Expected output</strong><br>${esc(agent.expected_output)}</div>` : ''}
+                ${Array.isArray(agent.rules) && agent.rules.length ? `<div><strong>Rules</strong><ul>${agent.rules.map((rule) => `<li>${esc(rule)}</li>`).join('')}</ul></div>` : ''}
               </div>
             `).join('') || '<p class="subtle">No selected agents recorded.</p>'}
           </div>
@@ -1111,10 +1151,15 @@
     }
 
     function renderEvents(example) {
-      const events = (example.events || []).filter((event) => eventMatchesAgent(event, example.receipts || []));
-      const renderedEvents = events.map((event) => renderEventFlow(event, example.receipts || [])).join('') || '<div class="empty">No event log matches this filter.</div>';
-      const receipts = (example.receipts || []).filter((receipt) => state.eventAgent === 'all' || receipt.agent_name === state.eventAgent || receipt.source === state.eventAgent);
-      return `${renderEventAgentFilter(example)}${renderedEvents}<h3>Receipts</h3><pre>${esc(pretty(receipts))}</pre>`;
+      const receiptsForMatching = example.receipts || [];
+      const events = (example.events || [])
+        .filter((event) => eventMatchesAgent(event, receiptsForMatching))
+        .filter(eventMatchesType);
+      const renderedEvents = events.map((event) => renderEventFlow(event, receiptsForMatching.filter(receiptMatchesType))).join('') || '<div class="empty">No event log matches this filter.</div>';
+      const receipts = receiptsForMatching
+        .filter((receipt) => state.eventAgent === 'all' || receipt.agent_name === state.eventAgent || receipt.source === state.eventAgent)
+        .filter(receiptMatchesType);
+      return `${renderEventAgentFilter(example)}${renderEventTypeFilter(example)}<p class="subtle">Showing ${events.length} of ${(example.events || []).length} events.</p>${renderedEvents}<h3>Receipts</h3><pre>${esc(pretty(receipts))}</pre>`;
     }
 
     function eventMatchesAgent(event, receipts) {
@@ -1122,6 +1167,24 @@
       return event.source === state.eventAgent ||
         event.target === state.eventAgent ||
         receipts.some((receipt) => receipt.event_id === event.event_id && receipt.agent_name === state.eventAgent);
+    }
+
+    function eventMatchesType(event) {
+      return eventTypeIsVisible(event.event_type);
+    }
+
+    function receiptMatchesType(receipt) {
+      return eventTypeIsVisible(receipt.event_type);
+    }
+
+    function eventTypeIsVisible(eventType) {
+      if (state.eventType === 'all') return true;
+      if (state.eventType === 'communication') return COMMUNICATION_EVENT_TYPES.includes(eventType);
+      if (state.eventType === 'lifecycle') return LIFECYCLE_EVENT_TYPES.includes(eventType);
+      if (state.eventType === 'agent_done') return eventType === 'agent_done';
+      if (state.eventType === 'message_received') return eventType === 'message_received';
+      if (state.eventType.startsWith('type:')) return eventType === state.eventType.slice(5);
+      return COMMUNICATION_EVENT_TYPES.includes(eventType);
     }
 
     function renderEventFlow(event, receipts) {
@@ -1174,12 +1237,12 @@
     $('openFolderButton').addEventListener('click', openOutputFolder);
     $('rescanButton').addEventListener('click', rescanCurrentFolder);
     $('folderInput').addEventListener('change', (event) => loadFromFileInput(event.target.files));
-    $('benchmarkFilter').addEventListener('change', (event) => { state.benchmark = event.target.value; state.model = 'all'; state.method = 'all'; state.run = 'all'; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; render(); });
-    $('modelFilter').addEventListener('change', (event) => { state.model = event.target.value; state.method = 'all'; state.run = 'all'; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; render(); });
-    $('methodFilter').addEventListener('change', (event) => { state.method = event.target.value; state.run = 'all'; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; render(); });
-    $('runFilter').addEventListener('change', (event) => { state.run = event.target.value; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; render(); });
+    $('benchmarkFilter').addEventListener('change', (event) => { state.benchmark = event.target.value; state.model = 'all'; state.method = 'all'; state.run = 'all'; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; state.eventType = 'communication'; render(); });
+    $('modelFilter').addEventListener('change', (event) => { state.model = event.target.value; state.method = 'all'; state.run = 'all'; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; state.eventType = 'communication'; render(); });
+    $('methodFilter').addEventListener('change', (event) => { state.method = event.target.value; state.run = 'all'; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; state.eventType = 'communication'; render(); });
+    $('runFilter').addEventListener('change', (event) => { state.run = event.target.value; state.exampleIndex = 0; state.agent = 'all'; state.eventAgent = 'all'; state.eventType = 'communication'; render(); });
     $('searchFilter').addEventListener('input', (event) => { state.search = event.target.value; render(); });
-    $('exampleFilter').addEventListener('change', (event) => { state.exampleIndex = Number(event.target.value || 0); state.agent = 'all'; state.eventAgent = 'all'; render(); });
+    $('exampleFilter').addEventListener('change', (event) => { state.exampleIndex = Number(event.target.value || 0); state.agent = 'all'; state.eventAgent = 'all'; state.eventType = 'communication'; render(); });
 
     configureProtocolMode();
     render();

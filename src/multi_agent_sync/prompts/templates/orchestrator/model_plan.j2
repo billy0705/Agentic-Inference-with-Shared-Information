@@ -12,9 +12,10 @@ Rules:
 * Select only from the available agents.
 * Do not invent new agents.
 * Do not select ArchitectAgent.
-* Use multi_agent mode for most tasks.
-* Only use direct mode for easy factual tasks.
-* Do not use direct mode for coding, debugging, implementation, benchmark, research, comparison, proof, calculation, or tasks that need verification.
+* Decide whether direct or multi_agent is the better route for this specific task.
+* You may choose direct mode when the task can be answered well by one direct response.
+* Choose multi_agent mode when the task benefits from specialization, decomposition, independent verification, critique, debate, implementation planning, or multiple viewpoints.
+* The reason must explain why direct or multi_agent was selected. Do not use direct mode just because confidence is high.
 * Prefer 2 to 4 agents for most tasks.
 * Every plan must include CriticAgent or VerifierAgent.
 * task_type must be a short free-text label. Do not use "unknown" unless the task is truly impossible to understand.
@@ -30,7 +31,7 @@ Return only valid JSON with this exact schema:
   "mode": "multi_agent",
   "task_type": "short free-text label",
   "task_summary": "one sentence summary",
-  "reason": "why this route was selected",
+  "reason": "specific routing reason explaining why multi_agent is needed",
   "selected_agents": [
     {
       "name": "{{ allowed_names }}",
@@ -45,12 +46,12 @@ Return only valid JSON with this exact schema:
   }
 }
 
-For easy factual tasks only, you may instead return:
+If direct is the better route, return:
 {
   "mode": "direct",
   "task_type": "short free-text label",
   "task_summary": "one sentence summary",
-  "reason": "why one direct answer is enough",
+  "reason": "specific routing reason explaining why one direct answer is enough",
   "selected_agents": [],
   "collaboration_protocol": {
     "event_types_to_share": ["finding", "critique", "warning"],
