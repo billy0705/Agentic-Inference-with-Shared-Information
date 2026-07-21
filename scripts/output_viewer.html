@@ -494,7 +494,10 @@
       if (methodTrace.method === 'multiagent_debate') {
         return normalizeDebateTrace(methodTrace);
       }
-      return normalizeNamedAgentTraces(methodTrace);
+      const agents = normalizeNamedAgentTraces(methodTrace);
+      const synthesizer = normalizeSynthesizerTrace(methodTrace);
+      if (synthesizer) agents.push(synthesizer);
+      return agents;
     }
 
     function normalizeNamedAgentTraces(methodTrace) {
@@ -608,6 +611,45 @@
         final_output: truncateText(methodTrace.raw_output || ''),
         tools: findToolActions(String(methodTrace.raw_output || '')),
       }];
+    }
+
+    function normalizeSynthesizerTrace(methodTrace) {
+      const trace = methodTrace.synthesizer_trace && typeof methodTrace.synthesizer_trace === 'object'
+        ? methodTrace.synthesizer_trace
+        : null;
+      if (!trace) return null;
+      const rawResponse = truncateText(trace.raw_response || trace.final_answer || '');
+      return {
+        name: 'Synthesizer',
+        assignment: {
+          method: methodTrace.method || '',
+          mode: trace.mode || methodTrace.synthesizer_mode || '',
+          timed_out: Boolean(trace.timed_out),
+        },
+        steps: [{
+          step: 1,
+          prompt: truncateText(trace.prompt || ''),
+          raw_response: rawResponse,
+          parsed_output: {
+            final_answer: trace.final_answer || '',
+            timed_out: Boolean(trace.timed_out),
+            mode: trace.mode || methodTrace.synthesizer_mode || '',
+          },
+          published_events: [],
+          inbox_events: [],
+          used_event_ids: [],
+          token_usage: normalizeTokenUsage(trace.token_usage),
+          open_prompt: true,
+          duration_seconds: trace.duration_seconds,
+          is_reactive: false,
+          reactive_reason: '',
+          tools: findToolActions(rawResponse),
+        }],
+        event_receipts: [],
+        unused_received_events: [],
+        final_output: truncateText(trace.final_answer || rawResponse),
+        tools: findToolActions(String(trace.final_answer || rawResponse)),
+      };
     }
 
     function normalizeSingleAgentStep(step, methodTrace) {

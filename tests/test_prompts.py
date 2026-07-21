@@ -138,6 +138,7 @@ async def test_agent_prompt_is_rendered_from_template():
 def test_graph_prompts_are_not_embedded_in_node_functions():
     assert "Answer the user task directly with one concise response." not in inspect.getsource(nodes.direct_answer_node)
     assert "You are the Synthesizer for a LangGraph multi-agent prototype." not in inspect.getsource(nodes.synthesizer_node)
+    assert "Do not solve the task again." not in inspect.getsource(nodes.synthesizer_node)
 
 
 def test_orchestrator_prompt_is_rendered_from_template():

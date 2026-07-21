@@ -615,7 +615,11 @@ def print_result(result: dict[str, Any]) -> None:
     print(f"Benchmark: {result['benchmark']}")
     print(f"Method: {result['method']}")
     print(f"Question: {result['index']}")
-    print(f"Gold: {result['gold']}")
+    valid_targets = valid_gold_targets(result)
+    if valid_targets:
+        print(f"Gold answers: {', '.join(valid_targets)}")
+    else:
+        print(f"Gold: {result['gold']}")
     print(f"Pred: {result['pred']}")
     print(f"Correct: {result['correct']}")
     print(f"Elapsed seconds: {result['elapsed_seconds']:.4f}")
@@ -627,6 +631,16 @@ def print_result(result: dict[str, Any]) -> None:
     if result["error"]:
         print(f"Error: {result['error']}")
     print("=" * 80)
+
+
+def valid_gold_targets(result: dict[str, Any]) -> list[str]:
+    metadata = result.get("score_metadata")
+    if not isinstance(metadata, dict):
+        return []
+    targets = metadata.get("valid_targets")
+    if not isinstance(targets, list):
+        return []
+    return [str(target) for target in targets if target is not None]
 
 
 def print_summary(benchmark: BenchmarkSpec, summary: dict[str, dict[str, float | int]], output_path: Path) -> None:

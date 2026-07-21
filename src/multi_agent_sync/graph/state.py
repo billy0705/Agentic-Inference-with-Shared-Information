@@ -20,6 +20,8 @@ class GraphState(TypedDict):
     event_log: list[AgentEvent]
     agent_outputs: dict[str, str]
     agent_traces: dict[str, Any]
+    synthesizer_mode: NotRequired[str]
+    synthesizer_trace: NotRequired[dict[str, Any]]
     final_answer: str
     event_streamer: NotRequired[EventStreamer]
     trace_logger: NotRequired[Any]

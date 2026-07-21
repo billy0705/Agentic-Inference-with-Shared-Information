@@ -10,6 +10,7 @@ from multi_agent_sync.graph.state import GraphState
 from multi_agent_sync.llm import get_llm
 from multi_agent_sync.orchestrator.orchestrator import create_fallback_plan, create_model_based_plan, selected_agents_to_assignments
 from multi_agent_sync.prompts import render_prompt
+from multi_agent_sync.token_usage import extract_token_usage
 from multi_agent_sync.tools.bash import BashTool
 from multi_agent_sync.tracing.trace import TraceLogger
 
@@ -254,17 +255,26 @@ async def synthesizer_node(state: GraphState) -> GraphState:
         if event.event_type in {"finding", "warning", "critique", "agent_done"}
     )
     output_lines = "\n".join(f"- {name}: {output}" for name, output in state.get("agent_outputs", {}).items())
+    synthesizer_mode = state.get("synthesizer_mode", "generic")
+    template_name = "graph/synthesizer_summarize_outputs.j2" if synthesizer_mode == "summarize_outputs" else "graph/synthesizer.j2"
     prompt = render_prompt(
-        "graph/synthesizer.j2",
+        template_name,
         task=state["task"],
         output_lines=output_lines,
         event_lines=event_lines,
     )
+    raw_response = ""
+    token_usage = {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None}
+    timed_out = False
     try:
         response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=state.get("synthesis_timeout", 60.0))
-        final_answer = getattr(response, "content", str(response)).strip()
+        raw_response = getattr(response, "content", str(response)).strip()
+        token_usage = extract_token_usage(response).as_dict()
+        final_answer = raw_response
     except asyncio.TimeoutError:
+        timed_out = True
         final_answer = build_fallback_summary(state)
+        raw_response = final_answer
         await streamer.publish(
             AgentEvent(
                 run_id=state["run_id"],
@@ -286,13 +296,23 @@ async def synthesizer_node(state: GraphState) -> GraphState:
     await streamer.drain(timeout=2)
     event_log = await streamer.get_events(run_id=state["run_id"])
 
-    return {
+    next_state = {
         **state,
         "event_streamer": streamer,
         "event_log": event_log,
         "agent_traces": state.get("agent_traces", {}),
         "final_answer": final_answer,
     }
+    if synthesizer_mode == "summarize_outputs":
+        next_state["synthesizer_trace"] = {
+            "mode": synthesizer_mode,
+            "prompt": prompt,
+            "raw_response": raw_response,
+            "final_answer": final_answer,
+            "token_usage": token_usage,
+            "timed_out": timed_out,
+        }
+    return next_state
 
 
 def build_fallback_summary(state: GraphState) -> str:

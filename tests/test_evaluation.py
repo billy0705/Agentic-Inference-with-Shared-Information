@@ -1342,6 +1342,28 @@ def test_chess_score_response_accepts_any_target_square():
     }
 
 
+def test_print_result_shows_all_valid_gold_targets_for_chess(capsys):
+    runner.print_result(
+        {
+            "benchmark": "chess",
+            "method": "plain_llm",
+            "index": 0,
+            "gold": "h3",
+            "pred": "g2",
+            "correct": True,
+            "elapsed_seconds": 0.1,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None,
+            "error": "",
+            "score_metadata": {"valid_targets": ["h3", "g2"]},
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "Gold answers: h3, g2" in output
+
+
 @pytest.mark.parametrize(
     ("raw_output", "expected"),
     [
@@ -2106,6 +2128,8 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
     assert result.raw_output == f"{method} answer"
     assert captured_kwargs["subagent_mode"] == expected_subagent_mode
     assert captured_kwargs["enable_agent_message_streaming"] is expected_streaming
+    expected_synthesizer_mode = "summarize_outputs" if method == "multiagent_dynamic_streaming" else "generic"
+    assert captured_kwargs["synthesizer_mode"] == expected_synthesizer_mode
 
 
 def test_write_results_csv_includes_timing_and_token_columns(tmp_path):

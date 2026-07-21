@@ -167,6 +167,17 @@ class WorkflowToolLLM:
         )
 
 
+class SynthesizerTraceLLM(FakeLLM):
+    def __init__(self) -> None:
+        self.synthesizer_prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if "You are the Synthesizer" in prompt:
+            self.synthesizer_prompts.append(prompt)
+            return FakeResponse("Final Answer: summarized-agent-output")
+        return await super().ainvoke(prompt)
+
+
 class WorkflowFakeDockerWorkspace(DockerWorkspace):
     def __init__(self) -> None:
         super().__init__(container_name="workflow-fake-container")
@@ -491,6 +502,29 @@ async def test_agent_traces_include_prompt_response_parsed_output_and_published_
     assert step["parsed_output"]["share_finding"] == "Share a concise implementation-relevant finding."
     assert step["published_events"]
     assert step["duration_seconds"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_summarize_outputs_synthesizer_prompt_and_response_are_traced():
+    llm = SynthesizerTraceLLM()
+
+    state = await run_workflow(
+        task="Calculate 2 + 2.",
+        llm=llm,
+        max_steps_per_agent=1,
+        total_runtime_timeout=5,
+        stream_to_console=False,
+        synthesizer_mode="summarize_outputs",
+    )
+
+    assert state["final_answer"] == "Final Answer: summarized-agent-output"
+    assert len(llm.synthesizer_prompts) == 1
+    assert "Do not solve the task again." in llm.synthesizer_prompts[0]
+    assert "summarize the selected output" in llm.synthesizer_prompts[0]
+    assert state["synthesizer_trace"]["prompt"] == llm.synthesizer_prompts[0]
+    assert state["synthesizer_trace"]["raw_response"] == "Final Answer: summarized-agent-output"
+    assert state["synthesizer_trace"]["final_answer"] == "Final Answer: summarized-agent-output"
+    assert state["synthesizer_trace"]["timed_out"] is False
 
 
 @pytest.mark.asyncio
