@@ -1297,6 +1297,9 @@ def test_chess_build_prompt_defines_square_output_and_uses_first_target_as_gold(
         ("Answer: G2", "g2"),
         ("The destination square is b8.", "b8"),
         ("h3", "h3"),
+        ("Reason: The piece can move to e4 after considering f7.\ne4", "e4"),
+        ("Final Answer: **F6**", "f6"),
+        ("Final Answer: g8h7", "h7"),
     ],
 )
 def test_chess_extract_answer_returns_normalized_square(raw_output, expected):

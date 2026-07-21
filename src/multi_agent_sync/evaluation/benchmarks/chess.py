@@ -55,20 +55,46 @@ def extract_answer(text: str) -> str | None:
     if not text:
         return None
 
+    square_value = rf"[*_`]*\s*(?P<square>{OUTPUT_REGEX})(?![a-zA-Z0-9])\s*[*_`]*"
+    move_value = rf"[*_`]*\s*(?P<move>{OUTPUT_REGEX}{OUTPUT_REGEX})(?![a-zA-Z0-9])\s*[*_`]*"
+    labelled_move_patterns = [
+        rf"Final\s+Answer\s*:\s*{move_value}",
+        rf"final_answer\s*:\s*{move_value}",
+        rf"Answer\s*:\s*{move_value}",
+    ]
+    for pattern in labelled_move_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group("move")[-2:].lower()
+
     strict_patterns = [
-        rf"Final\s+Answer\s*:\s*(?P<square>{OUTPUT_REGEX})\b",
-        rf"final_answer\s*:\s*(?P<square>{OUTPUT_REGEX})\b",
-        rf"Answer\s*:\s*(?P<square>{OUTPUT_REGEX})\b",
-        rf"\bdestination\s+square\s+is\s*(?P<square>{OUTPUT_REGEX})\b",
+        rf"Final\s+Answer\s*:\s*{square_value}",
+        rf"final_answer\s*:\s*{square_value}",
+        rf"Answer\s*:\s*{square_value}",
+        rf"\bdestination\s+square\s+is\s*{square_value}",
     ]
     for pattern in strict_patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
             return match.group("square").lower()
 
+    last_line = last_nonempty_line(text)
+    if last_line is not None:
+        match = re.fullmatch(rf"{square_value}\.?", last_line, flags=re.IGNORECASE)
+        if match:
+            return match.group("square").lower()
+
     matches = [match.group("square").lower() for match in SQUARE_PATTERN.finditer(text)]
     if len(matches) == 1:
         return matches[0]
+    return None
+
+
+def last_nonempty_line(text: str) -> str | None:
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
     return None
 
 
