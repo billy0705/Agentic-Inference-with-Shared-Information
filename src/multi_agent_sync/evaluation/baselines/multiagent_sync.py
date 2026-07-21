@@ -50,6 +50,7 @@ async def run_multiagent(
             docker_workspace=docker_workspace,
             feedback_tool=feedback_tool,
             final_guard_tool=final_guard_tool,
+            benchmark=str(getattr(args, "benchmark", "") or ""),
             synthesizer_mode=(
                 "summarize_outputs"
                 if subagent_mode == "dynamic" and enable_agent_message_streaming
@@ -99,6 +100,7 @@ def extract_workflow_trace(state: dict[str, Any]) -> dict[str, Any]:
         "agent_traces",
         "synthesizer_mode",
         "synthesizer_trace",
+        "direct_trace",
         "final_answer",
     ]
     return {key: state.get(key) for key in trace_keys if key in state}

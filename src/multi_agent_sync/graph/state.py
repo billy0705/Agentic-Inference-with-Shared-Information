@@ -22,6 +22,7 @@ class GraphState(TypedDict):
     agent_traces: dict[str, Any]
     synthesizer_mode: NotRequired[str]
     synthesizer_trace: NotRequired[dict[str, Any]]
+    direct_trace: NotRequired[dict[str, Any]]
     final_answer: str
     event_streamer: NotRequired[EventStreamer]
     trace_logger: NotRequired[Any]
@@ -36,3 +37,4 @@ class GraphState(TypedDict):
     docker_workspace: NotRequired[Any]
     feedback_tool: NotRequired[Any]
     final_guard_tool: NotRequired[Any]
+    benchmark: NotRequired[str]

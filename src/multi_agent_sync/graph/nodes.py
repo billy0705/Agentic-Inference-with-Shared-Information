@@ -4,6 +4,7 @@ import asyncio
 
 from multi_agent_sync.agents.registry import AGENT_REGISTRY
 from multi_agent_sync.agents.dynamic_agent import DynamicAgent
+from multi_agent_sync.debate_prompts import build_debate_round_prompt, debate_prompt_style, render_debate_context
 from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph.state import GraphState
@@ -56,21 +57,90 @@ async def direct_answer_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
     llm = state.get("llm") or get_llm()
     prompt = render_prompt("graph/direct_answer.j2", task=state["task"])
+    direct_trace = {
+        "mode": "dynamic_direct_debate" if state.get("subagent_mode") == "dynamic" else "direct",
+        "steps": [],
+        "final_answer": "",
+    }
     try:
         response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=state.get("synthesis_timeout", 60.0))
         final_answer = getattr(response, "content", str(response)).strip()
+        direct_trace["steps"].append(
+            {
+                "step": 1,
+                "kind": "direct_answer",
+                "prompt": prompt,
+                "raw_response": final_answer,
+                "token_usage": extract_token_usage(response).as_dict(),
+                "timed_out": False,
+            }
+        )
     except asyncio.TimeoutError:
         final_answer = "Direct answer timed out before the LLM returned a response."
+        direct_trace["steps"].append(
+            {
+                "step": 1,
+                "kind": "direct_answer",
+                "prompt": prompt,
+                "raw_response": final_answer,
+                "token_usage": {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None},
+                "timed_out": True,
+            }
+        )
+
+    if state.get("subagent_mode") == "dynamic" and not direct_trace["steps"][0]["timed_out"]:
+        debate_prompt = build_dynamic_direct_debate_prompt(
+            task=state["task"],
+            first_prompt=prompt,
+            first_answer=final_answer,
+            benchmark=str(state.get("benchmark", "") or ""),
+        )
+        try:
+            debate_response = await asyncio.wait_for(llm.ainvoke(debate_prompt), timeout=state.get("synthesis_timeout", 60.0))
+            final_answer = getattr(debate_response, "content", str(debate_response)).strip()
+            direct_trace["steps"].append(
+                {
+                    "step": 2,
+                    "kind": "debate_revision",
+                    "prompt": debate_prompt,
+                    "raw_response": final_answer,
+                    "token_usage": extract_token_usage(debate_response).as_dict(),
+                    "timed_out": False,
+                }
+            )
+        except asyncio.TimeoutError:
+            direct_trace["steps"].append(
+                {
+                    "step": 2,
+                    "kind": "debate_revision",
+                    "prompt": debate_prompt,
+                    "raw_response": "Dynamic direct debate revision timed out; using the first direct answer.",
+                    "token_usage": {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None},
+                    "timed_out": True,
+                }
+            )
 
     final_answer = apply_missing_options_guard(state["task"], final_answer)
+    direct_trace["final_answer"] = final_answer
     return {
         **state,
         "event_streamer": streamer,
         "event_log": await streamer.get_events(run_id=state["run_id"]),
         "agent_outputs": {},
         "agent_traces": {},
+        "direct_trace": direct_trace,
         "final_answer": final_answer,
     }
+
+
+def build_dynamic_direct_debate_prompt(*, task: str, first_prompt: str, first_answer: str, benchmark: str) -> str:
+    prompt_style = debate_prompt_style(benchmark)
+    first_context = [
+        {"role": "user", "content": first_prompt},
+        {"role": "assistant", "content": first_answer},
+    ]
+    round_prompt = build_debate_round_prompt([first_context], task, 1, prompt_style)
+    return render_debate_context([*first_context, {"role": "user", "content": round_prompt}])
 
 
 async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:

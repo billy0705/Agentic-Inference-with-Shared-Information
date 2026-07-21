@@ -435,6 +435,15 @@ def build_debug_workflow(selected_agents: list[dict[str, Any]], method_trace: di
                 {"node": "single_agent_votes", "description": "Ran independent single-agent attempts on the same prompt."},
                 {"node": "majority_vote", "description": "Selected the most frequent parsed answer, using first parsed answer as tie-breaker."},
             ]
+        if method_trace.get("direct_trace"):
+            steps = [
+                {"node": "orchestrator", "description": "Selected direct routing."},
+                {"node": "direct_answer", "description": "Generated the first direct answer."},
+            ]
+            direct_trace = method_trace.get("direct_trace") if isinstance(method_trace.get("direct_trace"), dict) else {}
+            if len(direct_trace.get("steps", [])) > 1:
+                steps.append({"node": "direct_debate_revision", "description": "Revised the direct answer with a debate-style follow-up prompt."})
+            return steps
         if method_trace.get("prompt") is not None:
             return [
                 {"node": "plain_llm", "description": "Answered the benchmark prompt directly."},

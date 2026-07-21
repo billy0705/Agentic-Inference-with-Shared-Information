@@ -2375,6 +2375,7 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
 
     assert result.raw_output == f"{method} answer"
     assert captured_kwargs["subagent_mode"] == expected_subagent_mode
+    assert captured_kwargs["benchmark"] == "gpqa"
     assert captured_kwargs["enable_agent_message_streaming"] is expected_streaming
     expected_synthesizer_mode = "summarize_outputs" if method == "multiagent_dynamic_streaming" else "generic"
     assert captured_kwargs["synthesizer_mode"] == expected_synthesizer_mode

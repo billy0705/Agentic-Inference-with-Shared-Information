@@ -47,6 +47,7 @@ async def run_workflow(
     feedback_tool: Any | None = None,
     final_guard_tool: Any | None = None,
     synthesizer_mode: str = "generic",
+    benchmark: str = "",
 ) -> GraphState:
     workflow = build_workflow()
     event_streamer = InMemoryEventStreamer()
@@ -67,6 +68,7 @@ async def run_workflow(
         "agent_outputs": {},
         "agent_traces": {},
         "synthesizer_mode": synthesizer_mode,
+        "benchmark": benchmark,
         "final_answer": "",
         "event_streamer": event_streamer,
         "max_steps_per_agent": max_steps_per_agent,

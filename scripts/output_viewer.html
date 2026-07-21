@@ -531,6 +531,9 @@
     }
 
     function normalizeNamedAgentTraces(methodTrace) {
+      if (methodTrace.direct_trace && typeof methodTrace.direct_trace === 'object') {
+        return [normalizeDirectTrace(methodTrace)];
+      }
       const traces = methodTrace.agent_traces && typeof methodTrace.agent_traces === 'object' ? methodTrace.agent_traces : {};
       const outputs = methodTrace.agent_outputs && typeof methodTrace.agent_outputs === 'object' ? methodTrace.agent_outputs : {};
       const names = [];
@@ -551,6 +554,44 @@
           tools: findToolActions(String(finalOutput)),
         };
       });
+    }
+
+    function normalizeDirectTrace(methodTrace) {
+      const trace = methodTrace.direct_trace && typeof methodTrace.direct_trace === 'object' ? methodTrace.direct_trace : {};
+      const steps = Array.isArray(trace.steps) ? trace.steps : [];
+      return {
+        name: 'DirectAgent',
+        assignment: {
+          method: methodTrace.method || '',
+          mode: trace.mode || 'direct',
+          route_reason: methodTrace.reason || methodTrace.orchestrator_plan?.reason || '',
+        },
+        steps: steps.filter((step) => step && typeof step === 'object').map((step) => {
+          const rawResponse = truncateText(step.raw_response || '');
+          return {
+            step: step.step,
+            prompt: truncateText(step.prompt || ''),
+            raw_response: rawResponse,
+            parsed_output: {
+              kind: step.kind || '',
+              timed_out: Boolean(step.timed_out),
+            },
+            published_events: [],
+            inbox_events: [],
+            used_event_ids: [],
+            token_usage: normalizeTokenUsage(step.token_usage),
+            open_prompt: true,
+            duration_seconds: step.duration_seconds,
+            is_reactive: false,
+            reactive_reason: '',
+            tools: findToolActions(rawResponse),
+          };
+        }),
+        event_receipts: [],
+        unused_received_events: [],
+        final_output: truncateText(trace.final_answer || methodTrace.final_answer || ''),
+        tools: findToolActions(String(trace.final_answer || methodTrace.final_answer || '')),
+      };
     }
 
     function normalizeMajorityVoteTrace(methodTrace) {

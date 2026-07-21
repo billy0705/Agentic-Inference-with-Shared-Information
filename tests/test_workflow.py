@@ -93,6 +93,38 @@ class DynamicFakeLLM:
         return FakeResponse("Unexpected prompt")
 
 
+class DynamicDirectFakeLLM:
+    def __init__(self) -> None:
+        self.direct_prompts: list[str] = []
+        self.debate_prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if "dynamic subagent orchestrator" in prompt:
+            return FakeResponse(
+                """
+                {
+                  "mode": "direct",
+                  "task_type": "direct benchmark question",
+                  "task_summary": "The user asks a question the orchestrator routes directly.",
+                  "reason": "The orchestrator chose direct mode, but dynamic direct should still self-debate once.",
+                  "selected_agents": [],
+                  "collaboration_protocol": {
+                    "event_types_to_share": ["finding", "critique", "warning"],
+                    "reactive_steps": false,
+                    "notes": "No agent collaboration is needed."
+                  }
+                }
+                """
+            )
+        if "These are the solutions to the problem from other agents:" in prompt:
+            self.debate_prompts.append(prompt)
+            return FakeResponse("Revised dynamic direct answer. Final Answer: B")
+        if "Answer the user task directly" in prompt:
+            self.direct_prompts.append(prompt)
+            return FakeResponse("Initial dynamic direct answer. Final Answer: A")
+        return FakeResponse("Unexpected prompt")
+
+
 class HangingSynthesizerLLM(FakeLLM):
     async def ainvoke(self, prompt: str) -> FakeResponse:
         if "Synthesizer" in prompt:
@@ -338,6 +370,33 @@ async def test_non_easy_direct_orchestrator_response_uses_direct_answer_runtime(
     assert state["agent_traces"] == {}
     assert state["reason"] == "The task is simple enough for one LLM response."
     assert "A direct answer from one LLM call." in state["final_answer"]
+
+
+@pytest.mark.asyncio
+async def test_dynamic_direct_route_runs_one_debate_revision_after_initial_answer():
+    llm = DynamicDirectFakeLLM()
+
+    state = await run_workflow(
+        task="Which option is best?",
+        llm=llm,
+        max_steps_per_agent=1,
+        stream_to_console=False,
+        subagent_mode="dynamic",
+        benchmark="mmlu_pro",
+    )
+
+    assert state["mode"] == "direct"
+    assert state["subagent_mode"] == "dynamic"
+    assert state["agent_outputs"] == {}
+    assert state["agent_traces"] == {}
+    assert state["final_answer"] == "Revised dynamic direct answer. Final Answer: B"
+    assert len(llm.direct_prompts) == 1
+    assert len(llm.debate_prompts) == 1
+    assert "Initial dynamic direct answer. Final Answer: A" in llm.debate_prompts[0]
+    assert "Using the reasoning from other agents as additional advice" in llm.debate_prompts[0]
+    assert "Put your answer in the form (X) at the end of your response." in llm.debate_prompts[0]
+    assert state["direct_trace"]["mode"] == "dynamic_direct_debate"
+    assert [step["kind"] for step in state["direct_trace"]["steps"]] == ["direct_answer", "debate_revision"]
 
 
 @pytest.mark.asyncio
