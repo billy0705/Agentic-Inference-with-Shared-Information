@@ -10,6 +10,12 @@ from typing import Any
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.benchmarks import chess, gpqa, gsm8k, hotpotqa, ma_proofbench, mmlu_pro, olymmath, swe_bench_verified
 from multi_agent_sync.evaluation import swebench_harness
+from multi_agent_sync.evaluation.kimina_docker import (
+    DEFAULT_KIMINA_DOCKER_CONTAINER,
+    DEFAULT_KIMINA_DOCKER_IMAGE,
+    DEFAULT_KIMINA_CONTAINER_PORT,
+    KiminaDockerServer,
+)
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
 
@@ -18,6 +24,7 @@ DEFAULT_LIMIT = 0
 RANDOM_SEED = 42
 DEFAULT_METHODS = "multiagent_streaming,multiagent_no_streaming,plain_llm"
 EVALUATION_MAX_TOKENS = 16384
+LEAN_VERIFIER_BENCHMARKS = {"ma_proofbench", "olymmath_lean"}
 
 
 def get_benchmarks() -> dict[str, BenchmarkSpec]:
@@ -110,6 +117,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum Kimina Lean Server workers per verification request.",
     )
     parser.add_argument(
+        "--kimina-docker",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Start a Kimina Lean Server Docker container for Lean benchmarks if the configured host/port is unavailable. Enabled by default for Lean benchmarks.",
+    )
+    parser.add_argument(
+        "--kimina-docker-image",
+        default=DEFAULT_KIMINA_DOCKER_IMAGE,
+        help="Docker image used when --kimina-docker is enabled.",
+    )
+    parser.add_argument(
+        "--kimina-docker-container",
+        default=DEFAULT_KIMINA_DOCKER_CONTAINER,
+        help="Container name used when --kimina-docker is enabled.",
+    )
+    parser.add_argument(
+        "--kimina-docker-startup-timeout",
+        type=float,
+        default=120.0,
+        help="Seconds to wait for the Kimina Docker server to become reachable.",
+    )
+    parser.add_argument(
+        "--kimina-docker-cleanup",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Stop and remove a Kimina Docker container started by this evaluation run when the run exits.",
+    )
+    parser.add_argument(
         "--lean-agent-workspace",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -192,6 +227,15 @@ def build_parser() -> argparse.ArgumentParser:
 async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
     benchmark = get_benchmarks()[args.benchmark]
     methods = runner.parse_methods(args.methods)
+    kimina_server = await ensure_kimina_server_ready(benchmark, args)
+    try:
+        return await run_evaluation_body(args, benchmark, methods)
+    finally:
+        if kimina_server is not None and getattr(args, "kimina_docker_cleanup", False):
+            await kimina_server.cleanup()
+
+
+async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec, methods: list[str]) -> list[dict[str, Any]]:
     setattr(args, "answer_extractor", benchmark.extract_answer)
     items = benchmark.load_items(args)
     rng = random.Random(args.seed)
@@ -319,6 +363,37 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
     summary = runner.summarize_results(results)
     runner.print_summary(benchmark, summary, output_path)
     return results
+
+
+async def ensure_kimina_server_ready(benchmark: BenchmarkSpec, args: argparse.Namespace) -> KiminaDockerServer | None:
+    if benchmark.name not in LEAN_VERIFIER_BENCHMARKS:
+        return None
+
+    server = build_kimina_docker_server(args)
+    if getattr(args, "kimina_docker", False):
+        await server.ensure_running()
+        return server
+
+    if await server.is_available():
+        return None
+
+    raise RuntimeError(
+        f"Kimina Lean Server is not reachable at http://{server.host}:{server.host_port}. "
+        f"Start it manually, or rerun with --kimina-docker --kimina-port {server.host_port}. "
+        "Preflight stopped before any LLM calls."
+    )
+
+
+def build_kimina_docker_server(args: argparse.Namespace) -> KiminaDockerServer:
+    server = KiminaDockerServer(
+        host=str(getattr(args, "kimina_host", "127.0.0.1")),
+        host_port=int(getattr(args, "kimina_port", 8001)),
+        image=str(getattr(args, "kimina_docker_image", DEFAULT_KIMINA_DOCKER_IMAGE)),
+        container_name=str(getattr(args, "kimina_docker_container", DEFAULT_KIMINA_DOCKER_CONTAINER)),
+        container_port=DEFAULT_KIMINA_CONTAINER_PORT,
+        startup_timeout=float(getattr(args, "kimina_docker_startup_timeout", 120.0) or 120.0),
+    )
+    return server
 
 
 def postprocess_swebench_predictions(

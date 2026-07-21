@@ -226,7 +226,75 @@ def test_parser_accepts_ma_proofbench_with_all_levels_and_one_attempt_by_default
     assert args.attempts == 1
     assert args.kimina_host == "127.0.0.1"
     assert args.kimina_port == 8001
+    assert args.kimina_docker is True
+    assert args.kimina_docker_image == "projectnumina/kimina-lean-server:2.0.0"
+    assert args.kimina_docker_container == "multi-agent-kimina-lean-server"
+    assert args.kimina_docker_cleanup is False
     assert "ma_proofbench" in evaluation.get_benchmarks()
+
+
+def test_parser_accepts_kimina_docker_flags():
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "ma_proofbench",
+            "--kimina-docker",
+            "--kimina-docker-image",
+            "custom/kimina:latest",
+            "--kimina-docker-container",
+            "kimina-test",
+            "--kimina-docker-startup-timeout",
+            "45",
+            "--kimina-docker-cleanup",
+        ]
+    )
+
+    assert args.kimina_docker is True
+    assert args.kimina_docker_image == "custom/kimina:latest"
+    assert args.kimina_docker_container == "kimina-test"
+    assert args.kimina_docker_startup_timeout == 45.0
+    assert args.kimina_docker_cleanup is True
+
+
+def test_parser_accepts_no_kimina_docker_flag():
+    args = evaluation.build_parser().parse_args(["--benchmark", "ma_proofbench", "--no-kimina-docker"])
+
+    assert args.kimina_docker is False
+
+
+def test_run_config_records_kimina_docker_settings(tmp_path):
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "ma_proofbench",
+            "--methods",
+            "plain_llm",
+            "--model",
+            "test-model",
+            "--kimina-docker",
+            "--kimina-docker-image",
+            "custom/kimina:latest",
+            "--kimina-docker-container",
+            "kimina-test",
+            "--kimina-docker-startup-timeout",
+            "45",
+            "--kimina-docker-cleanup",
+        ]
+    )
+
+    config = runner.build_run_config(
+        ma_proofbench.build_benchmark(),
+        args,
+        ["plain_llm"],
+        run_id="run-test",
+        output_path=tmp_path / "results.csv",
+    )
+
+    assert config["settings"]["kimina_docker"] is True
+    assert config["settings"]["kimina_docker_image"] == "custom/kimina:latest"
+    assert config["settings"]["kimina_docker_container"] == "kimina-test"
+    assert config["settings"]["kimina_docker_startup_timeout"] == 45.0
+    assert config["settings"]["kimina_docker_cleanup"] is True
 
 
 def test_parser_accepts_olymmath_benchmarks():
@@ -1084,6 +1152,175 @@ async def test_run_evaluation_writes_unique_csv_and_json_trace_by_default(monkey
         "time_avg_seconds": 0.1,
         "total_token_avg": 3.0,
     }
+
+
+@pytest.mark.asyncio
+async def test_run_evaluation_starts_kimina_docker_by_default_for_lean_benchmark(monkeypatch, tmp_path):
+    created_servers = []
+
+    class FakeKiminaDockerServer:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.started = False
+            self.cleaned = False
+            created_servers.append(self)
+
+        async def ensure_running(self):
+            self.started = True
+
+        async def cleanup(self):
+            self.cleaned = True
+
+    async def fake_run_method(method, prompt, llm, args):
+        return runner.RunResult(raw_output="Final Answer: A", returncode=0, elapsed_seconds=0.1)
+
+    benchmark = BenchmarkSpec(
+        name="ma_proofbench",
+        display_name="MA-ProofBench",
+        default_output_filename="ma.csv",
+        load_items=lambda args: [{"question": "Lean?", "answer": "A"}],
+        build_prompt=lambda row, rng: ("Lean?", "A"),
+        extract_answer=lambda text: "A",
+    )
+
+    monkeypatch.setattr(evaluation, "get_benchmarks", lambda: {"ma_proofbench": benchmark})
+    monkeypatch.setattr(evaluation, "KiminaDockerServer", FakeKiminaDockerServer)
+    monkeypatch.setattr(evaluation, "get_llm", lambda model=None, openai=True, max_tokens=None: "fake-llm")
+    monkeypatch.setattr(runner, "run_method", fake_run_method)
+    monkeypatch.setattr(runner, "progress", lambda items, desc: items)
+    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "fake-model")
+
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "ma_proofbench",
+            "--methods",
+            "plain_llm",
+            "--kimina-docker-cleanup",
+            "--kimina-port",
+            "8001",
+            "--output",
+            str(tmp_path / "results.csv"),
+        ]
+    )
+
+    await evaluation.run_evaluation(args)
+
+    assert len(created_servers) == 1
+    assert created_servers[0].kwargs["host_port"] == 8001
+    assert created_servers[0].kwargs["container_port"] == 8000
+    assert created_servers[0].started is True
+    assert created_servers[0].cleaned is True
+
+
+@pytest.mark.asyncio
+async def test_run_evaluation_fails_fast_when_lean_server_unavailable_with_no_docker(monkeypatch, tmp_path):
+    get_llm_called = False
+    run_method_called = False
+
+    class FakeKiminaDockerServer:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.host = kwargs["host"]
+            self.host_port = kwargs["host_port"]
+
+        async def is_available(self):
+            return False
+
+    def fake_get_llm(*args, **kwargs):
+        nonlocal get_llm_called
+        get_llm_called = True
+        return "fake-llm"
+
+    async def fake_run_method(*args, **kwargs):
+        nonlocal run_method_called
+        run_method_called = True
+        return runner.RunResult(raw_output="Final Answer: A", returncode=0, elapsed_seconds=0.1)
+
+    benchmark = BenchmarkSpec(
+        name="ma_proofbench",
+        display_name="MA-ProofBench",
+        default_output_filename="ma.csv",
+        load_items=lambda args: [{"question": "Lean?", "answer": "A"}],
+        build_prompt=lambda row, rng: ("Lean?", "A"),
+        extract_answer=lambda text: "A",
+    )
+
+    monkeypatch.setattr(evaluation, "get_benchmarks", lambda: {"ma_proofbench": benchmark})
+    monkeypatch.setattr(evaluation, "KiminaDockerServer", FakeKiminaDockerServer)
+    monkeypatch.setattr(evaluation, "get_llm", fake_get_llm)
+    monkeypatch.setattr(runner, "run_method", fake_run_method)
+    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "fake-model")
+
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "ma_proofbench",
+            "--methods",
+            "multiagent_dynamic_streaming,single_agent",
+            "--no-kimina-docker",
+            "--kimina-port",
+            "8001",
+            "--output",
+            str(tmp_path / "results.csv"),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="--kimina-docker"):
+        await evaluation.run_evaluation(args)
+
+    assert get_llm_called is False
+    assert run_method_called is False
+
+
+@pytest.mark.asyncio
+async def test_run_evaluation_does_not_start_kimina_docker_for_non_lean_benchmark(monkeypatch, tmp_path):
+    created_servers = []
+
+    class FakeKiminaDockerServer:
+        def __init__(self, **kwargs):
+            created_servers.append(kwargs)
+
+        async def ensure_running(self):
+            raise AssertionError("Kimina Docker should not start for non-Lean benchmarks.")
+
+        async def cleanup(self):
+            raise AssertionError("Kimina Docker should not clean up when it was not started.")
+
+    async def fake_run_method(method, prompt, llm, args):
+        return runner.RunResult(raw_output="Final Answer: A", returncode=0, elapsed_seconds=0.1)
+
+    benchmark = BenchmarkSpec(
+        name="gpqa",
+        display_name="GPQA",
+        default_output_filename="gpqa.csv",
+        load_items=lambda args: [{"question": "Question?", "answer": "A"}],
+        build_prompt=lambda row, rng: ("Question?", "A"),
+        extract_answer=lambda text: "A",
+    )
+
+    monkeypatch.setattr(evaluation, "get_benchmarks", lambda: {"gpqa": benchmark})
+    monkeypatch.setattr(evaluation, "KiminaDockerServer", FakeKiminaDockerServer)
+    monkeypatch.setattr(evaluation, "get_llm", lambda model=None, openai=True, max_tokens=None: "fake-llm")
+    monkeypatch.setattr(runner, "run_method", fake_run_method)
+    monkeypatch.setattr(runner, "progress", lambda items, desc: items)
+    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "fake-model")
+
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "gpqa",
+            "--methods",
+            "plain_llm",
+            "--kimina-docker",
+            "--output",
+            str(tmp_path / "results.csv"),
+        ]
+    )
+
+    await evaluation.run_evaluation(args)
+
+    assert created_servers == []
 
 
 @pytest.mark.asyncio

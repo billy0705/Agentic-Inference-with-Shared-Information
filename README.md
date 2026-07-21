@@ -229,9 +229,25 @@ Useful evaluation flags:
 
 Lean benchmarks use Kimina Lean Server for verification.
 
-### 1. Start Kimina Lean Server
+### 1. Kimina Lean Server
 
-In a separate directory:
+Lean benchmark evaluation starts a Kimina Lean Server Docker container automatically if `127.0.0.1:8001` is not already serving Kimina:
+
+```bash
+uv run evaluation \
+  --benchmark ma_proofbench \
+  --methods plain_llm \
+  --limit 10 \
+  --kimina-port 8001
+```
+
+This maps host port `8001` to the Kimina container's internal port `8000`, so it does not conflict with the default vLLM/OpenAI-compatible server on host port `8000`.
+
+By default, the Kimina container is kept after the run so future Lean evaluations can reuse it. Add `--kimina-docker-cleanup` to remove a container started by the evaluation when the run exits.
+
+Use `--no-kimina-docker` if you want to manage Kimina yourself. In that mode, evaluation checks `127.0.0.1:8001` before making LLM calls and exits early if the server is unavailable.
+
+To start Kimina manually in a separate directory:
 
 ```bash
 git clone https://github.com/OpenBMB/MA-ProofBench.git
@@ -306,6 +322,11 @@ Lean-specific flags:
 - `--kimina-host <host>`: default `127.0.0.1`
 - `--kimina-port <port>`: default `8001`
 - `--kimina-max-workers <n>`: Kimina workers per request
+- `--kimina-docker` / `--no-kimina-docker`: automatically start `projectnumina/kimina-lean-server:2.0.0` for Lean benchmarks if `--kimina-host/--kimina-port` is unavailable; enabled by default
+- `--kimina-docker-image <image>`: override the Kimina Docker image
+- `--kimina-docker-container <name>`: override the Kimina Docker container name
+- `--kimina-docker-startup-timeout <seconds>`: wait time for Docker-started Kimina to become reachable, default `120`
+- `--kimina-docker-cleanup`: remove a Kimina container started by the evaluation run when the run exits
 - `--lean-agent-workspace`: enable Docker workspace editing plus verifier feedback for Lean multi-agent methods
 
 ## SWE-bench Verified
