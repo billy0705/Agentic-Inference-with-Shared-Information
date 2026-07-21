@@ -49,6 +49,9 @@
     .tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); margin: 12px 0; overflow: auto; }
     .tab { border: 0; background: transparent; color: var(--muted); padding: 10px 4px; white-space: nowrap; }
     .tab.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+    .page-tabs { display: flex; gap: 8px; margin: 0 0 16px; }
+    .page-tab { border: 1px solid var(--line); background: white; color: var(--ink); border-radius: 6px; padding: 9px 12px; }
+    .page-tab.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 800; }
     .pill { display: inline-flex; align-items: center; border: 1px solid var(--line); background: white; border-radius: 999px; min-height: 22px; padding: 2px 8px; margin: 2px 4px 2px 0; font-size: 12px; }
     .good { color: var(--good); }
     .bad { color: var(--bad); }
@@ -64,6 +67,16 @@
     .flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
     .flow-arrow { color: var(--muted); font-family: var(--mono); }
     .mini-panel { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; margin: 8px 0; }
+    .benchmark-block { border: 1px solid var(--line); border-radius: 8px; background: white; padding: 14px; margin: 14px 0; }
+    .benchmark-methods { display: grid; gap: 8px; margin-top: 12px; }
+    .method-row { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(180px, 2fr) repeat(4, minmax(90px, auto)); gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 8px; }
+    .metric-label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    .accuracy-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .accuracy-table th, .accuracy-table td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: middle; }
+    .accuracy-table th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+    .bar-cell { min-width: 180px; }
+    .bar-track { height: 12px; border-radius: 999px; background: var(--code); border: 1px solid var(--line); overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--accent); }
     pre { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12px; line-height: 1.45; border: 1px solid var(--line); background: var(--code); border-radius: 8px; padding: 12px; max-height: 560px; overflow: auto; }
     summary { cursor: pointer; color: var(--accent); font-weight: 700; margin-top: 8px; }
     .empty { border: 1px dashed var(--line); border-radius: 8px; padding: 24px; color: var(--muted); text-align: center; }
@@ -72,6 +85,8 @@
       .app { grid-template-columns: 1fr; }
       aside { height: auto; position: static; }
       .stats, .grid { grid-template-columns: 1fr; }
+      .method-row { grid-template-columns: 1fr; }
+      .page-tabs { flex-wrap: wrap; }
     }
   </style>
 </head>
@@ -95,17 +110,21 @@
     </aside>
     <main>
       <div class="stats" id="stats"></div>
-      <section class="panel" id="runPanel"><div class="empty">Open the repository's output folder to begin.</div></section>
-      <section class="panel">
-        <div class="toolbar">
-          <h2>Example Detail</h2>
+      <div class="page-tabs" id="pageTabs"></div>
+      <section class="panel" id="accuracyPanel"><div class="empty">Open output data to compare benchmark accuracy.</div></section>
+      <div id="detailPage">
+        <section class="panel" id="runPanel"><div class="empty">Open the repository's output folder to begin.</div></section>
+        <section class="panel">
           <div class="toolbar">
-            <select id="exampleFilter"></select>
+            <h2>Example Detail</h2>
+            <div class="toolbar">
+              <select id="exampleFilter"></select>
+            </div>
           </div>
-        </div>
-        <div class="tabs" id="tabs"></div>
-        <div id="tabContent"></div>
-      </section>
+          <div class="tabs" id="tabs"></div>
+          <div id="tabContent"></div>
+        </section>
+      </div>
     </main>
   </div>
 
@@ -126,6 +145,8 @@
       agent: 'all',
       eventAgent: 'all',
       eventType: 'communication',
+      accuracyModels: {},
+      page: 'accuracy',
       tab: 'Overview',
       search: '',
     };
@@ -295,6 +316,7 @@
       state.agent = 'all';
       state.eventAgent = 'all';
       state.eventType = 'communication';
+      state.accuracyModels = {};
       $('sourceStatus').textContent = `${statusText} ${state.data.runs.length} runs found.`;
       render();
     }
@@ -861,11 +883,29 @@
       const run = currentRun();
       const example = currentExample(run);
       renderStats(runs);
+      renderPageTabs();
+      renderAccuracyPanel();
       renderRunList(runs);
       renderRunPanel(run);
       renderExampleSelect(run);
       renderTabs(example);
       renderTab(example);
+      $('accuracyPanel').classList.toggle('hidden', state.page !== 'accuracy');
+      $('detailPage').classList.toggle('hidden', state.page !== 'detail');
+    }
+
+    function renderPageTabs() {
+      const pages = [
+        ['accuracy', 'Accuracy Overview'],
+        ['detail', 'Run Detail'],
+      ];
+      $('pageTabs').innerHTML = pages.map(([id, label]) => `<button class="page-tab ${state.page === id ? 'active' : ''}" type="button" data-page="${id}">${label}</button>`).join('');
+      document.querySelectorAll('[data-page]').forEach((button) => {
+        button.addEventListener('click', () => {
+          state.page = button.dataset.page;
+          render();
+        });
+      });
     }
 
     function renderFilters() {
@@ -900,6 +940,217 @@
         ['Correct rows', correct],
         ['Rows with errors', errors],
       ].map(([label, value]) => `<div class="stat"><span class="subtle">${label}</span><strong>${value}</strong></div>`).join('');
+    }
+
+    function renderAccuracyPanel() {
+      const groups = accuracyBenchmarkGroups();
+      if (!groups.length) {
+        $('accuracyPanel').innerHTML = '<div class="empty">No benchmark summary rows match the current benchmark/model/method filters.</div>';
+        return;
+      }
+      $('accuracyPanel').innerHTML = `
+        <div class="toolbar">
+          <div>
+            <h2>Latest Benchmark Accuracy</h2>
+            <div class="subtle">One block per benchmark. Fake benchmark/model runs are excluded. Each model selector defaults to that benchmark's latest model.</div>
+          </div>
+          <span class="pill">${esc(groups.length)} benchmark blocks</span>
+        </div>
+        ${groups.map(renderBenchmarkAccuracyBlock).join('')}
+      `;
+    }
+
+    function accuracyBenchmarkGroups() {
+      const runsByBenchmark = new Map();
+      const runs = state.data.runs
+        .filter((run) => !isExcludedAccuracyRun(run))
+        .filter((run) => matchesBenchmark(run))
+        .filter((run) => state.method === 'all' || runMethods(run).includes(state.method));
+      for (const run of runs) {
+        const benchmarkRuns = runsByBenchmark.get(run.benchmark) || [];
+        benchmarkRuns.push(run);
+        runsByBenchmark.set(run.benchmark, benchmarkRuns);
+      }
+      return [...runsByBenchmark.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([benchmark, benchmarkRuns]) => {
+        const models = latestModelsForBenchmark(benchmarkRuns);
+        const selectedModel = selectedAccuracyModel(benchmark, models);
+        const latestRun = latestRunForModel(benchmarkRuns, selectedModel);
+        return {
+          benchmark,
+          label: latestRun?.benchmark_display_name || benchmark,
+          models,
+          selected_model: selectedModel,
+          run: latestRun,
+          rows: latestRun ? methodSummaryRows(latestRun) : [],
+        };
+      }).filter((group) => group.run && group.rows.length);
+    }
+
+    function latestModelsForBenchmark(runs) {
+      const latestByModel = new Map();
+      for (const run of runs) {
+        const model = accuracyModelName(run);
+        const current = latestByModel.get(model);
+        if (!current || compareRunRecency(run, current) > 0) {
+          latestByModel.set(model, run);
+        }
+      }
+      return [...latestByModel.entries()]
+        .sort(([, leftRun], [, rightRun]) => compareRunRecency(rightRun, leftRun))
+        .map(([model]) => model);
+    }
+
+    function selectedAccuracyModel(benchmark, models) {
+      const selected = state.accuracyModels[benchmark];
+      if (selected && models.includes(selected)) return selected;
+      const fallback = models[0] || '';
+      if (fallback) state.accuracyModels[benchmark] = fallback;
+      return fallback;
+    }
+
+    function latestRunForModel(runs, model) {
+      return runs
+        .filter((run) => accuracyModelName(run) === model)
+        .sort((left, right) => compareRunRecency(right, left))[0] || null;
+    }
+
+    function renderBenchmarkAccuracyBlock(group) {
+      return `
+        <section class="benchmark-block">
+          <div class="toolbar">
+            <div>
+              <h3>${esc(group.label)}</h3>
+              <div class="subtle">latest run: ${esc(group.run.run_id)} · ${esc(group.run.path)}</div>
+            </div>
+            <div class="field">
+              <label for="accuracyModel_${esc(group.benchmark)}">Model</label>
+              <select id="accuracyModel_${esc(group.benchmark)}" onchange="setAccuracyModel('${esc(jsString(group.benchmark))}', this.value)">
+                ${group.models.map((model) => `<option value="${esc(model)}" ${group.selected_model === model ? 'selected' : ''}>${esc(model)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="benchmark-methods">
+            ${group.rows.map(renderBenchmarkMethodRow).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderBenchmarkMethodRow(row) {
+      return `
+        <div class="method-row">
+          <strong>${esc(row.method)}</strong>
+          <div>
+            <span class="metric-label">Accuracy</span>
+            <div class="bar-track"><div class="bar-fill" style="width: ${esc(barWidth(row.accuracy, 1))}%"></div></div>
+          </div>
+          <div><span class="metric-label">Acc</span><strong>${esc(percent(row.accuracy))}</strong></div>
+          <div><span class="metric-label">Correct / Total</span>${esc(row.correct)} / ${esc(row.total)}</div>
+          <div><span class="metric-label">Invalid</span>${esc(row.invalid)} (${esc(percent(row.invalid_rate))})</div>
+          <div><span class="metric-label">Avg tokens</span>${esc(round(row.avg_total_tokens))}</div>
+        </div>
+      `;
+    }
+
+    function setAccuracyModel(benchmark, model) {
+      state.accuracyModels[benchmark] = model;
+      state.page = 'accuracy';
+      render();
+    }
+
+    function accuracyModelName(run) {
+      return String(run.resolved_model || run.model || 'unknown');
+    }
+
+    function isExcludedAccuracyRun(run) {
+      return isFakeLabel(run.benchmark) ||
+        isFakeLabel(run.benchmark_display_name) ||
+        isFakeLabel(run.model) ||
+        isFakeLabel(run.resolved_model);
+    }
+
+    function isFakeLabel(value) {
+      return String(value || '').toLowerCase().includes('fake');
+    }
+
+    function jsString(value) {
+      return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    }
+
+    function compareRunRecency(left, right) {
+      const leftKey = `${left.run_id || ''} ${left.path || ''}`;
+      const rightKey = `${right.run_id || ''} ${right.path || ''}`;
+      return leftKey.localeCompare(rightKey);
+    }
+
+    function methodSummaryRows(run) {
+      const summaries = normalizedMethodSummaries(run)
+        .filter((row) => state.method === 'all' || row.method === state.method);
+      return summaries.map((row) => ({
+        ...row,
+        benchmark: run.benchmark_display_name || run.benchmark,
+        model: run.resolved_model || run.model,
+        run_id: run.run_id,
+      }));
+    }
+
+    function normalizedMethodSummaries(run) {
+      const entries = Object.entries(run.summary || {});
+      if (entries.length) {
+        return entries.map(([method, stats]) => normalizeMethodSummary(method, stats));
+      }
+      return summarizeRowsByMethod(run.results || []);
+    }
+
+    function summarizeRowsByMethod(results) {
+      const grouped = new Map();
+      for (const row of results) {
+        const method = String(row.method || '');
+        if (!method) continue;
+        const bucket = grouped.get(method) || [];
+        bucket.push(row);
+        grouped.set(method, bucket);
+      }
+      return [...grouped.entries()].map(([method, rows]) => {
+        const total = rows.length;
+        const correct = rows.filter((row) => row.correct === true || row.correct === 'True').length;
+        const invalid = rows.filter((row) => row.pred === null || row.pred === undefined || row.pred === '').length;
+        const totalTokens = rows.reduce((sum, row) => sum + Number(row.total_tokens || 0), 0);
+        return {
+          method,
+          total,
+          correct,
+          accuracy: total ? correct / total : 0,
+          invalid,
+          invalid_rate: total ? invalid / total : 0,
+          avg_total_tokens: total ? totalTokens / total : 0,
+        };
+      });
+    }
+
+    function normalizeMethodSummary(method, stats) {
+      const value = stats && typeof stats === 'object' ? stats : {};
+      return {
+        method,
+        total: Number(value.total || 0),
+        correct: Number(value.correct || 0),
+        accuracy: Number(value.accuracy || 0),
+        invalid: Number(value.invalid || 0),
+        invalid_rate: Number(value.invalid_rate || 0),
+        avg_total_tokens: Number(value.avg_total_tokens || 0),
+      };
+    }
+
+    function percent(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : 'n/a';
+    }
+
+    function barWidth(value, maxValue) {
+      const number = Number(value);
+      const max = Number(maxValue);
+      if (!Number.isFinite(number) || !Number.isFinite(max) || max <= 0) return 0;
+      return Math.max(0, Math.min(100, (number / max) * 100)).toFixed(2);
     }
 
     function renderRunList(runs) {

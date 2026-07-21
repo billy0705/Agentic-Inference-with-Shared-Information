@@ -52,6 +52,14 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "runsForModelFilter" in html
     assert "runsForMethodFilter" in html
     assert "runMethods" in html
+    assert "Accuracy Overview" in html
+    assert "Latest Benchmark Accuracy" in html
+    assert "accuracyBenchmarkGroups" in html
+    assert "benchmark-block" in html
+    assert "setAccuracyModel" in html
+    assert "isExcludedAccuracyRun" in html
+    assert "isFakeLabel" in html
+    assert "bar-fill" in html
 
 
 def test_static_output_viewer_exposes_required_filters_and_tabs():
@@ -74,6 +82,8 @@ def test_static_output_viewer_exposes_required_filters_and_tabs():
     assert "Lifecycle only" in html
     assert "All event types" in html
     assert "eventTypeIsVisible" in html
+    assert "renderPageTabs" in html
+    assert 'page: \'accuracy\'' in html
 
     for tab in ("Overview", "Orchestrator", "Prompt", "Output", "Agents", "Synthesizer", "Events", "Tools", "Raw"):
         assert tab in html
