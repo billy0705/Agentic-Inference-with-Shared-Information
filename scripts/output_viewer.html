@@ -432,6 +432,9 @@
       const method = trace.method ?? fallbackMethod;
       const result = lookup.get(`${method}:${index}`) || {};
       const agents = normalizeAgents(methodTrace);
+      const synthesizerTrace = methodTrace.synthesizer_trace && typeof methodTrace.synthesizer_trace === 'object'
+        ? methodTrace.synthesizer_trace
+        : null;
       return {
         path,
         index,
@@ -446,6 +449,10 @@
         result: compactResult(result),
         selected_agents: selectedAgents(methodTrace),
         agents,
+        synthesizer: normalizeSynthesizerTrace(methodTrace),
+        synthesizer_trace_present: Boolean(synthesizerTrace),
+        synthesizer_trace_mode: synthesizerTrace?.mode || methodTrace.synthesizer_mode || '',
+        synthesizer_trace_token_usage: normalizeTokenUsage(synthesizerTrace?.token_usage),
         events: normalizeEvents(methodTrace),
         receipts: normalizeReceipts(agents),
         workflow: Array.isArray(methodTrace.workflow) ? methodTrace.workflow : [],
@@ -494,10 +501,7 @@
       if (methodTrace.method === 'multiagent_debate') {
         return normalizeDebateTrace(methodTrace);
       }
-      const agents = normalizeNamedAgentTraces(methodTrace);
-      const synthesizer = normalizeSynthesizerTrace(methodTrace);
-      if (synthesizer) agents.push(synthesizer);
-      return agents;
+      return normalizeNamedAgentTraces(methodTrace);
     }
 
     function normalizeNamedAgentTraces(methodTrace) {
@@ -966,7 +970,7 @@
     }
 
     function renderTabs(example) {
-      const tabs = ['Overview', 'Orchestrator', 'Prompt', 'Output', 'Agents', 'Events', 'Tools', 'Raw'];
+      const tabs = ['Overview', 'Orchestrator', 'Prompt', 'Output', 'Agents', 'Synthesizer', 'Events', 'Tools', 'Raw'];
       $('tabs').innerHTML = tabs.map((tab) => `<button class="tab ${state.tab === tab ? 'active' : ''}" type="button" data-tab="${tab}">${tab}</button>`).join('');
       document.querySelectorAll('[data-tab]').forEach((button) => {
         button.addEventListener('click', () => {
@@ -982,7 +986,7 @@
         $('tabContent').innerHTML = '<div class="empty">This run has no JSON trace examples.</div>';
         return;
       }
-      const renderers = { Overview: renderOverview, Orchestrator: renderOrchestrator, Prompt: renderPrompt, Output: renderOutput, Agents: renderAgents, Events: renderEvents, Tools: renderTools, Raw: renderRaw };
+      const renderers = { Overview: renderOverview, Orchestrator: renderOrchestrator, Prompt: renderPrompt, Output: renderOutput, Agents: renderAgents, Synthesizer: renderSynthesizer, Events: renderEvents, Tools: renderTools, Raw: renderRaw };
       $('tabContent').innerHTML = renderers[state.tab](example);
     }
 
@@ -1001,6 +1005,12 @@
           <div>
             <h3>Agents</h3>
             ${(example.agents || []).map((agent) => `<span class="pill">${esc(agent.name)} · ${agent.steps.length} steps</span>`).join('') || '<p class="subtle">No agent traces.</p>'}
+            <p>
+              <span class="pill ${example.synthesizer_trace_present ? 'good' : 'warn'}">
+                ${example.synthesizer_trace_present ? 'Synthesizer trace present' : 'Synthesizer trace missing'}
+              </span>
+              ${example.synthesizer_trace_present ? `<span class="pill">method_trace.synthesizer_trace</span><span class="pill">mode: ${esc(example.synthesizer_trace_mode)}</span><span class="pill">tokens: ${esc(formatTokenUsage(example.synthesizer_trace_token_usage))}</span>` : ''}
+            </p>
           </div>
         </div>
       `;
@@ -1046,6 +1056,34 @@
 
     function renderOutput(example) {
       return `<pre>${esc(example.raw_output)}</pre>`;
+    }
+
+    function renderSynthesizer(example) {
+      const synthesizer = example.synthesizer;
+      if (!synthesizer) {
+        return '<div class="empty">No method_trace.synthesizer_trace data for this example.</div>';
+      }
+      const step = (synthesizer.steps || [])[0] || {};
+      return `
+        <div class="grid">
+          <div>
+            <h3>Decision</h3>
+            <p>
+              <span class="pill">method_trace.synthesizer_trace</span>
+              <span class="pill">mode: ${esc(synthesizer.assignment?.mode || '')}</span>
+              <span class="pill ${synthesizer.assignment?.timed_out ? 'warn' : 'good'}">timed out: ${esc(Boolean(synthesizer.assignment?.timed_out))}</span>
+            </p>
+            <div class="subtle">Token usage: ${esc(formatTokenUsage(step.token_usage))}</div>
+          </div>
+          <div>
+            <h3>Final answer</h3>
+            <pre>${esc(synthesizer.final_output || '')}</pre>
+          </div>
+        </div>
+        <details open><summary>Raw synthesizer prompt</summary><pre>${esc(step.prompt || '')}</pre></details>
+        <details open><summary>Raw synthesizer output</summary><pre>${esc(step.raw_response || '')}</pre></details>
+        <details><summary>Parsed synthesizer trace</summary><pre>${esc(pretty(step.parsed_output || {}))}</pre></details>
+      `;
     }
 
     function renderAgents(example) {

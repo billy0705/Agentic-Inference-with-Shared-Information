@@ -30,6 +30,11 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "normalizeDebateTrace" in html
     assert "normalizeSynthesizerTrace" in html
     assert "synthesizer_trace" in html
+    assert "Synthesizer trace present" in html
+    assert "method_trace.synthesizer_trace" in html
+    assert "renderSynthesizer" in html
+    assert "synthesizer: normalizeSynthesizerTrace(methodTrace)" in html
+    assert "agents.push(synthesizer)" not in html
     assert "methodTrace.method === 'single_agent'" in html
     assert "methodTrace.method === 'majority_vote'" in html
     assert "methodTrace.method === 'multiagent_debate'" in html
@@ -61,7 +66,7 @@ def test_static_output_viewer_exposes_required_filters_and_tabs():
     assert "setAgentFilter" in html
     assert "setEventAgentFilter" in html
 
-    for tab in ("Overview", "Orchestrator", "Prompt", "Output", "Agents", "Events", "Tools", "Raw"):
+    for tab in ("Overview", "Orchestrator", "Prompt", "Output", "Agents", "Synthesizer", "Events", "Tools", "Raw"):
         assert tab in html
 
     assert "renderEventFlow" in html

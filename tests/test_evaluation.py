@@ -1295,7 +1295,10 @@ def test_chess_build_prompt_defines_square_output_and_uses_first_target_as_gold(
 
     assert gold == "h3"
     assert "g2g3 f7f5 f1" in prompt
-    assert "Final Answer: <square>" in prompt
+    assert "Given the chess game g2g3 f7f5 f1" in prompt
+    assert "chess piece at f1" in prompt
+    assert "form (X)" in prompt
+    assert "Give a one line explanation" in prompt
     assert "[a-h][1-8]" in prompt
 
 
@@ -1309,6 +1312,14 @@ def test_chess_build_prompt_defines_square_output_and_uses_first_target_as_gold(
         ("Reason: The piece can move to e4 after considering f7.\ne4", "e4"),
         ("Final Answer: **F6**", "f6"),
         ("Final Answer: g8h7", "h7"),
+        ("Final Answer: (G2)", "g2"),
+        ("(h3) because the bishop can move there from f1.", "h3"),
+        ("Earlier candidates were (e8) and (h7).\n(e7)", "e7"),
+        ("Candidate conflict: (h3) or (g2).\nFinal Answer: (g2)", "g2"),
+        (
+            "Agents considered (c1), (b8), and (b2).\n\n(b2)\nThe move b1 to b2 is valid.",
+            "b2",
+        ),
     ],
 )
 def test_chess_extract_answer_returns_normalized_square(raw_output, expected):
@@ -1317,7 +1328,7 @@ def test_chess_extract_answer_returns_normalized_square(raw_output, expected):
     assert benchmark.extract_answer(raw_output) == expected
 
 
-@pytest.mark.parametrize("raw_output", ["Final Answer: i9", "castle kingside", "f1g2"])
+@pytest.mark.parametrize("raw_output", ["Final Answer: i9", "castle kingside", "f1g2", "(h3) or (g2)"])
 def test_chess_extract_answer_rejects_invalid_or_ambiguous_output(raw_output):
     benchmark = chess.build_benchmark()
 

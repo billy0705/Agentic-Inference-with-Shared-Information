@@ -42,10 +42,12 @@ def load_items(args: argparse.Namespace) -> list[dict[str, Any]]:
 def build_prompt(row: dict[str, Any], rng: random.Random) -> tuple[str, str]:
     del rng
     targets = normalized_targets(row)
+    game_prefix = row["input"].strip()
     prompt = render_prompt(
         "evaluation/chess_question.j2",
         task_prefix=TASK_PREFIX,
-        game_prefix=row["input"],
+        game_prefix=game_prefix,
+        start_square=last_move_fragment(game_prefix),
         output_regex=OUTPUT_REGEX,
     )
     return prompt, targets[0]
@@ -57,6 +59,36 @@ def extract_answer(text: str) -> str | None:
 
     square_value = rf"[*_`]*\s*(?P<square>{OUTPUT_REGEX})(?![a-zA-Z0-9])\s*[*_`]*"
     move_value = rf"[*_`]*\s*(?P<move>{OUTPUT_REGEX}{OUTPUT_REGEX})(?![a-zA-Z0-9])\s*[*_`]*"
+    parenthesized_value = rf"\(\s*{square_value}\s*\)"
+    labelled_parenthesized_patterns = [
+        rf"Final\s+Answer\s*:\s*{parenthesized_value}",
+        rf"final_answer\s*:\s*{parenthesized_value}",
+        rf"Answer\s*:\s*{parenthesized_value}",
+    ]
+    for pattern in labelled_parenthesized_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group("square").lower()
+
+    last_line = last_nonempty_line(text)
+    if last_line is not None:
+        match = re.fullmatch(rf"{parenthesized_value}\.?", last_line, flags=re.IGNORECASE)
+        if match:
+            return match.group("square").lower()
+
+    answer_line_square = last_single_parenthesized_square_line(text)
+    if answer_line_square is not None:
+        return answer_line_square
+
+    parenthesized_squares = [
+        match.group("square").lower()
+        for match in re.finditer(rf"\(\s*(?P<square>{OUTPUT_REGEX})\s*\)", text, flags=re.IGNORECASE)
+    ]
+    if len(parenthesized_squares) == 1:
+        return parenthesized_squares[0]
+    if len(parenthesized_squares) > 1:
+        return None
+
     labelled_move_patterns = [
         rf"Final\s+Answer\s*:\s*{move_value}",
         rf"final_answer\s*:\s*{move_value}",
@@ -78,7 +110,6 @@ def extract_answer(text: str) -> str | None:
         if match:
             return match.group("square").lower()
 
-    last_line = last_nonempty_line(text)
     if last_line is not None:
         match = re.fullmatch(rf"{square_value}\.?", last_line, flags=re.IGNORECASE)
         if match:
@@ -95,6 +126,25 @@ def last_nonempty_line(text: str) -> str | None:
         stripped = line.strip()
         if stripped:
             return stripped
+    return None
+
+
+def last_move_fragment(game_prefix: str) -> str:
+    fragments = game_prefix.split()
+    return fragments[-1] if fragments else ""
+
+
+def last_single_parenthesized_square_line(text: str) -> str | None:
+    for line in reversed(text.splitlines()):
+        squares = [
+            match.group("square").lower()
+            for match in re.finditer(rf"\(\s*(?P<square>{OUTPUT_REGEX})\s*\)", line, flags=re.IGNORECASE)
+        ]
+        unique_squares = set(squares)
+        if len(unique_squares) == 1:
+            return squares[-1]
+        if len(unique_squares) > 1:
+            return None
     return None
 
 
