@@ -12,17 +12,35 @@ MAJORITY_VOTE_AGENT_COUNT = 3
 
 async def run_majority_vote(prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int, dict[str, Any]]:
     agent_runs: list[dict[str, Any]] = []
+    agent_outputs: dict[str, str] = {}
+    agent_traces: dict[str, dict[str, Any]] = {}
     raw_outputs: list[str] = []
     parsed_answers: list[str | None] = []
 
     for agent_index in range(MAJORITY_VOTE_AGENT_COUNT):
+        agent_name = f"VoterAgent{agent_index + 1}"
         raw_output, returncode, trace = await run_single_agent(prompt, llm, args)
         parsed_answer = extract_answer_with_args(raw_output, args)
         raw_outputs.append(raw_output)
         parsed_answers.append(parsed_answer)
+        agent_outputs[agent_name] = raw_output
+        agent_traces[agent_name] = {
+            "assignment": {
+                "method": "majority_vote",
+                "vote": agent_index + 1,
+                "parsed_answer": parsed_answer,
+                "returncode": returncode,
+            },
+            "steps": trace.get("steps", []) if isinstance(trace, dict) else [],
+            "event_receipts": [],
+            "unused_received_events": [],
+            "final_output": raw_output,
+            "stopped_reason": trace.get("stopped_reason") if isinstance(trace, dict) else None,
+        }
         agent_runs.append(
             {
                 "agent": agent_index + 1,
+                "agent_name": agent_name,
                 "raw_output": raw_output,
                 "returncode": returncode,
                 "parsed_answer": parsed_answer,
@@ -39,6 +57,8 @@ async def run_majority_vote(prompt: str, llm: Any, args: argparse.Namespace) -> 
         "prompt": prompt,
         "agents": MAJORITY_VOTE_AGENT_COUNT,
         "agent_runs": agent_runs,
+        "agent_outputs": agent_outputs,
+        "agent_traces": agent_traces,
         "raw_outputs": raw_outputs,
         "parsed_answers": parsed_answers,
         "voted_answer": voted_answer,

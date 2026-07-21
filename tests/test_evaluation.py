@@ -853,6 +853,11 @@ async def test_majority_vote_runs_three_independent_single_agents_and_votes():
     assert result.trace["fallback_used"] is False
     assert len(result.trace["agent_runs"]) == 3
     assert all(agent_run["trace"]["method"] == "single_agent" for agent_run in result.trace["agent_runs"])
+    assert sorted(result.trace["agent_traces"]) == ["VoterAgent1", "VoterAgent2", "VoterAgent3"]
+    assert result.trace["agent_traces"]["VoterAgent1"]["steps"][0]["output"] == "Final Answer: A"
+    assert result.trace["agent_outputs"]["VoterAgent2"] == (
+        "Reason: The second independent voter selects B after checking the prompt.\nFinal Answer: B"
+    )
     debug = runner.build_multiagent_debug(result.trace)
     assert [step["node"] for step in debug["workflow"]] == ["single_agent_votes", "majority_vote"]
 
@@ -941,6 +946,10 @@ async def test_multiagent_debate_uses_three_agents_two_rounds_and_selects_final_
     assert result.trace["majority_answer"] == "B"
     assert len(result.trace["agent_contexts"]) == 3
     assert len(result.trace["agent_contexts"][0]) == 4
+    assert sorted(result.trace["agent_traces"]) == ["DebateAgent1", "DebateAgent2", "DebateAgent3"]
+    assert [step["step"] for step in result.trace["agent_traces"]["DebateAgent1"]["steps"]] == [1, 2]
+    assert result.trace["agent_traces"]["DebateAgent1"]["steps"][1]["raw_response"] == "Agent 1 round 2 says Final Answer: B"
+    assert result.trace["agent_outputs"]["DebateAgent3"] == "Agent 3 round 2 says Final Answer: C"
     debug = runner.build_multiagent_debug(result.trace)
     assert [step["node"] for step in debug["workflow"]] == ["debate_agents", "debate_answer_selection"]
 

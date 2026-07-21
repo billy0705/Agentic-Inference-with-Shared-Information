@@ -488,6 +488,16 @@
       if (methodTrace.method === 'single_agent') {
         return normalizeSingleAgentTrace(methodTrace);
       }
+      if (methodTrace.method === 'majority_vote') {
+        return normalizeMajorityVoteTrace(methodTrace);
+      }
+      if (methodTrace.method === 'multiagent_debate') {
+        return normalizeDebateTrace(methodTrace);
+      }
+      return normalizeNamedAgentTraces(methodTrace);
+    }
+
+    function normalizeNamedAgentTraces(methodTrace) {
       const traces = methodTrace.agent_traces && typeof methodTrace.agent_traces === 'object' ? methodTrace.agent_traces : {};
       const outputs = methodTrace.agent_outputs && typeof methodTrace.agent_outputs === 'object' ? methodTrace.agent_outputs : {};
       const names = [];
@@ -504,6 +514,78 @@
           steps: steps.filter((step) => step && typeof step === 'object').map(normalizeStep),
           event_receipts: Array.isArray(trace.event_receipts) ? trace.event_receipts : [],
           unused_received_events: Array.isArray(trace.unused_received_events) ? trace.unused_received_events : [],
+          final_output: truncateText(finalOutput),
+          tools: findToolActions(String(finalOutput)),
+        };
+      });
+    }
+
+    function normalizeMajorityVoteTrace(methodTrace) {
+      const namedAgents = normalizeNamedAgentTraces(methodTrace);
+      if (namedAgents.length) return namedAgents;
+      const runs = Array.isArray(methodTrace.agent_runs) ? methodTrace.agent_runs : [];
+      return runs.filter((run) => run && typeof run === 'object').map((run, index) => {
+        const trace = run.trace && typeof run.trace === 'object' ? run.trace : {};
+        const steps = Array.isArray(trace.steps) ? trace.steps : [];
+        const finalOutput = run.raw_output || trace.raw_output || '';
+        return {
+          name: String(run.agent_name || `VoterAgent${run.agent || index + 1}`),
+          assignment: {
+            method: 'majority_vote',
+            vote: run.agent ?? index + 1,
+            parsed_answer: run.parsed_answer,
+            returncode: run.returncode,
+            stopped_reason: trace.stopped_reason || '',
+          },
+          steps: steps.filter((step) => step && typeof step === 'object').map((step) => normalizeSingleAgentStep(step, trace)),
+          event_receipts: [],
+          unused_received_events: [],
+          final_output: truncateText(finalOutput),
+          tools: findToolActions(String(finalOutput)),
+        };
+      });
+    }
+
+    function normalizeDebateTrace(methodTrace) {
+      const namedAgents = normalizeNamedAgentTraces(methodTrace);
+      if (namedAgents.length) return namedAgents;
+      const contexts = Array.isArray(methodTrace.agent_contexts) ? methodTrace.agent_contexts : [];
+      const rounds = Array.isArray(methodTrace.round_traces) ? methodTrace.round_traces : [];
+      const agentCount = Number(methodTrace.agents || contexts.length || 0);
+      return Array.from({ length: agentCount }, (_, agentIndex) => {
+        const finalOutput = Array.isArray(methodTrace.final_outputs) ? methodTrace.final_outputs[agentIndex] || '' : '';
+        const steps = rounds.map((round, roundIndex) => {
+          const responses = round && Array.isArray(round.agent_responses) ? round.agent_responses : [];
+          const response = responses.find((item) => Number(item?.agent) === agentIndex + 1) || responses[agentIndex] || {};
+          return {
+            step: round?.round ?? roundIndex + 1,
+            prompt: truncateText(response.prompt || ''),
+            raw_response: truncateText(response.response || ''),
+            parsed_output: {
+              round: round?.round ?? roundIndex + 1,
+              output: response.response || '',
+            },
+            published_events: [],
+            inbox_events: [],
+            used_event_ids: [],
+            token_usage: normalizeTokenUsage(response.token_usage),
+            open_prompt: false,
+            duration_seconds: response.duration_seconds,
+            is_reactive: false,
+            reactive_reason: '',
+            tools: findToolActions(String(response.response || '')),
+          };
+        });
+        return {
+          name: `DebateAgent${agentIndex + 1}`,
+          assignment: {
+            method: 'multiagent_debate',
+            agent: agentIndex + 1,
+            prompt_style: methodTrace.prompt_style || '',
+          },
+          steps,
+          event_receipts: [],
+          unused_received_events: [],
           final_output: truncateText(finalOutput),
           tools: findToolActions(String(finalOutput)),
         };

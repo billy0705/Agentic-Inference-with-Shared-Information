@@ -26,8 +26,14 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "formatTokenUsage" in html
     assert "Token usage" in html
     assert "normalizeSingleAgentTrace" in html
+    assert "normalizeMajorityVoteTrace" in html
+    assert "normalizeDebateTrace" in html
     assert "methodTrace.method === 'single_agent'" in html
+    assert "methodTrace.method === 'majority_vote'" in html
+    assert "methodTrace.method === 'multiagent_debate'" in html
     assert "SingleAgent" in html
+    assert "VoterAgent" in html
+    assert "DebateAgent" in html
     assert "normalizeSingleAgentStep(step, methodTrace)" in html
     assert "step.prompt || methodTrace.prompt" in html
     assert "open_prompt" in html
