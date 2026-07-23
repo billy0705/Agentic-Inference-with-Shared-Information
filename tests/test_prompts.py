@@ -130,14 +130,20 @@ async def test_agent_prompt_is_rendered_from_template():
     assert "Assigned subtask:\nResearch synchronization" in prompt
     assert "Current step:\n1 of 3" in prompt
     assert "Local notes:\n- None yet." in prompt
-    assert "Recent relevant events:\n- No relevant external findings yet." in prompt
+    assert "Shared findings:\n- No shared findings yet." in prompt
+    assert "Check shared findings before answering." in prompt
+    assert "Recent relevant events" not in prompt
     assert "Respond with concise summaries only." in prompt
+    assert "ANSWER_CHOICE:" in prompt
+    assert "NEXT_STEP:" in prompt
+    assert "CONFIDENCE:" not in prompt
+    assert "confidence" not in prompt.lower()
     assert "Respond with concise summaries only." not in inspect.getsource(ResearchAgent.build_prompt)
 
 
 def test_graph_prompts_are_not_embedded_in_node_functions():
     assert "Answer the user task directly with one concise response." not in inspect.getsource(nodes.direct_answer_node)
-    assert "You are the Synthesizer for a LangGraph multi-agent prototype." not in inspect.getsource(nodes.synthesizer_node)
+    assert "You are the Summarizer for a LangGraph multi-agent prototype." not in inspect.getsource(nodes.synthesizer_node)
     assert "Do not solve the task again." not in inspect.getsource(nodes.synthesizer_node)
 
 
@@ -162,13 +168,17 @@ def test_orchestrator_prompt_is_rendered_from_template():
 def test_dynamic_orchestrator_prompt_allows_direct_and_requires_detailed_subagents():
     prompt = orchestrator.build_dynamic_orchestrator_prompt("Analyze this benchmark result.")
 
+    assert len(prompt) < 3200
     assert "You are the dynamic subagent orchestrator" in prompt
     assert "Default to multi_agent mode." in prompt
     assert "You may choose direct mode only when you are truthfully 100% certain" in prompt
     assert "The reason must explain truthfully why direct or multi_agent was selected." in prompt
     assert "Never claim 100% certainty for a normal benchmark question unless the answer is explicitly given in the prompt." in prompt
+    assert "Diverse subagents" in prompt
+    assert "Do not create overlapping roles" in prompt
+    assert "evidence, check, or perspective" in prompt
     assert '"direct_certainty": "100_percent"' in prompt
     assert '"mode": "direct"' in prompt
     assert '"role": "specific expertise and responsibility for this subagent"' in prompt
-    assert '"description": "detailed operating description' in prompt
+    assert '"description": "unique evidence, constraints, checks, or perspective' in prompt
     assert "Analyze this benchmark result." in prompt

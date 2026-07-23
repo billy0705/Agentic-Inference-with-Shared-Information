@@ -1136,7 +1136,7 @@ async def test_run_evaluation_writes_unique_csv_and_json_trace_by_default(monkey
     assert trace["multiagent_debug"]["workflow"] == [
         {"node": "orchestrator", "description": "Created plan and selected subagents."},
         {"node": "SolverAgent", "description": "Ran subagent and published/received messages."},
-        {"node": "synthesizer", "description": "Combined subagent outputs and event log into final answer."},
+        {"node": "summarizer", "description": "Summarized each subagent's last summary into final answer."},
     ]
 
     run_config = json.loads(run_config_path.read_text(encoding="utf-8"))

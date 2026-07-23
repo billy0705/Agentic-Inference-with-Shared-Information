@@ -219,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=600.0,
         help="Maximum total runtime per multiagent example, in seconds.",
     )
-    parser.add_argument("--synthesis-timeout", type=float, default=60.0, help="Maximum synthesizer runtime, in seconds.")
+    parser.add_argument("--synthesis-timeout", type=float, default=60.0, help="Maximum summarizer runtime, in seconds.")
     parser.add_argument("--seed", type=int, default=RANDOM_SEED, help="Random seed for answer shuffling.")
     return parser
 

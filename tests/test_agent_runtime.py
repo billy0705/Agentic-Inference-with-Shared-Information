@@ -177,6 +177,28 @@ class FakeLeanFeedbackTool:
         }
 
 
+class LocalNotesOnlyLLM:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            return FakeResponse(
+                "SUMMARY:\nLong reasoning summary that should not be copied into the next local notes prompt.\n"
+                "SHARE_FINDING:\nCandidate A is currently strongest.\n"
+                "LOCAL_NOTES:\nANSWER_CHOICE: A\nNEXT_STEP: Check whether another candidate contradicts A."
+            )
+        assert "ANSWER_CHOICE: A" in prompt
+        assert "NEXT_STEP: Check whether another candidate contradicts A." in prompt
+        assert "Long reasoning summary that should not be copied" not in prompt
+        return FakeResponse(
+            "FINAL:\nFinal Answer: A\n"
+            "SHARE_FINDING:\nFinal candidate is A.\n"
+            "LOCAL_NOTES:\nANSWER_CHOICE: A\nNEXT_STEP: Finalize."
+        )
+
+
 def build_agents(streamer: InMemoryEventStreamer, run_id: str = "run-agent-test"):
     llm = FakeLLM()
     kwargs = {
@@ -317,6 +339,34 @@ async def test_agent_step_trace_records_token_usage_from_llm_response_metadata()
         "completion_tokens": 7,
         "total_tokens": 18,
     }
+    assert "confidence" not in step["parsed_output"]
+
+
+@pytest.mark.asyncio
+async def test_agent_prompt_reuses_only_short_local_notes_not_previous_summary():
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    llm = LocalNotesOnlyLLM()
+    agent = ResearchAgent(
+        run_id="run-local-notes",
+        task="Choose the best option.",
+        assigned_subtask="Pick an answer and revise once.",
+        llm=llm,
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        max_steps=2,
+        step_delay_seconds=0,
+    )
+
+    output = await agent.run()
+
+    assert "Final Answer: A" in output
+    assert len(llm.prompts) == 2
+    assert "Long reasoning summary that should not be copied" not in llm.prompts[1]
+    assert agent.local_notes == [
+        "ANSWER_CHOICE: A\nNEXT_STEP: Check whether another candidate contradicts A.",
+        "ANSWER_CHOICE: A\nNEXT_STEP: Finalize.",
+    ]
 
 
 @pytest.mark.asyncio

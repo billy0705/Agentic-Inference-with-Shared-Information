@@ -16,8 +16,8 @@ class FakeLLM:
     async def ainvoke(self, prompt: str) -> FakeResponse:
         if "Answer the user task directly" in prompt:
             return FakeResponse("Direct answer.")
-        if "Synthesizer" in prompt:
-            return FakeResponse("Synthesized answer.")
+        if "Summarizer" in prompt:
+            return FakeResponse("Summarized answer.")
         return FakeResponse(
             "SUMMARY:\nSolved a step.\n"
             "SHARE_FINDING:\nUseful calculation finding.\n"

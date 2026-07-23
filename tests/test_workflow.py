@@ -20,7 +20,7 @@ class FakeLLM:
             return FakeResponse(orchestrator_response_for_prompt(prompt))
         if "Answer the user task directly" in prompt:
             return FakeResponse("A direct answer from one LLM call.")
-        if "Synthesizer" in prompt or "final answer" in prompt.lower():
+        if "Summarizer" in prompt or "final answer" in prompt.lower():
             return FakeResponse("A concise final plan that combines research, coding, and critique outputs.")
         return FakeResponse(
             "SUMMARY:\nUseful step summary.\n"
@@ -86,10 +86,10 @@ class DynamicFakeLLM:
                 "CONFIDENCE:\n0.8\n"
                 "LOCAL_NOTES:\nPlanner complete."
             )
-        if "Synthesizer" in prompt:
+        if "Summarizer" in prompt:
             assert "ImplementationPlanner" in prompt
             assert "CriticalDebateAgent" in prompt
-            return FakeResponse("Synthesized dynamic-agent answer.")
+            return FakeResponse("Summarized dynamic-agent answer.")
         return FakeResponse("Unexpected prompt")
 
 
@@ -126,9 +126,9 @@ class DynamicDirectFakeLLM:
         return FakeResponse("Unexpected prompt")
 
 
-class HangingSynthesizerLLM(FakeLLM):
+class HangingSummarizerLLM(FakeLLM):
     async def ainvoke(self, prompt: str) -> FakeResponse:
-        if "Synthesizer" in prompt:
+        if "Summarizer" in prompt:
             await asyncio.sleep(10)
         return await super().ainvoke(prompt)
 
@@ -137,8 +137,8 @@ class LateFindingLLM:
     async def ainvoke(self, prompt: str) -> FakeResponse:
         if "You are the model-based orchestrator" in prompt:
             return FakeResponse(orchestrator_response_for_prompt(prompt))
-        if "Synthesizer" in prompt:
-            return FakeResponse("Synthesized answer from traced agent communication.")
+        if "Summarizer" in prompt:
+            return FakeResponse("Summarized answer from traced agent communication.")
         if "Agent name:\nSolverAgent" in prompt:
             await asyncio.sleep(0.01)
             return FakeResponse(
@@ -190,8 +190,8 @@ class WorkflowToolLLM:
             )
         if "You are CodingAgent" in prompt:
             raise AssertionError("CodingAgent should receive the Docker workspace tool prompt")
-        if "Synthesizer" in prompt:
-            return FakeResponse("Synthesized workspace tool answer.")
+        if "Summarizer" in prompt:
+            return FakeResponse("Summarized workspace tool answer.")
         return FakeResponse(
             "SUMMARY:\nText-only agent step.\n"
             "SHARE_FINDING:\nText-only finding.\n"
@@ -200,20 +200,61 @@ class WorkflowToolLLM:
         )
 
 
-class SynthesizerTraceLLM(FakeLLM):
+class SummarizerTraceLLM(FakeLLM):
     def __init__(self) -> None:
-        self.synthesizer_prompts: list[str] = []
+        self.summarizer_prompts: list[str] = []
 
     async def ainvoke(self, prompt: str) -> FakeResponse:
-        if "You are the Synthesizer" in prompt:
-            self.synthesizer_prompts.append(prompt)
+        if "You are the Summarizer" in prompt:
+            self.summarizer_prompts.append(prompt)
             return FakeResponse("Final Answer: summarized-agent-output")
         return await super().ainvoke(prompt)
 
 
+class SummarizerLastSummaryLLM:
+    def __init__(self) -> None:
+        self.agent_prompt_counts: dict[str, int] = {}
+        self.summarizer_prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if "You are the model-based orchestrator" in prompt:
+            return FakeResponse(orchestrator_response_for_prompt("Calculate 2 + 2."))
+        if "You are the Summarizer" in prompt:
+            self.summarizer_prompts.append(prompt)
+            assert "Solver step 2 final summary." in prompt
+            assert "Verifier step 2 final summary." in prompt
+            assert "Solver step 1 stale summary." not in prompt
+            assert "Verifier step 1 stale summary." not in prompt
+            assert "SHARE_FINDING" not in prompt
+            assert "LOCAL_NOTES" not in prompt
+            assert "Runtime event log" not in prompt
+            assert "[finding]" not in prompt
+            return FakeResponse("Final Answer: last-summaries-only")
+        if "Agent name:\nSolverAgent" in prompt:
+            return self.agent_response("Solver")
+        if "Agent name:\nVerifierAgent" in prompt:
+            return self.agent_response("Verifier")
+        return FakeResponse("Unexpected prompt")
+
+    def agent_response(self, label: str) -> FakeResponse:
+        count = self.agent_prompt_counts.get(label, 0) + 1
+        self.agent_prompt_counts[label] = count
+        if count == 1:
+            return FakeResponse(
+                f"SUMMARY:\n{label} step 1 stale summary.\n"
+                f"SHARE_FINDING:\n{label} shared finding should stay out of summarizer input.\n"
+                "LOCAL_NOTES:\nANSWER_CHOICE: stale\nNEXT_STEP: continue."
+            )
+        return FakeResponse(
+            f"SUMMARY:\n{label} step 2 final summary.\n"
+            f"SHARE_FINDING:\n{label} final shared finding should stay out of summarizer input.\n"
+            "LOCAL_NOTES:\nANSWER_CHOICE: final\nNEXT_STEP: finish."
+        )
+
+
 class RoleAwareAggregationLLM:
     def __init__(self) -> None:
-        self.synthesizer_prompts: list[str] = []
+        self.summarizer_prompts: list[str] = []
 
     async def ainvoke(self, prompt: str) -> FakeResponse:
         if "dynamic subagent orchestrator" in prompt:
@@ -267,8 +308,8 @@ class RoleAwareAggregationLLM:
             return FakeResponse("FINAL:\nThe verified candidate is option A. Final Answer: A\nCONFIDENCE:\n0.9")
         if "Agent name:\nCriticalReviewer" in prompt:
             return FakeResponse("FINAL:\nA possible objection points to option B. Final Answer: B\nCONFIDENCE:\n0.6")
-        if "You are the Synthesizer" in prompt:
-            self.synthesizer_prompts.append(prompt)
+        if "You are the Summarizer" in prompt:
+            self.summarizer_prompts.append(prompt)
             return FakeResponse("Final Answer: B")
         return FakeResponse("Unexpected prompt")
 
@@ -495,7 +536,7 @@ async def test_dynamic_workflow_constructs_free_named_agents_and_synthesizes_out
     assert state["selected_agents"][0]["description"] == "Identifies files, tests, and integration points."
     assert state["selected_agents"][1]["critical_debate"] is True
     assert any(event.event_type == "critique" and event.source == "CriticalDebateAgent" for event in state["event_log"])
-    assert state["final_answer"] == "Synthesized dynamic-agent answer."
+    assert state["final_answer"] == "Summarized dynamic-agent answer."
 
 
 @pytest.mark.asyncio
@@ -568,7 +609,7 @@ async def test_workflow_injects_docker_bash_tool_into_fixed_coding_agent():
     coding_trace = state["agent_traces"]["CodingAgent"]
     assert coding_trace["assignment"]["workspace_access"] == "write"
     assert coding_trace["steps"][0]["parsed_output"]["tool_result"]["stdout"] == "workflow output from docker\n"
-    assert state["final_answer"] == "Synthesized workspace tool answer."
+    assert state["final_answer"] == "Summarized workspace tool answer."
 
 
 def test_dynamic_workspace_policy_does_not_let_critical_debate_consume_writer_slot():
@@ -625,8 +666,8 @@ async def test_agent_traces_include_prompt_response_parsed_output_and_published_
 
 
 @pytest.mark.asyncio
-async def test_summarize_outputs_synthesizer_prompt_and_response_are_traced():
-    llm = SynthesizerTraceLLM()
+async def test_summarize_outputs_summarizer_prompt_and_response_are_traced():
+    llm = SummarizerTraceLLM()
 
     state = await run_workflow(
         task="Calculate 2 + 2.",
@@ -638,14 +679,40 @@ async def test_summarize_outputs_synthesizer_prompt_and_response_are_traced():
     )
 
     assert state["final_answer"] == "Final Answer: summarized-agent-output"
-    assert len(llm.synthesizer_prompts) == 1
-    assert "Do not solve the task again." in llm.synthesizer_prompts[0]
-    assert "summarize the selected output" in llm.synthesizer_prompts[0]
-    assert "[agent_done]" not in llm.synthesizer_prompts[0]
-    assert state["synthesizer_trace"]["prompt"] == llm.synthesizer_prompts[0]
+    assert len(llm.summarizer_prompts) == 1
+    assert "You are the Summarizer" in llm.summarizer_prompts[0]
+    assert "Do not solve the task again." in llm.summarizer_prompts[0]
+    assert "summarize the selected answer from the agents' last summaries" in llm.summarizer_prompts[0]
+    assert "Agent last summaries:" in llm.summarizer_prompts[0]
+    assert "Runtime event log" not in llm.summarizer_prompts[0]
+    assert "[agent_done]" not in llm.summarizer_prompts[0]
+    assert state["synthesizer_trace"]["prompt"] == llm.summarizer_prompts[0]
     assert state["synthesizer_trace"]["raw_response"] == "Final Answer: summarized-agent-output"
     assert state["synthesizer_trace"]["final_answer"] == "Final Answer: summarized-agent-output"
     assert state["synthesizer_trace"]["timed_out"] is False
+
+
+@pytest.mark.asyncio
+async def test_summarizer_receives_only_each_agents_last_summary():
+    llm = SummarizerLastSummaryLLM()
+
+    state = await run_workflow(
+        task="Calculate 2 + 2.",
+        llm=llm,
+        max_steps_per_agent=2,
+        total_runtime_timeout=5,
+        stream_to_console=False,
+        synthesizer_mode="summarize_outputs",
+        enable_agent_message_streaming=False,
+    )
+
+    assert state["final_answer"] == "Final Answer: last-summaries-only"
+    assert len(llm.summarizer_prompts) == 1
+    assert state["synthesizer_trace"]["prompt"] == llm.summarizer_prompts[0]
+    assert state["synthesizer_trace"]["agent_last_summaries"] == {
+        "SolverAgent": "Solver step 2 final summary.",
+        "VerifierAgent": "Verifier step 2 final summary.",
+    }
 
 
 @pytest.mark.asyncio
@@ -664,14 +731,14 @@ async def test_dynamic_summarize_outputs_uses_candidate_majority_with_role_conte
     )
 
     assert state["final_answer"] == "Final Answer: A"
-    assert len(llm.synthesizer_prompts) == 1
-    synthesizer_prompt = llm.synthesizer_prompts[0]
-    assert "Candidate aggregation:" in synthesizer_prompt
-    assert "DomainSolver" in synthesizer_prompt
-    assert "Primary domain solver." in synthesizer_prompt
-    assert "Solve the question and choose the best option." in synthesizer_prompt
-    assert "candidate: A" in synthesizer_prompt
-    assert "candidate: B" in synthesizer_prompt
+    assert len(llm.summarizer_prompts) == 1
+    summarizer_prompt = llm.summarizer_prompts[0]
+    assert "Candidate aggregation:" in summarizer_prompt
+    assert "DomainSolver" in summarizer_prompt
+    assert "Primary domain solver." in summarizer_prompt
+    assert "Solve the question and choose the best option." in summarizer_prompt
+    assert "candidate: A" in summarizer_prompt
+    assert "candidate: B" in summarizer_prompt
     aggregation = state["synthesizer_trace"]["candidate_aggregation"]
     assert aggregation["selected_candidate"] == "A"
     assert aggregation["selection_rule"] == "majority_vote"
@@ -690,18 +757,18 @@ async def test_missing_options_guard_is_added_to_final_answer():
 
 
 @pytest.mark.asyncio
-async def test_workflow_uses_fallback_when_synthesizer_times_out():
+async def test_workflow_uses_fallback_when_summarizer_times_out():
     state = await run_workflow(
         task="Build a prototype chess website",
-        llm=HangingSynthesizerLLM(),
+        llm=HangingSummarizerLLM(),
         max_steps_per_agent=1,
         total_runtime_timeout=10,
         synthesis_timeout=0.05,
         stream_to_console=False,
     )
 
-    assert "Synthesis timed out" in state["final_answer"]
-    assert any(event.event_type == "warning" and event.source == "Synthesizer" for event in state["event_log"])
+    assert "Summarizer timed out" in state["final_answer"]
+    assert any(event.event_type == "warning" and event.source == "Summarizer" for event in state["event_log"])
     assert not any(event.event_type == "final_summary" for event in state["event_log"])
 
 

@@ -288,13 +288,9 @@ def apply_workspace_access_policy(
 async def synthesizer_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
     llm = state.get("llm") or get_llm()
-    candidate_aggregation = build_candidate_aggregation(state)
-    event_lines = "\n".join(
-        f"- [{event.event_type}] {event.source}: {event.content}"
-        for event in state.get("event_log", [])
-        if event.event_type in {"finding", "warning", "critique"}
-    )
-    output_lines = "\n".join(f"- {name}: {output}" for name, output in state.get("agent_outputs", {}).items())
+    agent_last_summaries = build_agent_last_summaries(state)
+    candidate_aggregation = build_candidate_aggregation(state, agent_last_summaries)
+    output_lines = format_agent_summary_lines(agent_last_summaries)
     candidate_lines = format_candidate_aggregation(candidate_aggregation)
     synthesizer_mode = state.get("synthesizer_mode", "generic")
     template_name = "graph/synthesizer_summarize_outputs.j2" if synthesizer_mode == "summarize_outputs" else "graph/synthesizer.j2"
@@ -302,7 +298,6 @@ async def synthesizer_node(state: GraphState) -> GraphState:
         template_name,
         task=state["task"],
         output_lines=output_lines,
-        event_lines=event_lines,
         candidate_lines=candidate_lines,
     )
     raw_response = ""
@@ -320,9 +315,9 @@ async def synthesizer_node(state: GraphState) -> GraphState:
         await streamer.publish(
             AgentEvent(
                 run_id=state["run_id"],
-                source="Synthesizer",
+                source="Summarizer",
                 event_type="warning",
-                content="Synthesis timed out; using deterministic fallback summary.",
+                content="Summarizer timed out; using deterministic fallback summary.",
             )
         )
     final_answer = apply_missing_options_guard(state["task"], final_answer)
@@ -346,13 +341,58 @@ async def synthesizer_node(state: GraphState) -> GraphState:
             "token_usage": token_usage,
             "timed_out": timed_out,
             "candidate_aggregation": candidate_aggregation,
+            "agent_last_summaries": agent_last_summaries,
         }
     return next_state
 
 
-def build_candidate_aggregation(state: GraphState) -> dict[str, Any]:
+def build_agent_last_summaries(state: GraphState) -> dict[str, str]:
+    traces = state.get("agent_traces", {})
+    outputs = state.get("agent_outputs", {})
+    names: list[str] = []
+    for assignment in state.get("assignments", []):
+        if isinstance(assignment, dict) and assignment.get("agent_name"):
+            names.append(str(assignment["agent_name"]))
+    names.extend(str(name) for name in outputs)
+    if isinstance(traces, dict):
+        names.extend(str(name) for name in traces)
+
+    summaries: dict[str, str] = {}
+    for name in dict.fromkeys(names):
+        summary = last_summary_from_trace(traces.get(name) if isinstance(traces, dict) else None)
+        if not summary:
+            summary = str(outputs.get(name) or "").strip() if isinstance(outputs, dict) else ""
+        if summary:
+            summaries[name] = summary
+    return summaries
+
+
+def last_summary_from_trace(trace: Any) -> str:
+    if not isinstance(trace, dict):
+        return ""
+    steps = trace.get("steps")
+    if not isinstance(steps, list):
+        return ""
+    for step in reversed(steps):
+        if not isinstance(step, dict):
+            continue
+        parsed_output = step.get("parsed_output")
+        if not isinstance(parsed_output, dict):
+            continue
+        summary = str(parsed_output.get("summary") or "").strip()
+        if summary:
+            return summary
+    return ""
+
+
+def format_agent_summary_lines(agent_last_summaries: dict[str, str]) -> str:
+    return "\n".join(f"- {name}: {summary}" for name, summary in agent_last_summaries.items())
+
+
+def build_candidate_aggregation(state: GraphState, agent_last_summaries: dict[str, str] | None = None) -> dict[str, Any]:
     benchmark = str(state.get("benchmark", "") or "")
     extractor = answer_extractor_for_benchmark(benchmark)
+    summary_texts = agent_last_summaries or build_agent_last_summaries(state)
     assignments = {
         str(assignment.get("agent_name")): assignment
         for assignment in state.get("assignments", [])
@@ -370,7 +410,7 @@ def build_candidate_aggregation(state: GraphState) -> dict[str, Any]:
             "selection_rule": "no_benchmark_extractor",
         }
 
-    for agent_name, output in state.get("agent_outputs", {}).items():
+    for agent_name, output in summary_texts.items():
         output_text = str(output or "")
         candidate = extractor(output_text)
         assignment = assignments.get(agent_name, {})
@@ -492,12 +532,12 @@ def compact_text(text: str, *, limit: int) -> str:
 
 def build_fallback_summary(state: GraphState) -> str:
     outputs = state.get("agent_outputs", {})
-    parts = [f"Synthesis timed out; fallback summary for task: {state['task']}."]
+    parts = [f"Summarizer timed out; fallback summary for task: {state['task']}."]
     for name, output in outputs.items():
         if output:
             parts.append(f"{name}: {output}")
     if len(parts) == 1:
-        parts.append("No agent outputs were available before synthesis timed out.")
+        parts.append("No agent outputs were available before the summarizer timed out.")
     return "\n".join(parts)
 
 

@@ -20,7 +20,7 @@ Agent rules:
 {% if critical_debate %}
 
 Critical debate responsibility:
-Challenge assumptions, identify contradictions, and share critiques that other agents and the Synthesizer should consider.
+Challenge assumptions, identify contradictions, and share critiques that other agents and the Summarizer should consider.
 {% endif %}
 
 Assigned subtask:
@@ -44,8 +44,11 @@ Current step:
 Local notes so far:
 {{ notes }}
 
-Recent relevant events from other agents:
+Shared findings from other agents:
 {{ events }}
+
+Check shared findings before answering.
+If used or rejected, mention the source briefly in your response.
 
 Bash observations so far:
 {{ tool_observations }}
@@ -61,11 +64,9 @@ ACTION:
 SHARE_FINDING:
 <one finding useful to other agents, or leave blank>
 
-CONFIDENCE:
-<number from 0.0 to 1.0>
-
 LOCAL_NOTES:
-<short private working notes summary for later steps>
+ANSWER_CHOICE: <the current answer/candidate/implementation direction, or "undecided">
+NEXT_STEP: <one short next check, tool action target, or revision target>
 {% if feedback_tool_name %}
 
 To verify the current Lean candidate through the external verifier server:
@@ -76,11 +77,9 @@ ACTION:
 SHARE_FINDING:
 <one finding useful to other agents, or leave blank>
 
-CONFIDENCE:
-<number from 0.0 to 1.0>
-
 LOCAL_NOTES:
-<short private working notes summary for later steps>
+ANSWER_CHOICE: <the current Lean proof/candidate direction, or "undecided">
+NEXT_STEP: <one short verifier follow-up or proof revision target>
 {% endif %}
 
 To finish this agent's work:
@@ -91,8 +90,6 @@ FINAL:
 SHARE_FINDING:
 <one finding useful to other agents, or leave blank>
 
-CONFIDENCE:
-<number from 0.0 to 1.0>
-
 LOCAL_NOTES:
-<short private working notes summary for later steps>
+ANSWER_CHOICE: <the final answer/candidate/implementation direction you choose>
+NEXT_STEP: Finalize this assigned subtask.

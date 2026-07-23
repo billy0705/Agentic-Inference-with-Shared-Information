@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -13,11 +12,20 @@ from multi_agent_sync.prompts import render_prompt
 from multi_agent_sync.token_usage import extract_token_usage
 
 
+MAX_LOCAL_NOTES_CHARS = 500
+
+
+def compact_local_notes(notes: str) -> str:
+    normalized = notes.strip()
+    if len(normalized) <= MAX_LOCAL_NOTES_CHARS:
+        return normalized
+    return f"{normalized[: MAX_LOCAL_NOTES_CHARS - 3].rstrip()}..."
+
+
 @dataclass
 class StepResult:
     summary: str = ""
     share_finding: str = ""
-    confidence: float = 0.7
     local_notes: str = ""
     status: str = "continue"
     tool_action: dict[str, Any] | None = None
@@ -27,7 +35,6 @@ class StepResult:
         return {
             "summary": self.summary,
             "share_finding": self.share_finding,
-            "confidence": self.confidence,
             "local_notes": self.local_notes,
             "status": self.status,
             "tool_action": self.tool_action,
@@ -68,6 +75,7 @@ class BaseAgent:
     inbox: list[AgentEvent] = field(default_factory=list)
     observed_events: list[AgentEvent] = field(default_factory=list)
     local_notes: list[str] = field(default_factory=list)
+    output_summaries: list[str] = field(default_factory=list)
     local_output: str = ""
     is_done: bool = False
     reactive_steps_used: int = 0
@@ -160,7 +168,7 @@ class BaseAgent:
         if not final_response_received:
             await self.maybe_run_reactive_steps(started_at, last_step_index)
 
-        self.local_output = "\n".join(self.local_notes).strip()
+        self.local_output = "\n".join(self.output_summaries[-self.max_steps :]).strip() or "\n".join(self.local_notes).strip()
         self.is_done = True
         await self.publish_done(self.local_output)
         if self.trace_logger is not None:
@@ -182,13 +190,13 @@ class BaseAgent:
             forced_events=forced_events,
         )
         if result.summary:
-            self.local_notes.append(result.summary)
+            self.output_summaries.append(result.summary)
         if result.local_notes:
-            self.local_notes.append(result.local_notes)
+            self.local_notes.append(compact_local_notes(result.local_notes))
         published_events: list[AgentEvent] = []
         if result.share_finding:
             published_events.append(
-                await self.publish_finding(result.share_finding, confidence=result.confidence, step_index=step_index)
+                await self.publish_finding(result.share_finding, step_index=step_index)
             )
         self._log_step_trace(step_index, result, published_events, is_reactive=is_reactive, reactive_reason=reactive_reason)
         await self.event_streamer.drain(timeout=0.5)
@@ -287,7 +295,7 @@ class BaseAgent:
             if event.source != self.name
         ]
         notes = "\n".join(f"- {note}" for note in self.local_notes[-8:]) or "- None yet."
-        events = "\n".join(event_lines) or "- No relevant external findings yet."
+        events = "\n".join(event_lines) or "- No shared findings yet."
         if self.has_workspace_tool:
             return render_prompt(
                 "agents/tool_step.j2",
@@ -429,11 +437,6 @@ class BaseAgent:
             if current_key is not None:
                 sections[current_key].append(raw_line)
 
-        confidence = 0.7
-        confidence_text = "\n".join(sections["CONFIDENCE"]).strip()
-        with contextlib.suppress(ValueError):
-            confidence = max(0.0, min(1.0, float(confidence_text)))
-
         final = "\n".join(sections["FINAL"]).strip()
         action = self.parse_tool_action("\n".join(sections["ACTION"]).strip())
         summary = "\n".join(sections["SUMMARY"]).strip() or final or content.strip()
@@ -442,7 +445,6 @@ class BaseAgent:
         return StepResult(
             summary=summary,
             share_finding="\n".join(sections["SHARE_FINDING"]).strip(),
-            confidence=confidence,
             local_notes="\n".join(sections["LOCAL_NOTES"]).strip(),
             status=status,
             tool_action=action,
@@ -460,7 +462,6 @@ class BaseAgent:
                 return StepResult(
                     summary="Lean verifier feedback tool was requested but is not configured.",
                     share_finding=parsed.share_finding,
-                    confidence=0.2,
                     local_notes=parsed.local_notes,
                     status="continue",
                     tool_action=parsed.tool_action,
@@ -471,7 +472,6 @@ class BaseAgent:
             return StepResult(
                 summary=parsed.summary or "Ran Lean verifier feedback tool.",
                 share_finding=parsed.share_finding,
-                confidence=parsed.confidence,
                 local_notes=parsed.local_notes,
                 status="continue",
                 tool_action=parsed.tool_action,
@@ -482,7 +482,6 @@ class BaseAgent:
             return StepResult(
                 summary=f"Unsupported tool requested: {parsed.tool_action.get('tool')}",
                 share_finding=parsed.share_finding,
-                confidence=0.2,
                 local_notes=parsed.local_notes,
                 status="continue",
                 tool_action=parsed.tool_action,
@@ -494,7 +493,6 @@ class BaseAgent:
             return StepResult(
                 summary="Bash tool action was missing a command.",
                 share_finding=parsed.share_finding,
-                confidence=0.2,
                 local_notes=parsed.local_notes,
                 status="continue",
                 tool_action=parsed.tool_action,
@@ -507,7 +505,6 @@ class BaseAgent:
         return StepResult(
             summary=parsed.summary or f"Ran bash command in Docker: {command}",
             share_finding=parsed.share_finding,
-            confidence=parsed.confidence,
             local_notes=parsed.local_notes,
             status="continue",
             tool_action=parsed.tool_action,
@@ -528,7 +525,6 @@ class BaseAgent:
         return StepResult(
             summary=f"{guard_name} rejected FINAL: {message}",
             share_finding=parsed.share_finding,
-            confidence=min(parsed.confidence, 0.4),
             local_notes=parsed.local_notes,
             status="continue",
             tool_action={"tool": guard_name, "reason": "final_response_guard"},

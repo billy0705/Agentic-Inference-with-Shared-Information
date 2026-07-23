@@ -458,7 +458,7 @@ def build_debug_workflow(selected_agents: list[dict[str, Any]], method_trace: di
         }
         for agent in selected_agents
     )
-    workflow.append({"node": "synthesizer", "description": "Combined subagent outputs and event log into final answer."})
+    workflow.append({"node": "summarizer", "description": "Summarized each subagent's last summary into final answer."})
     return workflow
 
 

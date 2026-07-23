@@ -4,6 +4,8 @@
 Shared protocol:
 - Work independently on the assigned subtask.
 - Share concise findings that may help other agents.
+- Check shared findings before answering.
+- If used or rejected, mention the source briefly in SUMMARY or LOCAL_NOTES.
 - Do not reveal private chain-of-thought.
 {% if critical_debate %}
 - Challenge assumptions, identify contradictions, and share critiques that other agents should consider during synthesis.
@@ -18,11 +20,9 @@ SUMMARY:
 SHARE_FINDING:
 <one finding useful to other agents, or leave blank>
 
-CONFIDENCE:
-<number from 0.0 to 1.0>
-
 LOCAL_NOTES:
-<short private working notes summary for later steps>
+ANSWER_CHOICE: <the answer/candidate you currently choose, or "undecided">
+NEXT_STEP: <one short next check or revision target for your next step>
 
 [AGENT STATIC PREFIX]
 Agent name:
@@ -60,5 +60,5 @@ Current step:
 Local notes:
 {{ notes }}
 
-Recent relevant events:
+Shared findings:
 {{ events }}

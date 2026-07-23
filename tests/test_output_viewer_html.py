@@ -29,12 +29,12 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "normalizeDirectTrace" in html
     assert "normalizeMajorityVoteTrace" in html
     assert "normalizeDebateTrace" in html
-    assert "normalizeSynthesizerTrace" in html
+    assert "normalizeSummarizerTrace" in html
     assert "synthesizer_trace" in html
-    assert "Synthesizer trace present" in html
+    assert "Summarizer trace present" in html
     assert "method_trace.synthesizer_trace" in html
-    assert "renderSynthesizer" in html
-    assert "synthesizer: normalizeSynthesizerTrace(methodTrace)" in html
+    assert "renderSummarizer" in html
+    assert "summarizer: normalizeSummarizerTrace(methodTrace)" in html
     assert "agents.push(synthesizer)" not in html
     assert "methodTrace.method === 'single_agent'" in html
     assert "methodTrace.method === 'majority_vote'" in html
@@ -43,7 +43,7 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "DirectAgent" in html
     assert "VoterAgent" in html
     assert "DebateAgent" in html
-    assert "Synthesizer" in html
+    assert "Summarizer" in html
     assert "normalizeSingleAgentStep(step, methodTrace)" in html
     assert "step.prompt || methodTrace.prompt" in html
     assert "open_prompt" in html
@@ -69,6 +69,9 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "renderQuestionMatrix" in html
     assert "renderQuestionMatrix(currentRun())" in html
     assert "questionResultRows" in html
+    assert "questionInvalidLocations" in html
+    assert "Invalid locations" in html
+    assert "invalid.method" in html
     assert "selectExampleByIndexAndMethod" in html
     assert "result-cell" in html
     assert "result-cell compact" in html
@@ -104,7 +107,7 @@ def test_static_output_viewer_exposes_required_filters_and_tabs():
     assert "renderPageTabs" in html
     assert 'page: \'accuracy\'' in html
 
-    for tab in ("Overview", "Orchestrator", "Prompt", "Output", "Agents", "Synthesizer", "Events", "Tools", "Raw"):
+    for tab in ("Overview", "Orchestrator", "Prompt", "Output", "Agents", "Summarizer", "Events", "Tools", "Raw"):
         assert tab in html
 
     assert "renderEventFlow" in html
