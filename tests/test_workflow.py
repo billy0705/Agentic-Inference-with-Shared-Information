@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from multi_agent_sync.graph.workflow import run_workflow
+from multi_agent_sync.graph import nodes
 from multi_agent_sync.graph.nodes import apply_workspace_access_policy
 from multi_agent_sync.workspace.docker import BashResult, DockerWorkspace
 
@@ -243,12 +244,12 @@ class SummarizerLastSummaryLLM:
             return FakeResponse(
                 f"SUMMARY:\n{label} step 1 stale summary.\n"
                 f"SHARE_FINDING:\n{label} shared finding should stay out of summarizer input.\n"
-                "LOCAL_NOTES:\nANSWER_CHOICE: stale\nNEXT_STEP: continue."
+                "LOCAL_NOTES:\nANSWER_CHOICE: stale\nANSWER_REASON: The stale candidate is only provisional."
             )
         return FakeResponse(
             f"SUMMARY:\n{label} step 2 final summary.\n"
             f"SHARE_FINDING:\n{label} final shared finding should stay out of summarizer input.\n"
-            "LOCAL_NOTES:\nANSWER_CHOICE: final\nNEXT_STEP: finish."
+            "LOCAL_NOTES:\nANSWER_CHOICE: final\nANSWER_REASON: The final candidate matches the last evidence."
         )
 
 
@@ -743,6 +744,51 @@ async def test_dynamic_summarize_outputs_uses_candidate_majority_with_role_conte
     assert aggregation["selected_candidate"] == "A"
     assert aggregation["selection_rule"] == "majority_vote"
     assert aggregation["counts"] == {"A": 2, "B": 1}
+
+
+def test_candidate_aggregation_prefers_answer_choice_from_agent_trace():
+    state = {
+        "benchmark": "gpqa",
+        "assignments": [
+            {"agent_name": "SolverAgent", "role": "Solve", "task": "Choose an answer."},
+            {"agent_name": "ReviewerAgent", "role": "Review", "task": "Check the answer."},
+        ],
+        "agent_traces": {
+            "SolverAgent": {
+                "steps": [
+                    {
+                        "parsed_output": {
+                            "summary": "Long reasoning mentions Final Answer: A before correcting course.",
+                            "local_notes": "ANSWER_CHOICE: C\nANSWER_REASON: C is the corrected final candidate.",
+                        }
+                    }
+                ]
+            },
+            "ReviewerAgent": {
+                "steps": [
+                    {
+                        "parsed_output": {
+                            "summary": "Long reasoning mentions Final Answer: A as a rejected candidate.",
+                            "local_notes": "ANSWER_CHOICE: C\nANSWER_REASON: C is the corrected final candidate.",
+                        }
+                    }
+                ]
+            },
+        },
+    }
+
+    aggregation = nodes.build_candidate_aggregation(
+        state,
+        {
+            "SolverAgent": "Long reasoning mentions Final Answer: A before correcting course.",
+            "ReviewerAgent": "Long reasoning mentions Final Answer: A as a rejected candidate.",
+        },
+    )
+
+    assert aggregation["counts"] == {"C": 2}
+    assert aggregation["selected_candidate"] == "C"
+    assert aggregation["selection_rule"] == "majority_vote"
+    assert [candidate["candidate_source"] for candidate in aggregation["candidates"]] == ["answer_choice", "answer_choice"]
 
 
 @pytest.mark.asyncio

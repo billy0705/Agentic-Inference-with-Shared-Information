@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections import Counter
 from collections.abc import Callable
 from typing import Any
@@ -393,6 +394,7 @@ def build_candidate_aggregation(state: GraphState, agent_last_summaries: dict[st
     benchmark = str(state.get("benchmark", "") or "")
     extractor = answer_extractor_for_benchmark(benchmark)
     summary_texts = agent_last_summaries or build_agent_last_summaries(state)
+    traces = state.get("agent_traces", {})
     assignments = {
         str(assignment.get("agent_name")): assignment
         for assignment in state.get("assignments", [])
@@ -412,11 +414,16 @@ def build_candidate_aggregation(state: GraphState, agent_last_summaries: dict[st
 
     for agent_name, output in summary_texts.items():
         output_text = str(output or "")
-        candidate = extractor(output_text)
+        answer_choice = last_answer_choice_from_trace(traces.get(agent_name) if isinstance(traces, dict) else None)
+        candidate = candidate_from_answer_choice(benchmark, answer_choice, extractor)
+        candidate_source = "answer_choice" if candidate is not None else "summary"
+        if candidate is None:
+            candidate = extractor(output_text)
         assignment = assignments.get(agent_name, {})
         candidate_row = {
             "agent_name": agent_name,
             "candidate": candidate,
+            "candidate_source": candidate_source if candidate is not None else "none",
             "role": str(assignment.get("role") or ""),
             "description": str(assignment.get("description") or ""),
             "subtask": str(assignment.get("task") or ""),
@@ -450,6 +457,40 @@ def build_candidate_aggregation(state: GraphState, agent_last_summaries: dict[st
         "selected_candidate": selected_candidate,
         "selection_rule": selection_rule,
     }
+
+
+def last_answer_choice_from_trace(trace: Any) -> str | None:
+    if not isinstance(trace, dict):
+        return None
+    steps = trace.get("steps")
+    if not isinstance(steps, list):
+        return None
+    for step in reversed(steps):
+        if not isinstance(step, dict):
+            continue
+        parsed_output = step.get("parsed_output")
+        if not isinstance(parsed_output, dict):
+            continue
+        answer_choice = extract_answer_choice_from_notes(str(parsed_output.get("local_notes") or ""))
+        if answer_choice:
+            return answer_choice
+    return None
+
+
+def extract_answer_choice_from_notes(notes: str) -> str | None:
+    match = re.search(r"(?im)^\s*ANSWER_CHOICE\s*:\s*(.+?)\s*$", notes)
+    if not match:
+        return None
+    answer_choice = match.group(1).strip()
+    if answer_choice.lower() in {"", "none", "n/a", "undecided", "unknown"}:
+        return None
+    return answer_choice
+
+
+def candidate_from_answer_choice(benchmark: str, answer_choice: str | None, extractor: Callable[[str], str | None]) -> str | None:
+    if not answer_choice:
+        return None
+    return extractor(format_candidate_final_answer(benchmark, answer_choice)) or extractor(answer_choice)
 
 
 def answer_extractor_for_benchmark(benchmark: str) -> Callable[[str], str | None] | None:

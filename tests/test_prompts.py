@@ -135,7 +135,8 @@ async def test_agent_prompt_is_rendered_from_template():
     assert "Recent relevant events" not in prompt
     assert "Respond with concise summaries only." in prompt
     assert "ANSWER_CHOICE:" in prompt
-    assert "NEXT_STEP:" in prompt
+    assert "ANSWER_REASON:" in prompt
+    assert "NEXT_STEP:" not in prompt
     assert "CONFIDENCE:" not in prompt
     assert "confidence" not in prompt.lower()
     assert "Respond with concise summaries only." not in inspect.getsource(ResearchAgent.build_prompt)

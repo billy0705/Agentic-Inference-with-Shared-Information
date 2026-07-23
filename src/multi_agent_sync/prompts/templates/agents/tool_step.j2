@@ -66,7 +66,7 @@ SHARE_FINDING:
 
 LOCAL_NOTES:
 ANSWER_CHOICE: <the current answer/candidate/implementation direction, or "undecided">
-NEXT_STEP: <one short next check, tool action target, or revision target>
+ANSWER_REASON: <one sentence explaining why you choose this answer/candidate or direction>
 {% if feedback_tool_name %}
 
 To verify the current Lean candidate through the external verifier server:
@@ -79,7 +79,7 @@ SHARE_FINDING:
 
 LOCAL_NOTES:
 ANSWER_CHOICE: <the current Lean proof/candidate direction, or "undecided">
-NEXT_STEP: <one short verifier follow-up or proof revision target>
+ANSWER_REASON: <one sentence explaining why you choose this proof/candidate direction>
 {% endif %}
 
 To finish this agent's work:
@@ -92,4 +92,4 @@ SHARE_FINDING:
 
 LOCAL_NOTES:
 ANSWER_CHOICE: <the final answer/candidate/implementation direction you choose>
-NEXT_STEP: Finalize this assigned subtask.
+ANSWER_REASON: <one sentence explaining why this is the final answer/candidate/direction>

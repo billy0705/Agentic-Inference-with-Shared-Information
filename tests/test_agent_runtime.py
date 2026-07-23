@@ -187,15 +187,16 @@ class LocalNotesOnlyLLM:
             return FakeResponse(
                 "SUMMARY:\nLong reasoning summary that should not be copied into the next local notes prompt.\n"
                 "SHARE_FINDING:\nCandidate A is currently strongest.\n"
-                "LOCAL_NOTES:\nANSWER_CHOICE: A\nNEXT_STEP: Check whether another candidate contradicts A."
+                "LOCAL_NOTES:\nANSWER_CHOICE: A\nANSWER_REASON: Candidate A best matches the evidence."
             )
         assert "ANSWER_CHOICE: A" in prompt
-        assert "NEXT_STEP: Check whether another candidate contradicts A." in prompt
+        assert "ANSWER_REASON: Candidate A best matches the evidence." in prompt
+        assert "NEXT_STEP:" not in prompt
         assert "Long reasoning summary that should not be copied" not in prompt
         return FakeResponse(
             "FINAL:\nFinal Answer: A\n"
             "SHARE_FINDING:\nFinal candidate is A.\n"
-            "LOCAL_NOTES:\nANSWER_CHOICE: A\nNEXT_STEP: Finalize."
+            "LOCAL_NOTES:\nANSWER_CHOICE: A\nANSWER_REASON: Candidate A remains the supported final answer."
         )
 
 
@@ -364,8 +365,8 @@ async def test_agent_prompt_reuses_only_short_local_notes_not_previous_summary()
     assert len(llm.prompts) == 2
     assert "Long reasoning summary that should not be copied" not in llm.prompts[1]
     assert agent.local_notes == [
-        "ANSWER_CHOICE: A\nNEXT_STEP: Check whether another candidate contradicts A.",
-        "ANSWER_CHOICE: A\nNEXT_STEP: Finalize.",
+        "ANSWER_CHOICE: A\nANSWER_REASON: Candidate A best matches the evidence.",
+        "ANSWER_CHOICE: A\nANSWER_REASON: Candidate A remains the supported final answer.",
     ]
 
 

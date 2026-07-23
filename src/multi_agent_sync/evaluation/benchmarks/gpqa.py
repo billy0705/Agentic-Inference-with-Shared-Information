@@ -64,22 +64,8 @@ def extract_answer(text: str) -> str | None:
     if not text:
         return None
 
-    strict_patterns = [
-        r"Final Answer\s*:\s*([ABCD])",
-        r"Final answer\s*:\s*([ABCD])",
-        r"final_answer\s*:\s*([ABCD])",
-        r"Answer\s*:\s*([ABCD])",
-        r"answer\s*:\s*([ABCD])",
-        r"\bFinal\s*Answer\s*is\s*([ABCD])\b",
-        r"\bThe\s*answer\s*is\s*([ABCD])\b",
-    ]
-    for pattern in strict_patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return match.group(1).upper()
-
-    candidates = re.findall(r"\b([ABCD])\b", text.upper())
-    return candidates[-1] if candidates else None
+    match = re.search(r"\bFinal\s+Answer\s*:\s*([ABCD])\b", text, flags=re.IGNORECASE)
+    return match.group(1).upper() if match else None
 
 
 def load_gpqa_dataset(limit: int | None, data_file: str | None = None) -> list[dict[str, Any]] | Any:

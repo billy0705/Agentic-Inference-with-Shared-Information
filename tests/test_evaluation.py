@@ -1505,6 +1505,9 @@ def test_gpqa_owns_answer_extraction():
     benchmark = gpqa.build_benchmark()
 
     assert benchmark.extract_answer("Final Answer: C") == "C"
+    assert benchmark.extract_answer("Reasoning mentions options A, B, and C.\nC") is None
+    assert benchmark.extract_answer("The answer is C") is None
+    assert benchmark.extract_answer("Answer: C") is None
 
 
 def test_gsm8k_build_prompt_extracts_gold_answer_from_dataset_rationale():
