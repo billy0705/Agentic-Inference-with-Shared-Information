@@ -61,6 +61,23 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "setAccuracyModel" in html
     assert "isExcludedAccuracyRun" in html
     assert "isFakeLabel" in html
+    assert "dynamicStreamingRouteBreakdown" in html
+    assert "renderRouteBreakdown" in html
+    assert "Dynamic route split" in html
+    assert "Question Results" in html
+    assert 'id="questionMatrixPanel"' not in html
+    assert "renderQuestionMatrix" in html
+    assert "renderQuestionMatrix(currentRun())" in html
+    assert "questionResultRows" in html
+    assert "selectExampleByIndexAndMethod" in html
+    assert "result-cell" in html
+    assert "result-cell compact" in html
+    assert "same question id" in html
+    assert "example-status-correct" in html
+    assert "example-status-wrong" in html
+    assert "exampleSelectClass" in html
+    assert " ? 'correct' : 'wrong'" in html
+    assert "multiagent_dynamic_streaming" in html
     assert "bar-fill" in html
 
 

@@ -70,10 +70,27 @@
     .benchmark-block { border: 1px solid var(--line); border-radius: 8px; background: white; padding: 14px; margin: 14px 0; }
     .benchmark-methods { display: grid; gap: 8px; margin-top: 12px; }
     .method-row { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(180px, 2fr) repeat(4, minmax(90px, auto)); gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 8px; }
+    .route-breakdown { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     .metric-label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; }
     .accuracy-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .accuracy-table th, .accuracy-table td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: middle; }
     .accuracy-table th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+    .matrix-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: white; }
+    .question-matrix { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 12px; }
+    .question-matrix th, .question-matrix td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; }
+    .question-matrix th:last-child, .question-matrix td:last-child { border-right: 0; }
+    .question-matrix th { color: var(--muted); font-size: 11px; text-transform: uppercase; background: #fbfbf7; position: sticky; top: 0; z-index: 1; }
+    .question-matrix tr:last-child td { border-bottom: 0; }
+    .result-cell { width: 100%; text-align: left; border: 1px solid var(--line); background: white; border-radius: 6px; padding: 7px; min-height: 58px; }
+    .result-cell.compact { min-height: 0; padding: 5px 7px; text-align: center; }
+    .result-cell.active { border-color: var(--accent); background: var(--accent-soft); }
+    .result-cell .status { display: block; font-weight: 800; }
+    .result-cell.correct .status { color: var(--good); }
+    .result-cell.wrong .status, .result-cell.error .status { color: var(--bad); }
+    .result-cell.invalid .status { color: var(--warn); }
+    .result-meta { display: block; color: var(--muted); margin-top: 4px; word-break: break-word; }
+    .example-status-correct { color: var(--good); }
+    .example-status-wrong { color: var(--bad); }
     .bar-cell { min-width: 180px; }
     .bar-track { height: 12px; border-radius: 999px; background: var(--code); border: 1px solid var(--line); overflow: hidden; }
     .bar-fill { height: 100%; background: var(--accent); }
@@ -465,6 +482,7 @@
         path,
         index,
         method,
+        route_mode: methodTrace.mode || '',
         benchmark: trace.benchmark || result.benchmark || '',
         correct: trace.correct ?? result.correct,
         pred: trace.pred ?? result.pred,
@@ -1089,6 +1107,20 @@
           <div><span class="metric-label">Correct / Total</span>${esc(row.correct)} / ${esc(row.total)}</div>
           <div><span class="metric-label">Invalid</span>${esc(row.invalid)} (${esc(percent(row.invalid_rate))})</div>
           <div><span class="metric-label">Avg tokens</span>${esc(round(row.avg_total_tokens))}</div>
+          ${renderRouteBreakdown(row)}
+        </div>
+      `;
+    }
+
+    function renderRouteBreakdown(row) {
+      if (row.method !== 'multiagent_dynamic_streaming' || !row.route_breakdown) return '';
+      const direct = row.route_breakdown.direct;
+      const multiAgent = row.route_breakdown.multi_agent;
+      return `
+        <div class="route-breakdown">
+          <span class="metric-label">Dynamic route split</span>
+          <span class="pill">direct: ${esc(direct.total)} · acc ${esc(percent(direct.accuracy))} · ${esc(direct.correct)}/${esc(direct.total)}</span>
+          <span class="pill">multi_agent: ${esc(multiAgent.total)} · acc ${esc(percent(multiAgent.accuracy))} · ${esc(multiAgent.correct)}/${esc(multiAgent.total)}</span>
         </div>
       `;
     }
@@ -1132,7 +1164,27 @@
         benchmark: run.benchmark_display_name || run.benchmark,
         model: run.resolved_model || run.model,
         run_id: run.run_id,
+        route_breakdown: row.method === 'multiagent_dynamic_streaming' ? dynamicStreamingRouteBreakdown(run) : null,
       }));
+    }
+
+    function dynamicStreamingRouteBreakdown(run) {
+      const dynamicExamples = (run.examples || []).filter((example) => example.method === 'multiagent_dynamic_streaming');
+      return {
+        direct: routeStats(dynamicExamples, 'direct'),
+        multi_agent: routeStats(dynamicExamples, 'multi_agent'),
+      };
+    }
+
+    function routeStats(examples, routeMode) {
+      const filtered = examples.filter((example) => example.route_mode === routeMode);
+      const total = filtered.length;
+      const correct = filtered.filter((example) => example.correct === true || example.correct === 'True').length;
+      return {
+        total,
+        correct,
+        accuracy: total ? correct / total : 0,
+      };
     }
 
     function normalizedMethodSummaries(run) {
@@ -1230,16 +1282,121 @@
       `;
     }
 
+    function renderQuestionMatrix(run) {
+      if (!run || !run.examples.length) {
+        return '<div class="empty">No examples available for this run.</div>';
+      }
+      const rows = questionResultRows(run);
+      const methods = runMethods(run);
+      if (!rows.length || !methods.length) {
+        return '<div class="empty">No method results are available for comparison.</div>';
+      }
+      return `
+        <div class="toolbar">
+          <div>
+            <h2>Question Results</h2>
+            <div class="subtle">Compare every method on the same question id. Click a cell to open that method trace for the selected id.</div>
+          </div>
+          <span class="pill">${esc(rows.length)} question ids</span>
+        </div>
+        <div class="matrix-wrap">
+          <table class="question-matrix">
+            <thead>
+              <tr>
+                <th>Question id</th>
+                ${methods.map((method) => `<th>${esc(method)}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row) => `
+                <tr>
+                  <td><strong>#${esc(row.index)}</strong></td>
+                  ${methods.map((method) => renderQuestionResultCell(run, row, method)).join('')}
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function questionResultRows(run) {
+      const rowsByIndex = new Map();
+      for (const example of run.examples || []) {
+        const index = String(example.index ?? '');
+        if (!index) continue;
+        const row = rowsByIndex.get(index) || { index, methods: {} };
+        row.methods[example.method] = example;
+        rowsByIndex.set(index, row);
+      }
+      return [...rowsByIndex.values()].sort((left, right) => compareExampleIndex(left.index, right.index));
+    }
+
+    function compareExampleIndex(left, right) {
+      const leftNumber = Number(left);
+      const rightNumber = Number(right);
+      if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber - rightNumber;
+      return String(left).localeCompare(String(right));
+    }
+
+    function renderQuestionResultCell(run, row, method) {
+      const example = row.methods[method];
+      if (!example) return '<td><span class="subtle">missing</span></td>';
+      const status = resultStatus(example);
+      const isActive = currentExample(run) === example;
+      return `
+        <td>
+          <button class="result-cell compact ${esc(status.kind)} ${isActive ? 'active' : ''}" type="button" onclick="selectExampleByIndexAndMethod('${esc(jsString(row.index))}', '${esc(jsString(method))}')">
+            <span class="status">${esc(status.label)}</span>
+            ${example.error ? `<span class="result-meta">error: ${esc(truncateInline(example.error, 80))}</span>` : ''}
+          </button>
+        </td>
+      `;
+    }
+
+    function resultStatus(example) {
+      if (example.error) return { kind: 'error', label: 'ERROR' };
+      if (example.correct === true || example.correct === 'True') return { kind: 'correct', label: 'OK' };
+      if (example.pred === null || example.pred === undefined || example.pred === '') return { kind: 'invalid', label: 'INVALID' };
+      return { kind: 'wrong', label: 'WRONG' };
+    }
+
+    function truncateInline(value, limit) {
+      const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+      if (text.length <= limit) return text;
+      return `${text.slice(0, Math.max(0, limit - 3)).trim()}...`;
+    }
+
+    function selectExampleByIndexAndMethod(index, method) {
+      const run = currentRun();
+      if (!run) return;
+      const exampleIndex = run.examples.findIndex((example) => String(example.index) === String(index) && example.method === method);
+      if (exampleIndex < 0) return;
+      state.exampleIndex = exampleIndex;
+      state.agent = 'all';
+      state.eventAgent = 'all';
+      state.eventType = 'communication';
+      state.page = 'detail';
+      render();
+    }
+
     function renderExampleSelect(run) {
       if (!run || !run.examples.length) {
         $('exampleFilter').innerHTML = '<option>No examples</option>';
+        $('exampleFilter').className = '';
         return;
       }
+      $('exampleFilter').className = exampleSelectClass(currentExample(run));
       $('exampleFilter').innerHTML = run.examples.map((example, index) => {
-        const status = example.correct === true || example.correct === 'True' ? 'correct' : example.error ? 'error' : 'unclear';
-        return `<option value="${index}">#${esc(example.index)} ${esc(example.method)} · ${status}</option>`;
+        const status = example.correct === true || example.correct === 'True' ? 'correct' : 'wrong';
+        return `<option class="example-status-${esc(status)}" value="${index}">#${esc(example.index)} ${esc(example.method)} · ${status}</option>`;
       }).join('');
       $('exampleFilter').value = String(Math.min(state.exampleIndex, run.examples.length - 1));
+    }
+
+    function exampleSelectClass(example) {
+      if (!example) return '';
+      return example.correct === true || example.correct === 'True' ? 'example-status-correct' : 'example-status-wrong';
     }
 
     function renderAgentFilter(example) {
@@ -1341,6 +1498,7 @@
             </p>
           </div>
         </div>
+        ${renderQuestionMatrix(currentRun())}
       `;
     }
 
