@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
+from collections.abc import Callable
+from typing import Any
 
 from multi_agent_sync.agents.registry import AGENT_REGISTRY
 from multi_agent_sync.agents.dynamic_agent import DynamicAgent
@@ -285,12 +288,14 @@ def apply_workspace_access_policy(
 async def synthesizer_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
     llm = state.get("llm") or get_llm()
+    candidate_aggregation = build_candidate_aggregation(state)
     event_lines = "\n".join(
         f"- [{event.event_type}] {event.source}: {event.content}"
         for event in state.get("event_log", [])
         if event.event_type in {"finding", "warning", "critique"}
     )
     output_lines = "\n".join(f"- {name}: {output}" for name, output in state.get("agent_outputs", {}).items())
+    candidate_lines = format_candidate_aggregation(candidate_aggregation)
     synthesizer_mode = state.get("synthesizer_mode", "generic")
     template_name = "graph/synthesizer_summarize_outputs.j2" if synthesizer_mode == "summarize_outputs" else "graph/synthesizer.j2"
     prompt = render_prompt(
@@ -298,6 +303,7 @@ async def synthesizer_node(state: GraphState) -> GraphState:
         task=state["task"],
         output_lines=output_lines,
         event_lines=event_lines,
+        candidate_lines=candidate_lines,
     )
     raw_response = ""
     token_usage = {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None}
@@ -306,10 +312,10 @@ async def synthesizer_node(state: GraphState) -> GraphState:
         response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=state.get("synthesis_timeout", 60.0))
         raw_response = getattr(response, "content", str(response)).strip()
         token_usage = extract_token_usage(response).as_dict()
-        final_answer = raw_response
+        final_answer = deterministic_synthesized_answer(state, candidate_aggregation) or raw_response
     except asyncio.TimeoutError:
         timed_out = True
-        final_answer = build_fallback_summary(state)
+        final_answer = deterministic_synthesized_answer(state, candidate_aggregation) or build_fallback_summary(state)
         raw_response = final_answer
         await streamer.publish(
             AgentEvent(
@@ -339,8 +345,149 @@ async def synthesizer_node(state: GraphState) -> GraphState:
             "final_answer": final_answer,
             "token_usage": token_usage,
             "timed_out": timed_out,
+            "candidate_aggregation": candidate_aggregation,
         }
     return next_state
+
+
+def build_candidate_aggregation(state: GraphState) -> dict[str, Any]:
+    benchmark = str(state.get("benchmark", "") or "")
+    extractor = answer_extractor_for_benchmark(benchmark)
+    assignments = {
+        str(assignment.get("agent_name")): assignment
+        for assignment in state.get("assignments", [])
+        if isinstance(assignment, dict) and assignment.get("agent_name")
+    }
+    candidates: list[dict[str, Any]] = []
+    counts: Counter[str] = Counter()
+
+    if extractor is None:
+        return {
+            "benchmark": benchmark,
+            "candidates": candidates,
+            "counts": {},
+            "selected_candidate": None,
+            "selection_rule": "no_benchmark_extractor",
+        }
+
+    for agent_name, output in state.get("agent_outputs", {}).items():
+        output_text = str(output or "")
+        candidate = extractor(output_text)
+        assignment = assignments.get(agent_name, {})
+        candidate_row = {
+            "agent_name": agent_name,
+            "candidate": candidate,
+            "role": str(assignment.get("role") or ""),
+            "description": str(assignment.get("description") or ""),
+            "subtask": str(assignment.get("task") or ""),
+            "expected_output": str(assignment.get("expected_output") or ""),
+            "critical_debate": bool(assignment.get("critical_debate", False)),
+            "reason_excerpt": compact_text(output_text, limit=360),
+        }
+        candidates.append(candidate_row)
+        if candidate is not None:
+            counts[str(candidate)] += 1
+
+    selected_candidate = None
+    selection_rule = "no_extractable_candidates"
+    if counts:
+        most_common = counts.most_common()
+        top_candidate, top_count = most_common[0]
+        runner_up_count = most_common[1][1] if len(most_common) > 1 else 0
+        if top_count >= 2 and top_count > runner_up_count:
+            selected_candidate = top_candidate
+            selection_rule = "majority_vote"
+        elif len(most_common) == 1:
+            selected_candidate = top_candidate
+            selection_rule = "unanimous_single_candidate"
+        else:
+            selection_rule = "tie_requires_role_aware_synthesis"
+
+    return {
+        "benchmark": benchmark,
+        "candidates": candidates,
+        "counts": dict(counts),
+        "selected_candidate": selected_candidate,
+        "selection_rule": selection_rule,
+    }
+
+
+def answer_extractor_for_benchmark(benchmark: str) -> Callable[[str], str | None] | None:
+    normalized = benchmark.lower()
+    if normalized == "gpqa":
+        from multi_agent_sync.evaluation.benchmarks.gpqa import extract_answer
+
+        return extract_answer
+    if normalized == "mmlu_pro":
+        from multi_agent_sync.evaluation.benchmarks.mmlu_pro import extract_answer
+
+        return extract_answer
+    if normalized == "gsm8k":
+        from multi_agent_sync.evaluation.benchmarks.gsm8k import extract_answer
+
+        return extract_answer
+    if normalized == "chess":
+        from multi_agent_sync.evaluation.benchmarks.chess import extract_answer
+
+        return extract_answer
+    if normalized == "olymmath":
+        from multi_agent_sync.evaluation.benchmarks.olymmath import extract_answer
+
+        return extract_answer
+    return None
+
+
+def deterministic_synthesized_answer(state: GraphState, aggregation: dict[str, Any]) -> str | None:
+    if state.get("synthesizer_mode") != "summarize_outputs":
+        return None
+    if aggregation.get("selection_rule") != "majority_vote":
+        return None
+    selected_candidate = aggregation.get("selected_candidate")
+    if selected_candidate is None:
+        return None
+    return format_candidate_final_answer(str(state.get("benchmark", "") or ""), str(selected_candidate))
+
+
+def format_candidate_final_answer(benchmark: str, candidate: str) -> str:
+    normalized = benchmark.lower()
+    if normalized == "chess":
+        return f"({candidate})"
+    if normalized in {"gsm8k", "olymmath"}:
+        return f"\\boxed{{{candidate}}}"
+    return f"Final Answer: {candidate}"
+
+
+def format_candidate_aggregation(aggregation: dict[str, Any]) -> str:
+    candidates = aggregation.get("candidates") or []
+    if not candidates:
+        return "- No benchmark answer candidates were extracted."
+
+    lines = [
+        f"- selection_rule: {aggregation.get('selection_rule')}",
+        f"- selected_candidate: {aggregation.get('selected_candidate')}",
+        f"- counts: {aggregation.get('counts')}",
+        "- agent candidates:",
+    ]
+    for candidate in candidates:
+        lines.append(
+            "  - "
+            f"agent: {candidate.get('agent_name')}; "
+            f"candidate: {candidate.get('candidate')}; "
+            f"role: {candidate.get('role') or 'unspecified'}; "
+            f"critical_debate: {candidate.get('critical_debate')}; "
+            f"subtask: {candidate.get('subtask') or 'unspecified'}; "
+            f"description: {candidate.get('description') or 'unspecified'}; "
+            f"expected_output: {candidate.get('expected_output') or 'unspecified'}; "
+            f"reason_excerpt: {candidate.get('reason_excerpt') or 'empty'}"
+        )
+    return "\n".join(lines)
+
+
+def compact_text(text: str, *, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: max(0, limit - 3)].rstrip()}..."
 
 
 def build_fallback_summary(state: GraphState) -> str:

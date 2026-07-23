@@ -106,7 +106,8 @@ class DynamicDirectFakeLLM:
                   "mode": "direct",
                   "task_type": "direct benchmark question",
                   "task_summary": "The user asks a question the orchestrator routes directly.",
-                  "reason": "The orchestrator chose direct mode, but dynamic direct should still self-debate once.",
+                  "reason": "This is a deterministic toy test where the answer is known exactly, all required options are present, and no decomposition or verification would change the answer.",
+                  "direct_certainty": "100_percent",
                   "selected_agents": [],
                   "collaboration_protocol": {
                     "event_types_to_share": ["finding", "critique", "warning"],
@@ -208,6 +209,68 @@ class SynthesizerTraceLLM(FakeLLM):
             self.synthesizer_prompts.append(prompt)
             return FakeResponse("Final Answer: summarized-agent-output")
         return await super().ainvoke(prompt)
+
+
+class RoleAwareAggregationLLM:
+    def __init__(self) -> None:
+        self.synthesizer_prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if "dynamic subagent orchestrator" in prompt:
+            return FakeResponse(
+                """
+                {
+                  "mode": "multi_agent",
+                  "task_type": "multiple choice benchmark",
+                  "task_summary": "Select the best option.",
+                  "reason": "The task needs independent solving and critique.",
+                  "selected_agents": [
+                    {
+                      "name": "Domain Solver",
+                      "role": "Primary domain solver.",
+                      "description": "Solves the question directly from domain knowledge.",
+                      "rules": ["Give a final answer candidate."],
+                      "subtask": "Solve the question and choose the best option.",
+                      "expected_output": "A final option with explanation.",
+                      "critical_debate": false
+                    },
+                    {
+                      "name": "Option Verifier",
+                      "role": "Checks option consistency.",
+                      "description": "Verifies whether the chosen option matches the evidence.",
+                      "rules": ["Prefer evidence over confidence."],
+                      "subtask": "Validate the candidates against the prompt.",
+                      "expected_output": "A verified option with concise justification.",
+                      "critical_debate": false
+                    },
+                    {
+                      "name": "Critical Reviewer",
+                      "role": "Challenges weak assumptions.",
+                      "description": "Looks for contradictions in the proposed options.",
+                      "rules": ["Challenge unsupported claims."],
+                      "subtask": "Critique the option choices.",
+                      "expected_output": "A critique and final candidate.",
+                      "critical_debate": true
+                    }
+                  ],
+                  "collaboration_protocol": {
+                    "event_types_to_share": ["finding", "critique", "warning"],
+                    "reactive_steps": true,
+                    "notes": "Use role-specific outputs."
+                  }
+                }
+                """
+            )
+        if "Agent name:\nDomainSolver" in prompt:
+            return FakeResponse("FINAL:\nDomain evidence supports option A. Final Answer: A\nCONFIDENCE:\n0.8")
+        if "Agent name:\nOptionVerifier" in prompt:
+            return FakeResponse("FINAL:\nThe verified candidate is option A. Final Answer: A\nCONFIDENCE:\n0.9")
+        if "Agent name:\nCriticalReviewer" in prompt:
+            return FakeResponse("FINAL:\nA possible objection points to option B. Final Answer: B\nCONFIDENCE:\n0.6")
+        if "You are the Synthesizer" in prompt:
+            self.synthesizer_prompts.append(prompt)
+            return FakeResponse("Final Answer: B")
+        return FakeResponse("Unexpected prompt")
 
 
 class WorkflowFakeDockerWorkspace(DockerWorkspace):
@@ -583,6 +646,36 @@ async def test_summarize_outputs_synthesizer_prompt_and_response_are_traced():
     assert state["synthesizer_trace"]["raw_response"] == "Final Answer: summarized-agent-output"
     assert state["synthesizer_trace"]["final_answer"] == "Final Answer: summarized-agent-output"
     assert state["synthesizer_trace"]["timed_out"] is False
+
+
+@pytest.mark.asyncio
+async def test_dynamic_summarize_outputs_uses_candidate_majority_with_role_context():
+    llm = RoleAwareAggregationLLM()
+
+    state = await run_workflow(
+        task="Which option is best? A. correct B. tempting C. wrong D. wrong",
+        llm=llm,
+        max_steps_per_agent=1,
+        total_runtime_timeout=5,
+        stream_to_console=False,
+        subagent_mode="dynamic",
+        synthesizer_mode="summarize_outputs",
+        benchmark="gpqa",
+    )
+
+    assert state["final_answer"] == "Final Answer: A"
+    assert len(llm.synthesizer_prompts) == 1
+    synthesizer_prompt = llm.synthesizer_prompts[0]
+    assert "Candidate aggregation:" in synthesizer_prompt
+    assert "DomainSolver" in synthesizer_prompt
+    assert "Primary domain solver." in synthesizer_prompt
+    assert "Solve the question and choose the best option." in synthesizer_prompt
+    assert "candidate: A" in synthesizer_prompt
+    assert "candidate: B" in synthesizer_prompt
+    aggregation = state["synthesizer_trace"]["candidate_aggregation"]
+    assert aggregation["selected_candidate"] == "A"
+    assert aggregation["selection_rule"] == "majority_vote"
+    assert aggregation["counts"] == {"A": 2, "B": 1}
 
 
 @pytest.mark.asyncio

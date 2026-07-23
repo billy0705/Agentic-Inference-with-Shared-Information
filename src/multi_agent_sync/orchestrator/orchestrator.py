@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from multi_agent_sync.prompts import render_prompt
 
@@ -37,6 +37,7 @@ class OrchestratorPlan(TypedDict):
     reason: str
     selected_agents: list[SelectedAgent]
     collaboration_protocol: CollaborationProtocol
+    direct_certainty: NotRequired[str]
 
 
 AGENT_DESCRIPTIONS = {
@@ -138,6 +139,17 @@ def validate_orchestrator_plan(
 ) -> OrchestratorPlan:
     mode = raw_plan.get("mode")
     if mode == "direct":
+        if subagent_mode == "dynamic" and not is_truthful_dynamic_direct_plan(raw_plan, task):
+            return create_fallback_plan(
+                task,
+                available_agents,
+                reason=(
+                    "Dynamic orchestrator selected direct mode without being truthfully 100% certain; "
+                    "dynamic direct is only allowed when the answer is certain enough that multi-agent verification would not help. "
+                    "Tasks requiring state tracking, sequence reconstruction, validity checks, legality checks, or hidden context must use dynamic multi-agent review."
+                ),
+                subagent_mode=subagent_mode,
+            )
         return create_direct_plan(raw_plan, task, subagent_mode=subagent_mode)
     if mode != "multi_agent":
         return create_fallback_plan(
@@ -227,7 +239,53 @@ def create_direct_plan(raw_plan: Mapping[str, Any], task: str, subagent_mode: Su
         "reason": reason,
         "selected_agents": [],
         "collaboration_protocol": normalize_collaboration_protocol(raw_plan.get("collaboration_protocol")),
+        "direct_certainty": _clean_text(raw_plan.get("direct_certainty")),
     }
+
+
+def is_truthful_dynamic_direct_plan(raw_plan: Mapping[str, Any], task: str = "") -> bool:
+    direct_certainty = _clean_text(raw_plan.get("direct_certainty")).lower()
+    reason = _clean_text(raw_plan.get("reason")).lower()
+    if direct_certainty != "100_percent":
+        return False
+    vague_reason_markers = ("confident", "confidence", "likely", "probably", "seems", "enough")
+    if any(marker in reason for marker in vague_reason_markers):
+        return False
+    if requires_state_validity_review(task):
+        return False
+    evidence_markers = ("explicit", "provided", "deterministic", "given", "verbatim", "lookup", "trivial")
+    no_verification_markers = ("no decomposition", "no verification", "verification would not", "debate would not", "multi-agent")
+    return any(marker in reason for marker in evidence_markers) and any(marker in reason for marker in no_verification_markers)
+
+
+def requires_state_validity_review(task: str) -> bool:
+    normalized = task.lower()
+    state_markers = (
+        "current state",
+        "current board",
+        "board state",
+        "state tracking",
+        "sequence of",
+        "sequence",
+        "move sequence",
+        "game sequence",
+        "game",
+        "after the moves",
+        "after the sequence",
+        "given the game",
+        "in-progress",
+        "piece at",
+    )
+    validity_markers = (
+        "valid",
+        "legal",
+        "legality",
+        "destination square",
+        "execute next",
+        "next move",
+        "complete the notation",
+    )
+    return any(marker in normalized for marker in state_markers) and any(marker in normalized for marker in validity_markers)
 
 
 def ensure_fixed_review_agent(selected_agents: list[SelectedAgent], available_agents: Mapping[str, Any]) -> list[SelectedAgent]:

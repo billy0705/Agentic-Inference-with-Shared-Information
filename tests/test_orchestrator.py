@@ -88,6 +88,97 @@ async def test_orchestrator_direct_mode_is_respected_for_non_easy_tasks():
 
 
 @pytest.mark.asyncio
+async def test_dynamic_direct_without_truthful_100_percent_certainty_falls_back_to_multi_agent():
+    llm = StaticLLM(
+        """
+        {
+          "mode": "direct",
+          "task_type": "benchmark question",
+          "task_summary": "The user asks a benchmark question.",
+          "reason": "I am confident enough to answer directly.",
+          "selected_agents": [],
+          "collaboration_protocol": {
+            "event_types_to_share": ["finding", "critique", "warning"],
+            "reactive_steps": false,
+            "notes": "No collaboration needed."
+          }
+        }
+        """
+    )
+
+    plan = await create_model_based_plan("Which option is best for this benchmark item?", llm, AGENT_REGISTRY, subagent_mode="dynamic")
+
+    assert plan["mode"] == "multi_agent"
+    assert plan["subagent_mode"] == "dynamic"
+    assert "100% certain" in plan["reason"]
+    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent"]
+
+
+@pytest.mark.asyncio
+async def test_dynamic_direct_with_truthful_100_percent_certainty_is_allowed():
+    llm = StaticLLM(
+        """
+        {
+          "mode": "direct",
+          "task_type": "deterministic lookup",
+          "task_summary": "The user asks a deterministic lookup question.",
+          "reason": "All required facts are explicitly provided in the prompt, the answer is deterministic, and no decomposition, verification, or debate would add useful checks.",
+          "direct_certainty": "100_percent",
+          "selected_agents": [],
+          "collaboration_protocol": {
+            "event_types_to_share": ["finding", "critique", "warning"],
+            "reactive_steps": false,
+            "notes": "No collaboration needed."
+          }
+        }
+        """
+    )
+
+    plan = await create_model_based_plan("The prompt states A is correct. Which option is correct?", llm, AGENT_REGISTRY, subagent_mode="dynamic")
+
+    assert plan["mode"] == "direct"
+    assert plan["subagent_mode"] == "dynamic"
+    assert plan["selected_agents"] == []
+    assert plan["direct_certainty"] == "100_percent"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_direct_for_state_validity_sequence_task_falls_back_to_multi_agent():
+    llm = StaticLLM(
+        """
+        {
+          "mode": "direct",
+          "task_type": "state validity question",
+          "task_summary": "The user asks for a valid destination square from a move sequence.",
+          "reason": "The destination square is explicitly provided in the prompt, deterministic, and verification would not change the answer.",
+          "direct_certainty": "100_percent",
+          "selected_agents": [],
+          "collaboration_protocol": {
+            "event_types_to_share": ["finding", "critique", "warning"],
+            "reactive_steps": false,
+            "notes": "No collaboration needed."
+          }
+        }
+        """
+    )
+
+    plan = await create_model_based_plan(
+        (
+            "Given the chess game, give one valid destination square for the chess piece at c8. "
+            "State the destination square in the form (X), where X follows the regex [a-h][1-8]."
+        ),
+        llm,
+        AGENT_REGISTRY,
+        subagent_mode="dynamic",
+    )
+
+    assert plan["mode"] == "multi_agent"
+    assert plan["subagent_mode"] == "dynamic"
+    assert "state tracking" in plan["reason"]
+    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent"]
+
+
+@pytest.mark.asyncio
 async def test_fixed_multi_agent_plan_adds_verifier_when_critic_or_verifier_is_missing():
     llm = StaticLLM(
         """

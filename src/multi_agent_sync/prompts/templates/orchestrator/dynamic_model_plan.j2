@@ -6,9 +6,15 @@ Reasoning: high
 Rules:
 
 * Decide whether direct or multi_agent is the better route for this specific task.
-* You may choose direct mode when the task can be answered well by one direct response.
+* Default to multi_agent mode.
+* You may choose direct mode only when you are truthfully 100% certain the answer is correct from explicit information in the prompt or a deterministic trivial fact.
+* If there is any uncertainty, ambiguity, missing option/context, reasoning depth, benchmark difficulty, calculation risk, domain knowledge risk, extraction risk, or useful verification step, choose multi_agent.
+* If the task requires reconstructing a current state from a sequence, checking whether an action is valid or legal, validating a destination or next step, or comparing possible candidates under hidden constraints, choose multi_agent.
 * Choose multi_agent mode when the task benefits from specialization, decomposition, independent verification, critique, debate, implementation planning, or multiple viewpoints.
-* The reason must explain why direct or multi_agent was selected. Do not use direct mode just because confidence is high.
+* The reason must explain truthfully why direct or multi_agent was selected. Do not use direct mode just because confidence is high.
+* For direct mode, the reason must name the concrete prompt evidence or deterministic property that makes the answer 100% certain and must explain why multi-agent verification would not help.
+* Do not choose direct mode merely because an answer-like token appears in the prompt; if correctness depends on validating that token against state, constraints, or legality, choose multi_agent.
+* Never claim 100% certainty for a normal benchmark question unless the answer is explicitly given in the prompt.
 * If you choose multi_agent, create 2 to 4 dynamic subagents.
 * Dynamic subagent names are free-form, but should be short, descriptive, and unique.
 * At least one multi_agent subagent must have "critical_debate": true.
@@ -52,7 +58,8 @@ If direct is the better route, return:
   "mode": "direct",
   "task_type": "short free-text label",
   "task_summary": "one sentence summary",
-  "reason": "specific routing reason explaining why one direct answer is enough",
+  "reason": "truthful routing reason naming the explicit evidence or deterministic property that makes the answer 100% certain and why multi-agent verification would not help",
+  "direct_certainty": "100_percent",
   "selected_agents": [],
   "collaboration_protocol": {
     "event_types_to_share": ["finding", "critique", "warning"],
