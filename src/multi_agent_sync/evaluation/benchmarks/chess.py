@@ -31,6 +31,7 @@ def build_benchmark() -> BenchmarkSpec:
         load_items=load_items,
         build_prompt=build_prompt,
         extract_answer=extract_answer,
+        format_answer=format_answer,
         score_response=score_response,
     )
 
@@ -119,6 +120,12 @@ def extract_answer(text: str) -> str | None:
     if len(matches) == 1:
         return matches[0]
     return None
+
+
+def format_answer(answer: str) -> str:
+    stripped = answer.strip()
+    extracted = extract_answer(stripped)
+    return f"({extracted})" if extracted else stripped
 
 
 def last_nonempty_line(text: str) -> str | None:

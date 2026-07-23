@@ -39,6 +39,12 @@ async def run_single_agent(prompt: str, llm: Any, args: argparse.Namespace) -> t
         notes = str(parsed_payload.get("notes") or "").strip()
         candidate_output = final_answer or content
         parsed_answer = answer_extractor(candidate_output)
+        if parsed_answer is None and final_answer:
+            formatted_output = format_answer_with_args(final_answer, args)
+            formatted_answer = answer_extractor(formatted_output)
+            if formatted_answer is not None:
+                candidate_output = formatted_output
+                parsed_answer = formatted_answer
         human_output = format_single_agent_output(candidate_output, final_reason)
         raw_output = human_output
         final_blocked_reason = final_block_reason(
@@ -102,6 +108,13 @@ def format_single_agent_output(output: str, reason: str) -> str:
     return output
 
 
+def format_answer_with_args(answer: str, args: argparse.Namespace) -> str:
+    answer_formatter = getattr(args, "answer_formatter", None)
+    if callable(answer_formatter):
+        return str(answer_formatter(answer)).strip()
+    return answer
+
+
 def _positive_int_or_default(value: Any, default: int) -> int:
     if value is None:
         return default
@@ -158,6 +171,9 @@ def parse_single_agent_payload(content: str) -> dict[str, Any]:
             except json.JSONDecodeError:
                 continue
         else:
+            jsonish_payload = parse_jsonish_single_agent_payload(stripped)
+            if jsonish_payload is not None:
+                return jsonish_payload
             return {"status": "continue", "final_answer": "", "notes": "Model did not return JSON."}
     if not isinstance(payload, dict):
         return {"status": "continue", "final_answer": "", "notes": "Model did not return a JSON object."}
@@ -171,3 +187,30 @@ def parse_single_agent_payload(content: str) -> dict[str, Any]:
         "final_reason": payload.get("final_reason") or "",
         "notes": payload.get("notes") or "",
     }
+
+
+def parse_jsonish_single_agent_payload(text: str) -> dict[str, Any] | None:
+    status = extract_jsonish_string_field(text, "status")
+    final_answer = extract_jsonish_string_field(text, "final_answer")
+    final_reason = extract_jsonish_string_field(text, "final_reason")
+    notes = extract_jsonish_string_field(text, "notes")
+    if status is None and final_answer is None and final_reason is None and notes is None:
+        return None
+
+    normalized_status = str(status or "continue").strip().lower()
+    if normalized_status not in {"continue", "final"}:
+        normalized_status = "continue"
+    return {
+        "status": normalized_status,
+        "final_answer": final_answer or "",
+        "final_reason": final_reason or "",
+        "notes": notes or "Recovered from JSON-like response.",
+    }
+
+
+def extract_jsonish_string_field(text: str, key: str) -> str | None:
+    pattern = rf'"{re.escape(key)}"\s*:\s*"(?P<value>.*?)"(?=\s*,\s*"[^"]+"\s*:|\s*}})'
+    match = re.search(pattern, text, flags=re.DOTALL)
+    if not match:
+        return None
+    return match.group("value").strip()

@@ -834,6 +834,99 @@ async def test_single_agent_stops_when_final_answer_is_parseable():
 
 
 @pytest.mark.asyncio
+async def test_single_agent_formats_json_final_answer_before_extraction():
+    llm = UsageLLM(
+        [
+            UsageResponse(
+                '{"status": "final", "final_answer": "D", '
+                '"final_reason": "Option D is correct after checking the calculation.", '
+                '"notes": "Ready."}'
+            ),
+        ]
+    )
+    args = argparse.Namespace(
+        single_agent_min_steps=1,
+        single_agent_max_steps=1,
+        answer_extractor=lambda text: "D" if text == "Final Answer: D" else None,
+        answer_formatter=lambda answer: f"Final Answer: {answer}",
+    )
+
+    result = await runner.run_method("single_agent", "Question with options.", llm, args)
+
+    assert result.raw_output == (
+        "Reason: Option D is correct after checking the calculation.\n"
+        "Final Answer: D"
+    )
+    assert result.trace["steps"][0]["output"] == "Final Answer: D"
+    assert result.trace["steps"][0]["parsed_answer"] == "D"
+    assert result.trace["stopped_reason"] == "final_answer_parseable"
+
+
+@pytest.mark.asyncio
+async def test_single_agent_recovers_jsonish_final_answer_with_latex_backslashes():
+    llm = UsageLLM(
+        [
+            UsageResponse(
+                '{"status": "final", "final_answer": "D", '
+                '"final_reason": "The calculation uses \\Delta E and clearly supports option D.", '
+                '"notes": "Ready."}'
+            ),
+        ]
+    )
+    args = argparse.Namespace(
+        single_agent_min_steps=1,
+        single_agent_max_steps=1,
+        answer_extractor=lambda text: "D" if text == "Final Answer: D" else None,
+        answer_formatter=lambda answer: f"Final Answer: {answer}",
+    )
+
+    result = await runner.run_method("single_agent", "Question with options.", llm, args)
+
+    assert result.raw_output == (
+        "Reason: The calculation uses \\Delta E and clearly supports option D.\n"
+        "Final Answer: D"
+    )
+    assert result.trace["steps"][0]["status"] == "final"
+    assert result.trace["steps"][0]["parsed_answer"] == "D"
+    assert result.trace["stopped_reason"] == "final_answer_parseable"
+
+
+@pytest.mark.asyncio
+async def test_majority_vote_uses_benchmark_formatter_for_json_final_answers():
+    llm = UsageLLM(
+        [
+            UsageResponse(
+                '{"status": "final", "final_answer": "D", '
+                '"final_reason": "The first voter selects D after checking the options.", '
+                '"notes": "First vote."}'
+            ),
+            UsageResponse(
+                '{"status": "final", "final_answer": "D", '
+                '"final_reason": "The second voter selects D after checking the options.", '
+                '"notes": "Second vote."}'
+            ),
+            UsageResponse(
+                '{"status": "final", "final_answer": "C", '
+                '"final_reason": "The third voter selects C after checking the options.", '
+                '"notes": "Third vote."}'
+            ),
+        ]
+    )
+    args = argparse.Namespace(
+        single_agent_min_steps=1,
+        single_agent_max_steps=1,
+        answer_extractor=lambda text: text.removeprefix("Final Answer: ").strip() if text.startswith("Final Answer: ") else None,
+        answer_formatter=lambda answer: f"Final Answer: {answer}",
+    )
+
+    result = await runner.run_method("majority_vote", "Question with options.", llm, args)
+
+    assert result.raw_output == "Final Answer: D"
+    assert result.trace["parsed_answers"] == ["D", "D", "C"]
+    assert result.trace["voted_answer"] == "D"
+
+
+@pytest.mark.asyncio
 async def test_single_agent_respects_max_steps_when_final_answer_is_not_parseable():
     llm = UsageLLM(
         [

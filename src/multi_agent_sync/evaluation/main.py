@@ -237,6 +237,7 @@ async def run_evaluation(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec, methods: list[str]) -> list[dict[str, Any]]:
     setattr(args, "answer_extractor", benchmark.extract_answer)
+    setattr(args, "answer_formatter", benchmark.format_answer)
     items = benchmark.load_items(args)
     rng = random.Random(args.seed)
     resolved_model = runner.resolve_model_name(args)

@@ -27,6 +27,7 @@ def build_benchmark() -> BenchmarkSpec:
         load_items=load_items,
         build_prompt=build_prompt,
         extract_answer=extract_answer,
+        format_answer=format_answer,
     )
 
 
@@ -66,6 +67,13 @@ def extract_answer(text: str) -> str | None:
 
     match = re.search(r"\bFinal\s+Answer\s*:\s*([ABCD])\b", text, flags=re.IGNORECASE)
     return match.group(1).upper() if match else None
+
+
+def format_answer(answer: str) -> str:
+    stripped = answer.strip()
+    if re.search(r"\bFinal\s+Answer\s*:", stripped, flags=re.IGNORECASE):
+        return stripped
+    return f"Final Answer: {stripped}"
 
 
 def load_gpqa_dataset(limit: int | None, data_file: str | None = None) -> list[dict[str, Any]] | Any:

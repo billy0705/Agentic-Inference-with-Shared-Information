@@ -20,7 +20,7 @@ async def run_majority_vote(prompt: str, llm: Any, args: argparse.Namespace) -> 
     for agent_index in range(MAJORITY_VOTE_AGENT_COUNT):
         agent_name = f"VoterAgent{agent_index + 1}"
         raw_output, returncode, trace = await run_single_agent(prompt, llm, args)
-        parsed_answer = extract_answer_with_args(raw_output, args)
+        parsed_answer = parsed_answer_from_single_agent_trace(trace) or extract_answer_with_args(raw_output, args)
         raw_outputs.append(raw_output)
         parsed_answers.append(parsed_answer)
         agent_outputs[agent_name] = raw_output
@@ -65,3 +65,18 @@ async def run_majority_vote(prompt: str, llm: Any, args: argparse.Namespace) -> 
         "fallback_used": fallback_used,
         "raw_output": final_output,
     }
+
+
+def parsed_answer_from_single_agent_trace(trace: dict[str, Any]) -> str | None:
+    if not isinstance(trace, dict):
+        return None
+    steps = trace.get("steps")
+    if not isinstance(steps, list):
+        return None
+    for step in reversed(steps):
+        if not isinstance(step, dict):
+            continue
+        parsed_answer = step.get("parsed_answer")
+        if parsed_answer is not None:
+            return str(parsed_answer)
+    return None

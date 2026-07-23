@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+def identity_answer_formatter(answer: str) -> str:
+    return answer
+
+
 @dataclass(frozen=True)
 class BenchmarkScore:
     pred: str | None
@@ -32,5 +36,6 @@ class BenchmarkSpec:
     load_items: Callable[[argparse.Namespace], Iterable[dict[str, Any]]]
     build_prompt: Callable[[dict[str, Any], random.Random], tuple[str, str]]
     extract_answer: Callable[[str], str | None]
+    format_answer: Callable[[str], str] = identity_answer_formatter
     score_response: Callable[[dict[str, Any], str, argparse.Namespace], BenchmarkScore] | None = None
     build_workflow_config: Callable[[dict[str, Any], argparse.Namespace], BenchmarkWorkflowConfig] | None = None
