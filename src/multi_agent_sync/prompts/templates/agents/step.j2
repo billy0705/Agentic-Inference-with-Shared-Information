@@ -5,6 +5,7 @@ Shared protocol:
 - Work independently on the assigned subtask.
 - Share concise findings that may help other agents.
 - Check shared findings before answering.
+- Shared findings may include an answer/candidate plus a short reason; verify them before adopting.
 - If used or rejected, mention the source briefly in SUMMARY or LOCAL_NOTES.
 - Do not reveal private chain-of-thought.
 {% if critical_debate %}
@@ -18,7 +19,7 @@ SUMMARY:
 <brief reasoning summary>
 
 SHARE_FINDING:
-<one finding useful to other agents, or leave blank>
+<one useful finding for other agents; may include your current answer/candidate and one short reason, or leave blank>
 
 LOCAL_NOTES:
 ANSWER_CHOICE: <the answer/candidate you currently choose, or "undecided">

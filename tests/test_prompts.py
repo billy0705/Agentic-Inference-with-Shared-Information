@@ -8,6 +8,7 @@ from multi_agent_sync.evaluation import gpqa, gsm8k, hotpotqa, mmlu_pro
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph import nodes
 from multi_agent_sync.orchestrator import orchestrator
+from multi_agent_sync.prompts import render_prompt
 
 
 def test_render_prompt_loads_package_template():
@@ -132,6 +133,8 @@ async def test_agent_prompt_is_rendered_from_template():
     assert "Local notes:\n- None yet." in prompt
     assert "Shared findings:\n- No shared findings yet." in prompt
     assert "Check shared findings before answering." in prompt
+    assert "Shared findings may include an answer/candidate plus a short reason; verify them before adopting." in prompt
+    assert "<one useful finding for other agents; may include your current answer/candidate and one short reason" in prompt
     assert "Recent relevant events" not in prompt
     assert "Respond with concise summaries only." in prompt
     assert "ANSWER_CHOICE:" in prompt
@@ -140,6 +143,31 @@ async def test_agent_prompt_is_rendered_from_template():
     assert "CONFIDENCE:" not in prompt
     assert "confidence" not in prompt.lower()
     assert "Respond with concise summaries only." not in inspect.getsource(ResearchAgent.build_prompt)
+
+
+def test_tool_agent_prompt_allows_sharing_candidate_and_short_reason():
+    prompt = render_prompt(
+        "agents/tool_step.j2",
+        agent_name="CodingAgent",
+        task="Fix a failing test",
+        role="Implementer",
+        description="",
+        rules=[],
+        critical_debate=False,
+        assigned_subtask="Find the candidate fix.",
+        workspace_access="write",
+        is_reactive=False,
+        reactive_reason="",
+        step_index=1,
+        max_steps=3,
+        notes="- None yet.",
+        events="- No shared findings yet.",
+        tool_observations="- None yet.",
+        feedback_tool_name="",
+    )
+
+    assert "Shared findings may include an answer/candidate plus a short reason; verify them before adopting." in prompt
+    assert "<one useful finding for other agents; may include your current answer/candidate and one short reason" in prompt
 
 
 def test_graph_prompts_are_not_embedded_in_node_functions():

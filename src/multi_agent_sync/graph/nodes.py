@@ -308,7 +308,9 @@ async def synthesizer_node(state: GraphState) -> GraphState:
         response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=state.get("synthesis_timeout", 60.0))
         raw_response = getattr(response, "content", str(response)).strip()
         token_usage = extract_token_usage(response).as_dict()
-        final_answer = deterministic_synthesized_answer(state, candidate_aggregation) or raw_response
+        final_answer = raw_response if is_valid_summarizer_answer(state, raw_response) else (
+            deterministic_synthesized_answer(state, candidate_aggregation) or raw_response
+        )
     except asyncio.TimeoutError:
         timed_out = True
         final_answer = deterministic_synthesized_answer(state, candidate_aggregation) or build_fallback_summary(state)
@@ -527,6 +529,14 @@ def deterministic_synthesized_answer(state: GraphState, aggregation: dict[str, A
     if selected_candidate is None:
         return None
     return format_candidate_final_answer(str(state.get("benchmark", "") or ""), str(selected_candidate))
+
+
+def is_valid_summarizer_answer(state: GraphState, response: str) -> bool:
+    benchmark = str(state.get("benchmark", "") or "")
+    extractor = answer_extractor_for_benchmark(benchmark)
+    if extractor is None:
+        return True
+    return extractor(response) is not None
 
 
 def format_candidate_final_answer(benchmark: str, candidate: str) -> str:

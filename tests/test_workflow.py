@@ -311,8 +311,15 @@ class RoleAwareAggregationLLM:
             return FakeResponse("FINAL:\nA possible objection points to option B. Final Answer: B\nCONFIDENCE:\n0.6")
         if "You are the Summarizer" in prompt:
             self.summarizer_prompts.append(prompt)
-            return FakeResponse("Final Answer: B")
+            return FakeResponse("Final Answer: A")
         return FakeResponse("Unexpected prompt")
+
+
+class MajorityConflictSummarizerLLM:
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        assert "Candidate aggregation:" in prompt
+        assert "selected_candidate: B" in prompt
+        return FakeResponse("The option text contradicts the majority candidate.\n\nFinal Answer: C")
 
 
 class WorkflowFakeDockerWorkspace(DockerWorkspace):
@@ -744,6 +751,60 @@ async def test_dynamic_summarize_outputs_uses_candidate_majority_with_role_conte
     assert aggregation["selected_candidate"] == "A"
     assert aggregation["selection_rule"] == "majority_vote"
     assert aggregation["counts"] == {"A": 2, "B": 1}
+
+
+@pytest.mark.asyncio
+async def test_summarizer_valid_answer_is_not_overridden_by_candidate_majority():
+    state = await nodes.synthesizer_node(
+        {
+            "task": "Choose one option.\n\nOptions:\nA. wrong\nB. tempting\nC. correct\nD. wrong",
+            "benchmark": "gpqa",
+            "run_id": "test-run",
+            "llm": MajorityConflictSummarizerLLM(),
+            "synthesizer_mode": "summarize_outputs",
+            "assignments": [
+                {"agent_name": "SolverOne", "role": "Solve", "task": "Choose an answer."},
+                {"agent_name": "SolverTwo", "role": "Solve", "task": "Choose an answer."},
+                {"agent_name": "Verifier", "role": "Check", "task": "Verify the answer."},
+            ],
+            "agent_traces": {
+                "SolverOne": {
+                    "steps": [
+                        {
+                            "parsed_output": {
+                                "summary": "The first solver picked B.",
+                                "local_notes": "ANSWER_CHOICE: B\nANSWER_REASON: B looked plausible.",
+                            }
+                        }
+                    ]
+                },
+                "SolverTwo": {
+                    "steps": [
+                        {
+                            "parsed_output": {
+                                "summary": "The second solver picked B.",
+                                "local_notes": "ANSWER_CHOICE: B\nANSWER_REASON: B looked plausible.",
+                            }
+                        }
+                    ]
+                },
+                "Verifier": {
+                    "steps": [
+                        {
+                            "parsed_output": {
+                                "summary": "The verifier noticed C matches the option text.",
+                                "local_notes": "ANSWER_CHOICE: C\nANSWER_REASON: C is option-consistent.",
+                            }
+                        }
+                    ]
+                },
+            },
+        }
+    )
+
+    assert state["final_answer"] == "The option text contradicts the majority candidate.\n\nFinal Answer: C"
+    assert state["synthesizer_trace"]["final_answer"] == state["final_answer"]
+    assert state["synthesizer_trace"]["candidate_aggregation"]["selected_candidate"] == "B"
 
 
 def test_candidate_aggregation_prefers_answer_choice_from_agent_trace():
