@@ -60,6 +60,20 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "runsForMethodFilter" in html
     assert "runMethods" in html
     assert "Accuracy Overview" in html
+    assert "Run Analysis" in html
+    assert "renderRunAnalysisPanel" in html
+    assert "runAnalysisRows" in html
+    assert "classifyAnalysisIssue" in html
+    assert "renderAnalysisIssueRow" in html
+    assert "our method wrong, other correct" in html
+    assert "candidate majority wrong" in html
+    assert "no majority, summarizer wrong" in html
+    assert "summarizer overrode correct aggregation" in html
+    assert "all methods wrong" in html
+    assert "our method correct, others wrong" in html
+    assert "analysis_target_method" in html
+    assert "candidate_aggregation" in html
+    assert "setAnalysisMethod" in html
     assert "Latest Benchmark Accuracy" in html
     assert "accuracyBenchmarkGroups" in html
     assert "comparisonFingerprint" in html
@@ -123,6 +137,7 @@ def test_static_output_viewer_exposes_required_filters_and_tabs():
     assert "eventTypeIsVisible" in html
     assert "renderPageTabs" in html
     assert 'page: \'accuracy\'' in html
+    assert 'analysisMethod: \'multiagent_dynamic_streaming\'' in html
 
     for tab in ("Overview", "Orchestrator", "Prompt", "Output", "Agents", "Summarizer", "Events", "Tools", "Raw"):
         assert tab in html

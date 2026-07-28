@@ -71,6 +71,13 @@
     .benchmark-methods { display: grid; gap: 8px; margin-top: 12px; }
     .method-row { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(180px, 2fr) minmax(72px, auto) minmax(112px, auto) minmax(86px, auto) minmax(100px, auto) minmax(80px, auto); gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 8px; }
     .route-breakdown { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .analysis-summary { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; margin: 12px 0; }
+    .analysis-bucket { border: 1px solid var(--line); border-radius: 8px; background: white; padding: 12px; margin: 12px 0; }
+    .analysis-list { display: grid; gap: 8px; margin-top: 10px; }
+    .analysis-row { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 10px; }
+    .analysis-row-header { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+    .analysis-row-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+    .analysis-jump { border: 1px solid var(--accent); color: var(--accent); background: white; border-radius: 6px; padding: 5px 8px; font-size: 12px; font-weight: 800; }
     .metric-label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; }
     .source-chip { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--line); border-radius: 999px; background: white; padding: 2px 8px; font-size: 12px; font-weight: 800; white-space: nowrap; }
     .source-chip.current { color: var(--good); background: #f5fbf7; }
@@ -134,6 +141,7 @@
       <div class="stats" id="stats"></div>
       <div class="page-tabs" id="pageTabs"></div>
       <section class="panel" id="accuracyPanel"><div class="empty">Open output data to compare benchmark accuracy.</div></section>
+      <section class="panel" id="analysisPanel"><div class="empty">Open output data to analyze a single run.</div></section>
       <div id="detailPage">
         <section class="panel" id="runPanel"><div class="empty">Open the repository's output folder to begin.</div></section>
         <section class="panel">
@@ -168,6 +176,7 @@
       eventAgent: 'all',
       eventType: 'communication',
       accuracyModels: {},
+      analysisMethod: 'multiagent_dynamic_streaming',
       page: 'accuracy',
       tab: 'Overview',
       search: '',
@@ -339,6 +348,7 @@
       state.eventAgent = 'all';
       state.eventType = 'communication';
       state.accuracyModels = {};
+      state.analysisMethod = 'multiagent_dynamic_streaming';
       $('sourceStatus').textContent = `${statusText} ${state.data.runs.length} runs found.`;
       render();
     }
@@ -519,6 +529,11 @@
         prompt: truncateText(trace.prompt || methodTrace.prompt || ''),
         raw_output: truncateText(trace.raw_output || result.raw_output || ''),
         result: compactResult(result),
+        analysis_target_method: method,
+        candidate_aggregation: summarizerTrace?.candidate_aggregation || null,
+        summarizer_raw_response: summarizerTrace?.raw_response || '',
+        summarizer_final_answer: summarizerTrace?.final_answer || methodTrace.final_answer || '',
+        final_answer: methodTrace.final_answer || '',
         selected_agents: selectedAgents(methodTrace),
         agents,
         summarizer: normalizeSummarizerTrace(methodTrace),
@@ -986,18 +1001,21 @@
       renderStats(runs);
       renderPageTabs();
       renderAccuracyPanel();
+      renderRunAnalysisPanel(run);
       renderRunList(runs);
       renderRunPanel(run);
       renderExampleSelect(run);
       renderTabs(example);
       renderTab(example);
       $('accuracyPanel').classList.toggle('hidden', state.page !== 'accuracy');
+      $('analysisPanel').classList.toggle('hidden', state.page !== 'analysis');
       $('detailPage').classList.toggle('hidden', state.page !== 'detail');
     }
 
     function renderPageTabs() {
       const pages = [
         ['accuracy', 'Accuracy Overview'],
+        ['analysis', 'Run Analysis'],
         ['detail', 'Run Detail'],
       ];
       $('pageTabs').innerHTML = pages.map(([id, label]) => `<button class="page-tab ${state.page === id ? 'active' : ''}" type="button" data-page="${id}">${label}</button>`).join('');
@@ -1377,6 +1395,217 @@
       if (value === null || typeof value !== 'object') return JSON.stringify(value);
       if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
       return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+    }
+
+    function renderRunAnalysisPanel(run) {
+      if (!run) {
+        $('analysisPanel').innerHTML = '<div class="empty">No run selected.</div>';
+        return;
+      }
+      const methods = runMethods(run);
+      const targetMethod = analysisTargetMethod(run);
+      if (!targetMethod) {
+        $('analysisPanel').innerHTML = '<div class="empty">No method results are available for this run.</div>';
+        return;
+      }
+      const rows = runAnalysisRows(run, targetMethod);
+      const summary = analysisSummary(rows);
+      const buckets = analysisBuckets();
+      $('analysisPanel').innerHTML = `
+        <div class="toolbar">
+          <div>
+            <h2>Single Run Analysis</h2>
+            <div class="subtle">${esc(run.benchmark_display_name)} · ${esc(run.run_id)} · ${esc(run.path)}</div>
+          </div>
+          <div class="field">
+            <label for="analysisMethodSelect">Analysis method</label>
+            <select id="analysisMethodSelect" onchange="setAnalysisMethod(this.value)">
+              ${methods.map((method) => `<option value="${esc(method)}" ${method === targetMethod ? 'selected' : ''}>${esc(method)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="analysis-summary">
+          <div class="stat"><span class="subtle">Target method</span><strong>${esc(targetMethod)}</strong></div>
+          <div class="stat"><span class="subtle">Correct / total</span><strong>${esc(summary.correct)} / ${esc(summary.total)}</strong></div>
+          <div class="stat"><span class="subtle">Accuracy</span><strong>${esc(percent(summary.accuracy))}</strong></div>
+          <div class="stat"><span class="subtle">Invalid</span><strong>${esc(summary.invalid)}</strong></div>
+        </div>
+        ${buckets.map((bucket) => renderAnalysisBucket(bucket, rows.filter((row) => row.bucket === bucket.key))).join('')}
+      `;
+    }
+
+    function analysisTargetMethod(run) {
+      const methods = runMethods(run);
+      if (methods.includes(state.analysisMethod)) return state.analysisMethod;
+      if (methods.includes('multiagent_dynamic_streaming')) {
+        state.analysisMethod = 'multiagent_dynamic_streaming';
+        return state.analysisMethod;
+      }
+      state.analysisMethod = methods[0] || '';
+      return state.analysisMethod;
+    }
+
+    function setAnalysisMethod(method) {
+      state.analysisMethod = method;
+      state.page = 'analysis';
+      render();
+    }
+
+    function analysisBuckets() {
+      return [
+        { key: 'our_wrong_other_correct', label: 'our method wrong, other correct', tone: 'bad' },
+        { key: 'invalid', label: 'invalid / extraction issue', tone: 'warn' },
+        { key: 'all_methods_wrong', label: 'all methods wrong', tone: 'bad' },
+        { key: 'our_correct_others_wrong', label: 'our method correct, others wrong', tone: 'good' },
+      ];
+    }
+
+    function runAnalysisRows(run, targetMethod) {
+      return questionResultRows(run).map((row) => {
+        const target = row.methods[targetMethod];
+        if (!target) return null;
+        const otherExamples = Object.entries(row.methods)
+          .filter(([method]) => method !== targetMethod)
+          .map(([method, example]) => ({ method, example }));
+        const correctOthers = otherExamples.filter((item) => isCorrectExample(item.example)).map((item) => item.method);
+        const wrongOthers = otherExamples.filter((item) => !isCorrectExample(item.example)).map((item) => item.method);
+        const issue = classifyAnalysisIssue(target, correctOthers, wrongOthers);
+        return {
+          index: row.index,
+          target_method: targetMethod,
+          example: target,
+          correct_others: correctOthers,
+          wrong_others: wrongOthers,
+          bucket: analysisBucketForExample(target, correctOthers, wrongOthers),
+          issue,
+        };
+      }).filter(Boolean);
+    }
+
+    function analysisBucketForExample(example, correctOthers, wrongOthers) {
+      if (isInvalidExample(example)) return 'invalid';
+      if (isCorrectExample(example)) {
+        return wrongOthers.length ? 'our_correct_others_wrong' : 'our_correct';
+      }
+      return correctOthers.length ? 'our_wrong_other_correct' : 'all_methods_wrong';
+    }
+
+    function classifyAnalysisIssue(example, correctOthers, wrongOthers) {
+      if (isInvalidExample(example)) return 'invalid/extraction';
+      if (isCorrectExample(example)) return wrongOthers.length ? 'our method correct, others wrong' : 'correct';
+      if (example.route_mode === 'direct') return 'direct route wrong';
+
+      const aggregation = example.candidate_aggregation || {};
+      const selected = aggregation.selected_candidate;
+      const selectionRule = String(aggregation.selection_rule || '');
+      const selectedMatchesGold = selected !== null && selected !== undefined && comparableAnswer(selected) === comparableAnswer(example.gold);
+      if (selectedMatchesGold && comparableAnswer(example.pred) !== comparableAnswer(example.gold)) {
+        return 'summarizer overrode correct aggregation';
+      }
+      if (selected !== null && selected !== undefined && comparableAnswer(selected) !== comparableAnswer(example.gold)) {
+        return selectionRule === 'majority_vote' || selectionRule === 'unanimous_single_candidate'
+          ? 'candidate majority wrong'
+          : 'candidate selected wrong';
+      }
+      if (selectionRule === 'tie_requires_role_aware_synthesis') return 'no majority, summarizer wrong';
+      if (correctOthers.length) return 'other method correct';
+      return 'method answer wrong';
+    }
+
+    function isCorrectExample(example) {
+      return example?.correct === true || example?.correct === 'True';
+    }
+
+    function isInvalidExample(example) {
+      return Boolean(example?.error) || example?.pred === null || example?.pred === undefined || example?.pred === '';
+    }
+
+    function comparableAnswer(value) {
+      return String(value ?? '')
+        .trim()
+        .replace(/^Final\s+Answer\s*:\s*/i, '')
+        .replace(/^\\boxed\{(.+)\}$/i, '$1')
+        .replace(/^\((.+)\)$/i, '$1')
+        .trim()
+        .toLowerCase();
+    }
+
+    function analysisSummary(rows) {
+      const total = rows.length;
+      const correct = rows.filter((row) => isCorrectExample(row.example)).length;
+      const invalid = rows.filter((row) => isInvalidExample(row.example)).length;
+      return {
+        total,
+        correct,
+        invalid,
+        accuracy: total ? correct / total : 0,
+      };
+    }
+
+    function renderAnalysisBucket(bucket, rows) {
+      return `
+        <section class="analysis-bucket">
+          <div class="toolbar">
+            <div>
+              <h3 class="${esc(bucket.tone)}">${esc(bucket.label)}</h3>
+              <div class="subtle">${esc(analysisBucketDescription(bucket.key))}</div>
+            </div>
+            <span class="pill">${esc(rows.length)} examples</span>
+          </div>
+          <div class="analysis-list">
+            ${rows.length ? rows.map(renderAnalysisIssueRow).join('') : '<div class="empty">No examples in this bucket.</div>'}
+          </div>
+        </section>
+      `;
+    }
+
+    function analysisBucketDescription(key) {
+      const descriptions = {
+        our_wrong_other_correct: 'Cases to inspect first: the target method failed while at least one baseline succeeded.',
+        invalid: 'Missing predictions, extraction failures, or recorded errors.',
+        all_methods_wrong: 'Hard cases where every available method failed.',
+        our_correct_others_wrong: 'Cases where the target method found an answer missed by at least one baseline.',
+      };
+      return descriptions[key] || '';
+    }
+
+    function renderAnalysisIssueRow(row) {
+      const example = row.example;
+      const aggregation = example.candidate_aggregation || {};
+      const candidates = Array.isArray(aggregation.candidates) ? aggregation.candidates : [];
+      return `
+        <div class="analysis-row">
+          <div class="analysis-row-header">
+            <div>
+              <strong>#${esc(row.index)}</strong>
+              <span class="pill ${isCorrectExample(example) ? 'good' : isInvalidExample(example) ? 'warn' : 'bad'}">${esc(row.issue)}</span>
+            </div>
+            <button class="analysis-jump" type="button" onclick="selectExampleByIndexAndMethod('${esc(jsString(row.index))}', '${esc(jsString(row.target_method))}')">Open trace</button>
+          </div>
+          <div class="analysis-row-meta">
+            <span class="pill">pred: ${esc(example.pred)}</span>
+            <span class="pill">gold: ${esc(example.gold)}</span>
+            <span class="pill">correct baselines: ${esc(row.correct_others.join(', ') || 'none')}</span>
+            <span class="pill">route: ${esc(example.route_mode || 'n/a')}</span>
+            <span class="pill">aggregation: ${esc(aggregation.selection_rule || 'n/a')}</span>
+            <span class="pill">selected: ${esc(aggregation.selected_candidate ?? 'n/a')}</span>
+            <span class="pill">counts: ${esc(pretty(aggregation.counts || {}))}</span>
+          </div>
+          ${candidates.length ? `<details><summary>Agent candidates</summary><pre>${esc(pretty(candidates.map(compactAnalysisCandidate)))}</pre></details>` : ''}
+          ${example.summarizer_final_answer || example.summarizer_raw_response ? `<details><summary>Summarizer output</summary><pre>${esc(truncateText(example.summarizer_final_answer || example.summarizer_raw_response, 6000))}</pre></details>` : ''}
+        </div>
+      `;
+    }
+
+    function compactAnalysisCandidate(candidate) {
+      return {
+        agent: candidate.agent_name,
+        candidate: candidate.candidate,
+        source: candidate.candidate_source,
+        critical_debate: candidate.critical_debate,
+        role: candidate.role,
+        reason: candidate.reason_excerpt,
+      };
     }
 
     function renderRunList(runs) {
