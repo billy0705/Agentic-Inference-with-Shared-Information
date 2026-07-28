@@ -102,6 +102,10 @@ def test_parse_methods_accepts_dynamic_multiagent_methods():
     ]
 
 
+def test_parse_methods_accepts_dynamic_orchestration_method():
+    assert runner.parse_methods("dynamic_orchestration,plain_llm") == ["dynamic_orchestration", "plain_llm"]
+
+
 def test_parse_methods_accepts_single_agent_method():
     assert runner.parse_methods("single_agent,plain_llm") == ["single_agent", "plain_llm"]
 
@@ -111,6 +115,12 @@ def test_evaluation_parser_sets_single_agent_step_defaults():
 
     assert args.single_agent_min_steps == 3
     assert args.single_agent_max_steps == 7
+
+
+def test_evaluation_parser_sets_dynamic_orchestration_round_default():
+    args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
+
+    assert args.max_orchestrator_rounds == 3
 
 
 def test_parse_methods_accepts_multiagent_debate_method():
@@ -295,6 +305,66 @@ def test_run_config_records_kimina_docker_settings(tmp_path):
     assert config["settings"]["kimina_docker_container"] == "kimina-test"
     assert config["settings"]["kimina_docker_startup_timeout"] == 45.0
     assert config["settings"]["kimina_docker_cleanup"] is True
+
+
+def test_run_config_records_method_independent_comparison_fingerprint(tmp_path):
+    first_args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "gpqa",
+            "--methods",
+            "majority_vote",
+            "--model",
+            "test-model",
+            "--limit",
+            "20",
+            "--data-file",
+            "data/gpqa/example.jsonl",
+            "--seed",
+            "11",
+        ]
+    )
+    second_args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            "gpqa",
+            "--methods",
+            "dynamic_orchestration",
+            "--model",
+            "test-model",
+            "--limit",
+            "20",
+            "--data-file",
+            "data/gpqa/example.jsonl",
+            "--seed",
+            "11",
+        ]
+    )
+
+    first_config = runner.build_run_config(
+        gpqa.build_benchmark(),
+        first_args,
+        ["majority_vote"],
+        run_id="baseline-run",
+        output_path=tmp_path / "baseline.csv",
+    )
+    second_config = runner.build_run_config(
+        gpqa.build_benchmark(),
+        second_args,
+        ["dynamic_orchestration"],
+        run_id="ours-run",
+        output_path=tmp_path / "ours.csv",
+    )
+
+    assert first_config["methods"] == ["majority_vote"]
+    assert second_config["methods"] == ["dynamic_orchestration"]
+    assert first_config["comparison"]["schema_version"] == 1
+    assert first_config["comparison"]["scope"]["benchmark"] == "gpqa"
+    assert first_config["comparison"]["scope"]["resolved_model"] == "test-model"
+    assert first_config["comparison"]["scope"]["limit"] == 20
+    assert first_config["comparison"]["scope"]["data_file"] == "data/gpqa/example.jsonl"
+    assert first_config["comparison"]["scope"]["seed"] == 11
+    assert first_config["comparison"]["fingerprint"] == second_config["comparison"]["fingerprint"]
 
 
 def test_parser_accepts_olymmath_benchmarks():
@@ -1904,6 +1974,21 @@ def test_olymmath_extract_answer_ignores_json_like_missing_final_answer():
     )
 
 
+def test_olymmath_extract_answer_skips_prompt_placeholder_answer():
+    benchmark = olymmath.build_benchmark()
+
+    assert benchmark.extract_answer("Final Answer: <answer>") is None
+    assert (
+        benchmark.extract_answer(
+            "Original prompt says:\n"
+            "Final Answer: <answer>\n\n"
+            "Solver output:\n"
+            "Final Answer: 144"
+        )
+        == "144"
+    )
+
+
 def test_olymmath_score_response_uses_normalized_answer_match():
     score = olymmath.score_response(
         {
@@ -2475,6 +2560,36 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
     assert captured_kwargs["enable_agent_message_streaming"] is expected_streaming
     expected_synthesizer_mode = "summarize_outputs" if method == "multiagent_dynamic_streaming" else "generic"
     assert captured_kwargs["synthesizer_mode"] == expected_synthesizer_mode
+
+
+@pytest.mark.asyncio
+async def test_run_method_dispatches_dynamic_orchestration(monkeypatch):
+    captured_kwargs = {}
+
+    async def fake_run_dynamic_orchestration(prompt, llm, args, *, workflow_config=None):
+        captured_kwargs.update(
+            {
+                "prompt": prompt,
+                "llm": llm,
+                "args": args,
+                "workflow_config": workflow_config,
+            }
+        )
+        return "Final Answer: A", 0, {"method": "dynamic_orchestration", "final_answer": "Final Answer: A"}
+
+    from multi_agent_sync.evaluation.baselines import multiagent_sync
+
+    monkeypatch.setattr(multiagent_sync, "run_dynamic_orchestration", fake_run_dynamic_orchestration)
+    args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
+    llm = UsageLLM([])
+
+    result = await runner.run_method("dynamic_orchestration", "Question?", llm, args)
+
+    assert result.raw_output == "Final Answer: A"
+    assert result.trace["method"] == "dynamic_orchestration"
+    assert captured_kwargs["prompt"] == "Question?"
+    assert captured_kwargs["llm"] is not llm
+    assert captured_kwargs["args"] is args
 
 
 def test_write_results_csv_includes_timing_and_token_columns(tmp_path):

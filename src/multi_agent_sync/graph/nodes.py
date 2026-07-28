@@ -412,6 +412,9 @@ def build_candidate_aggregation(state: GraphState, agent_last_summaries: dict[st
             "counts": {},
             "selected_candidate": None,
             "selection_rule": "no_benchmark_extractor",
+            "consensus_strength": "unavailable",
+            "needs_review": True,
+            "review_reason": "No benchmark extractor is available for candidate aggregation.",
         }
 
     for agent_name, output in summary_texts.items():
@@ -439,18 +442,38 @@ def build_candidate_aggregation(state: GraphState, agent_last_summaries: dict[st
 
     selected_candidate = None
     selection_rule = "no_extractable_candidates"
+    consensus_strength = "no_candidate"
+    needs_review = True
+    review_reason = "No extractable answer candidates were found."
     if counts:
         most_common = counts.most_common()
         top_candidate, top_count = most_common[0]
         runner_up_count = most_common[1][1] if len(most_common) > 1 else 0
-        if top_count >= 2 and top_count > runner_up_count:
+        margin = top_count - runner_up_count
+        selected_candidate = top_candidate
+        review_reason = ""
+        if top_count >= 2 and margin >= 2:
             selected_candidate = top_candidate
             selection_rule = "majority_vote"
-        elif len(most_common) == 1:
+            consensus_strength = "unanimous" if len(most_common) == 1 else "strong_majority"
+            needs_review = False
+            review_reason = "The top candidate has a margin of at least two votes."
+        elif top_count >= 2 and margin == 1:
             selected_candidate = top_candidate
+            selection_rule = "weak_majority_requires_evidence_review"
+            consensus_strength = "weak_majority"
+            needs_review = True
+            review_reason = "The top candidate only leads by one vote, so evidence review is required."
+        elif len(most_common) == 1:
             selection_rule = "unanimous_single_candidate"
+            consensus_strength = "single_candidate_only"
+            needs_review = True
+            review_reason = "Only one extractable candidate was found."
         else:
             selection_rule = "tie_requires_role_aware_synthesis"
+            consensus_strength = "tie"
+            needs_review = True
+            review_reason = "Multiple candidates are tied."
 
     return {
         "benchmark": benchmark,
@@ -458,6 +481,9 @@ def build_candidate_aggregation(state: GraphState, agent_last_summaries: dict[st
         "counts": dict(counts),
         "selected_candidate": selected_candidate,
         "selection_rule": selection_rule,
+        "consensus_strength": consensus_strength,
+        "needs_review": needs_review,
+        "review_reason": review_reason,
     }
 
 
@@ -523,6 +549,8 @@ def answer_extractor_for_benchmark(benchmark: str) -> Callable[[str], str | None
 def deterministic_synthesized_answer(state: GraphState, aggregation: dict[str, Any]) -> str | None:
     if state.get("synthesizer_mode") != "summarize_outputs":
         return None
+    if aggregation.get("needs_review"):
+        return None
     if aggregation.get("selection_rule") != "majority_vote":
         return None
     selected_candidate = aggregation.get("selected_candidate")
@@ -555,6 +583,9 @@ def format_candidate_aggregation(aggregation: dict[str, Any]) -> str:
 
     lines = [
         f"- selection_rule: {aggregation.get('selection_rule')}",
+        f"- consensus_strength: {aggregation.get('consensus_strength')}",
+        f"- needs_review: {aggregation.get('needs_review')}",
+        f"- review_reason: {aggregation.get('review_reason')}",
         f"- selected_candidate: {aggregation.get('selected_candidate')}",
         f"- counts: {aggregation.get('counts')}",
         "- agent candidates:",
@@ -583,7 +614,7 @@ def compact_text(text: str, *, limit: int) -> str:
 
 def build_fallback_summary(state: GraphState) -> str:
     outputs = state.get("agent_outputs", {})
-    parts = [f"Summarizer timed out; fallback summary for task: {state['task']}."]
+    parts = ["Summarizer timed out; fallback summary from available agent outputs."]
     for name, output in outputs.items():
         if output:
             parts.append(f"{name}: {output}")

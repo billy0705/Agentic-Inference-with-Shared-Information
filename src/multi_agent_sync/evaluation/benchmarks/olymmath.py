@@ -148,7 +148,9 @@ def extract_answer(text: str) -> str | None:
 
     boxed = extract_last_boxed(text)
     if boxed:
-        return normalize_answer_text(boxed)
+        normalized_boxed = normalize_answer_text(boxed)
+        if not is_placeholder_answer(boxed, normalized_boxed):
+            return normalized_boxed
 
     found_json_answer, json_answer = extract_json_like_final_answer(text)
     if found_json_answer:
@@ -163,13 +165,18 @@ def extract_answer(text: str) -> str | None:
         r"\bThe\s+answer\s+is\s*(?P<answer>.+)",
     ]
     for pattern in strict_patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return normalize_answer_text(first_answer_line(match.group("answer")))
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            raw_answer = first_answer_line(match.group("answer"))
+            normalized_answer = normalize_answer_text(raw_answer)
+            if is_placeholder_answer(raw_answer, normalized_answer):
+                continue
+            return normalized_answer
 
     for line in reversed([line.strip() for line in text.splitlines() if line.strip()]):
         if len(line) <= 200:
-            return normalize_answer_text(line)
+            normalized_line = normalize_answer_text(line)
+            if not is_placeholder_answer(line, normalized_line):
+                return normalized_line
     return None
 
 
@@ -191,9 +198,17 @@ def extract_json_like_final_answer(text: str) -> tuple[bool, str | None]:
         return True, None
 
     answer = final_answer_match.group("answer").strip()
-    if not answer or answer.lower() in {"n/a", "na", "none", "null"}:
+    normalized_answer = normalize_answer_text(answer)
+    if not answer or answer.lower() in {"n/a", "na", "none", "null"} or is_placeholder_answer(answer, normalized_answer):
         return True, None
     return True, answer
+
+
+def is_placeholder_answer(raw_answer: str, normalized_answer: str | None = None) -> bool:
+    raw = str(raw_answer or "").strip().lower()
+    normalized = str(normalized_answer if normalized_answer is not None else normalize_answer_text(raw_answer)).strip().lower()
+    placeholders = {"<answer>", "answer", "<finalanswer>", "finalanswer"}
+    return raw in placeholders or normalized in placeholders or "<answer>" in raw
 
 
 def score_response(row: dict[str, Any], raw_output: str, args: argparse.Namespace) -> BenchmarkScore:

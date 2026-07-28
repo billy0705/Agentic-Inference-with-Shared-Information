@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -27,6 +28,7 @@ from multi_agent_sync.evaluation.baselines import (
     run_plain_llm,
     run_single_agent,
 )
+from multi_agent_sync.evaluation.baselines import multiagent_sync as multiagent_sync_baselines
 from multi_agent_sync.evaluation.baselines.common import (
     add_optional_ints,
     coerce_int,
@@ -45,6 +47,7 @@ VALID_METHODS = {
     "multiagent_no_streaming",
     "multiagent_dynamic_streaming",
     "multiagent_dynamic_no_streaming",
+    "dynamic_orchestration",
     "multiagent_debate",
     "majority_vote",
     "plain_llm",
@@ -154,12 +157,14 @@ def build_run_config(
     run_id: str,
     output_path: Path,
 ) -> dict[str, Any]:
+    comparison = build_comparison_metadata(benchmark, args)
     return {
         "run_id": run_id,
         "benchmark": benchmark.name,
         "benchmark_display_name": benchmark.display_name,
         "methods": methods,
         "output_path": str(output_path),
+        "comparison": comparison,
         "settings": {
             "model": args.model,
             "resolved_model": resolve_model_name(args),
@@ -186,6 +191,7 @@ def build_run_config(
             "swebench_instance_ids": getattr(args, "swebench_instance_ids", None),
             "workspace_image": getattr(args, "workspace_image", None),
             "max_steps": args.max_steps,
+            "max_orchestrator_rounds": getattr(args, "max_orchestrator_rounds", None),
             "single_agent_min_steps": getattr(args, "single_agent_min_steps", None),
             "single_agent_max_steps": getattr(args, "single_agent_max_steps", None),
             "total_runtime_timeout": args.total_runtime_timeout,
@@ -194,6 +200,29 @@ def build_run_config(
             "data_file": args.data_file,
             "save_json_traces": args.save_json_traces,
         },
+    }
+
+
+def build_comparison_metadata(benchmark: BenchmarkSpec, args: argparse.Namespace) -> dict[str, Any]:
+    scope = build_comparison_scope(benchmark, args)
+    serialized = json.dumps(scope, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return {
+        "schema_version": 1,
+        "fingerprint": hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16],
+        "scope": scope,
+    }
+
+
+def build_comparison_scope(benchmark: BenchmarkSpec, args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "benchmark": benchmark.name,
+        "resolved_model": resolve_model_name(args),
+        "limit": getattr(args, "limit", 0),
+        "seed": getattr(args, "seed", None),
+        "data_file": getattr(args, "data_file", None),
+        "ma_proofbench_level": getattr(args, "ma_proofbench_level", None),
+        "olymmath_subset": getattr(args, "olymmath_subset", None),
+        "swebench_instance_ids": getattr(args, "swebench_instance_ids", None),
     }
 
 
@@ -206,6 +235,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "subagent_mode": method_subagent_mode(method),
         "message_streaming": method_message_streaming(method),
         "max_steps": args.max_steps,
+        "max_orchestrator_rounds": getattr(args, "max_orchestrator_rounds", None),
         "single_agent_min_steps": getattr(args, "single_agent_min_steps", None),
         "single_agent_max_steps": getattr(args, "single_agent_max_steps", None),
         "attempts": getattr(args, "attempts", 1),
@@ -420,6 +450,9 @@ def extract_agent_messages(method_trace: dict[str, Any]) -> list[dict[str, Any]]
 
 
 def build_debug_workflow(selected_agents: list[dict[str, Any]], method_trace: dict[str, Any]) -> list[dict[str, str]]:
+    if method_trace.get("method") == "dynamic_orchestration" or method_trace.get("dynamic_orchestration_trace"):
+        return build_dynamic_orchestration_debug_workflow(method_trace)
+
     if not selected_agents:
         if method_trace.get("method") == "single_agent":
             return [
@@ -459,6 +492,39 @@ def build_debug_workflow(selected_agents: list[dict[str, Any]], method_trace: di
         for agent in selected_agents
     )
     workflow.append({"node": "summarizer", "description": "Summarized each subagent's last summary into final answer."})
+    return workflow
+
+
+def build_dynamic_orchestration_debug_workflow(method_trace: dict[str, Any]) -> list[dict[str, str]]:
+    trace = method_trace.get("dynamic_orchestration_trace")
+    rounds = method_trace.get("orchestrator_rounds")
+    if not isinstance(rounds, list) and isinstance(trace, dict):
+        rounds = trace.get("rounds")
+    if not isinstance(rounds, list):
+        return []
+
+    workflow: list[dict[str, str]] = []
+    for round_trace in rounds:
+        if not isinstance(round_trace, dict):
+            continue
+        decision = round_trace.get("decision") if isinstance(round_trace.get("decision"), dict) else {}
+        workflow.append(
+            {
+                "node": f"orchestrator_round_{round_trace.get('round', '')}",
+                "description": f"Selected action {decision.get('action', 'unknown')}: {decision.get('reason', '')}",
+            }
+        )
+        selected_agents = round_trace.get("selected_agents")
+        if not isinstance(selected_agents, list):
+            continue
+        workflow.extend(
+            {
+                "node": str(agent.get("name", "agent")),
+                "description": "Ran dynamic orchestration subagent with streaming.",
+            }
+            for agent in selected_agents
+            if isinstance(agent, dict)
+        )
     return workflow
 
 
@@ -516,6 +582,13 @@ async def run_method(
             args,
             enable_agent_message_streaming=False,
             subagent_mode="dynamic",
+            workflow_config=workflow_config,
+        )
+    elif method == "dynamic_orchestration":
+        raw_output, returncode, trace = await multiagent_sync_baselines.run_dynamic_orchestration(
+            prompt,
+            metered_llm,
+            args,
             workflow_config=workflow_config,
         )
     else:

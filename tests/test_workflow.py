@@ -322,6 +322,95 @@ class MajorityConflictSummarizerLLM:
         return FakeResponse("The option text contradicts the majority candidate.\n\nFinal Answer: C")
 
 
+class DynamicOrchestrationFakeLLM:
+    def __init__(self) -> None:
+        self.controller_prompts: list[str] = []
+        self.agent_prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if "dynamic orchestration controller" in prompt:
+            self.controller_prompts.append(prompt)
+            if len(self.controller_prompts) == 1:
+                return FakeResponse(
+                    """
+                    {
+                      "action": "run_agents",
+                      "reason": "Start with independent solving and a critical verification pass.",
+                      "round_goal": "Get a candidate answer and check it.",
+                      "selected_agents": [
+                        {
+                          "name": "Evidence Solver",
+                          "role": "Solves the question from the prompt evidence.",
+                          "description": "Owns the direct evidence-to-answer mapping.",
+                          "rules": ["Share the answer and one short reason."],
+                          "subtask": "Choose the best option from the prompt evidence.",
+                          "expected_output": "A candidate answer with a short reason.",
+                          "critical_debate": false,
+                          "workspace_access": "none"
+                        },
+                        {
+                          "name": "Critical Verifier",
+                          "role": "Checks whether the candidate satisfies the prompt.",
+                          "description": "Owns contradiction and option-fit checks.",
+                          "rules": ["Reject unsupported answers."],
+                          "subtask": "Verify the candidate against the question.",
+                          "expected_output": "A verified candidate or correction.",
+                          "critical_debate": true,
+                          "workspace_access": "none"
+                        }
+                      ],
+                      "collaboration_protocol": {
+                        "event_types_to_share": ["finding", "critique", "warning"],
+                        "reactive_steps": true,
+                        "notes": "Agents should compare answer candidates and short reasons."
+                      }
+                    }
+                    """
+                )
+            assert "Candidate aggregation:" in prompt
+            assert "EvidenceSolver" in prompt
+            assert "CriticalVerifier" in prompt
+            return FakeResponse(
+                """
+                {
+                  "action": "final",
+                  "reason": "Both agents independently selected A and no unresolved disagreement remains.",
+                  "final_answer": "The solver and verifier agree on the supported option.\\n\\nFinal Answer: A"
+                }
+                """
+            )
+        if "Agent name:\nEvidenceSolver" in prompt:
+            self.agent_prompts.append(prompt)
+            return FakeResponse(
+                "FINAL:\nEvidence supports option A. Final Answer: A\n"
+                "SHARE_FINDING:\nCandidate A because it matches the prompt evidence.\n"
+                "LOCAL_NOTES:\nANSWER_CHOICE: A\nANSWER_REASON: A matches the prompt evidence."
+            )
+        if "Agent name:\nCriticalVerifier" in prompt:
+            self.agent_prompts.append(prompt)
+            return FakeResponse(
+                "FINAL:\nVerifier confirms option A. Final Answer: A\n"
+                "SHARE_FINDING:\nCandidate A passes the option-fit check.\n"
+                "LOCAL_NOTES:\nANSWER_CHOICE: A\nANSWER_REASON: A is consistent with the question constraints."
+            )
+        return FakeResponse("Unexpected prompt")
+
+
+class DynamicOrchestrationBareFinalLLM:
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if "dynamic orchestration controller" in prompt:
+            return FakeResponse(
+                """
+                {
+                  "action": "final",
+                  "reason": "The prompt evidence is sufficient to select option B.",
+                  "final_answer": "B"
+                }
+                """
+            )
+        return FakeResponse("Unexpected prompt")
+
+
 class WorkflowFakeDockerWorkspace(DockerWorkspace):
     def __init__(self) -> None:
         super().__init__(container_name="workflow-fake-container")
@@ -690,7 +779,8 @@ async def test_summarize_outputs_summarizer_prompt_and_response_are_traced():
     assert len(llm.summarizer_prompts) == 1
     assert "You are the Summarizer" in llm.summarizer_prompts[0]
     assert "Do not solve the task again." in llm.summarizer_prompts[0]
-    assert "summarize the selected answer from the agents' last summaries" in llm.summarizer_prompts[0]
+    assert "choose and summarize the best-supported answer from the agents' last summaries" in llm.summarizer_prompts[0]
+    assert "Use the candidate aggregation as evidence, not as an automatic authority." in llm.summarizer_prompts[0]
     assert "Agent last summaries:" in llm.summarizer_prompts[0]
     assert "Runtime event log" not in llm.summarizer_prompts[0]
     assert "[agent_done]" not in llm.summarizer_prompts[0]
@@ -749,8 +839,141 @@ async def test_dynamic_summarize_outputs_uses_candidate_majority_with_role_conte
     assert "candidate: B" in summarizer_prompt
     aggregation = state["synthesizer_trace"]["candidate_aggregation"]
     assert aggregation["selected_candidate"] == "A"
-    assert aggregation["selection_rule"] == "majority_vote"
+    assert aggregation["selection_rule"] == "weak_majority_requires_evidence_review"
+    assert aggregation["consensus_strength"] == "weak_majority"
+    assert aggregation["needs_review"] is True
     assert aggregation["counts"] == {"A": 2, "B": 1}
+
+
+@pytest.mark.asyncio
+async def test_dynamic_orchestration_runs_agent_round_then_orchestrator_final():
+    from multi_agent_sync.graph.dynamic_orchestration import run_dynamic_orchestration_workflow
+
+    llm = DynamicOrchestrationFakeLLM()
+
+    state = await run_dynamic_orchestration_workflow(
+        task="Which option is correct? A. supported B. unsupported C. unsupported D. unsupported",
+        llm=llm,
+        benchmark="gpqa",
+        max_steps_per_agent=1,
+        max_orchestrator_rounds=2,
+        total_runtime_timeout=5,
+        stream_to_console=False,
+    )
+
+    assert state["method"] == "dynamic_orchestration"
+    assert state["final_answer"] == "The solver and verifier agree on the supported option.\n\nFinal Answer: A"
+    assert len(llm.controller_prompts) == 2
+    assert "Avoid backslashes in JSON strings" in llm.controller_prompts[0]
+    assert len(llm.agent_prompts) == 2
+    trace = state["dynamic_orchestration_trace"]
+    assert trace["forced_final"] is False
+    assert [round_trace["decision"]["action"] for round_trace in trace["rounds"]] == ["run_agents", "final"]
+    first_round = trace["rounds"][0]
+    assert [agent["name"] for agent in first_round["selected_agents"]] == ["EvidenceSolver", "CriticalVerifier"]
+    assert first_round["candidate_aggregation"]["counts"] == {"A": 2}
+    assert first_round["candidate_aggregation"]["consensus_strength"] == "unanimous"
+    assert "EvidenceSolver" in first_round["agent_outputs"]
+    assert "CriticalVerifier" in first_round["agent_traces"]
+    assert "synthesizer_trace" not in state
+
+
+@pytest.mark.asyncio
+async def test_dynamic_orchestration_formats_bare_final_candidate_for_benchmark():
+    from multi_agent_sync.evaluation.benchmarks.gpqa import extract_answer
+    from multi_agent_sync.graph.dynamic_orchestration import run_dynamic_orchestration_workflow
+
+    state = await run_dynamic_orchestration_workflow(
+        task="Which option is correct? A. unsupported B. supported C. unsupported D. unsupported",
+        llm=DynamicOrchestrationBareFinalLLM(),
+        benchmark="gpqa",
+        max_orchestrator_rounds=1,
+        stream_to_console=False,
+    )
+
+    assert state["final_answer"] == "Final Answer: B"
+    assert state["dynamic_orchestration_trace"]["final_answer"] == "Final Answer: B"
+    assert extract_answer(state["final_answer"]) == "B"
+
+
+def test_dynamic_orchestration_parses_controller_json_with_latex_backslash_escape():
+    from multi_agent_sync.graph.dynamic_orchestration import parse_orchestration_decision
+
+    decision = parse_orchestration_decision(
+        r"""
+        {
+          "action": "final",
+          "reason": "The value \sqrt{2} check supports this conclusion.",
+          "final_answer": "Final Answer: B"
+        }
+        """,
+        "Which option is correct?",
+    )
+
+    assert decision["action"] == "final"
+    assert decision["final_answer"] == "Final Answer: B"
+    assert r"\sqrt{2}" in decision["reason"]
+
+
+def test_dynamic_orchestration_fallback_does_not_expose_prompt_answer_placeholder():
+    from multi_agent_sync.evaluation.benchmarks.olymmath import extract_answer
+    from multi_agent_sync.graph.dynamic_orchestration import fallback_final_answer
+    from multi_agent_sync.graph.nodes import build_agent_last_summaries, build_candidate_aggregation
+
+    task = "Solve the math problem.\n\nFinal Answer: <answer>"
+    state = {
+        "task": task,
+        "benchmark": "olymmath",
+        "assignments": [{"agent_name": "Solver", "task": "Solve.", "role": "Solver"}],
+        "agent_outputs": {"Solver": "The recurrence gives the result. Final Answer: 144"},
+        "agent_traces": {
+            "Solver": {
+                "steps": [
+                    {
+                        "parsed_output": {
+                            "local_notes": "ANSWER_CHOICE: 144\nANSWER_REASON: The recurrence sum gives 144."
+                        }
+                    }
+                ]
+            }
+        },
+        "synthesizer_mode": "summarize_outputs",
+    }
+    aggregation = build_candidate_aggregation(state, build_agent_last_summaries(state))
+
+    answer = fallback_final_answer(task, "olymmath", aggregation, state, "controller failed")
+
+    assert "<answer>" not in answer
+    assert answer == r"\boxed{144}"
+    assert extract_answer(answer) == "144"
+
+
+def test_dynamic_orchestration_fallback_without_candidate_omits_original_task_prompt():
+    from multi_agent_sync.graph.dynamic_orchestration import fallback_final_answer
+
+    task = "Solve the math problem.\n\nFinal Answer: <answer>"
+    aggregation = {
+        "selected_candidate": None,
+        "selection_rule": "no_extractable_candidates",
+        "needs_review": True,
+    }
+
+    answer = fallback_final_answer(
+        task,
+        "olymmath",
+        aggregation,
+        {
+            "task": task,
+            "benchmark": "olymmath",
+            "agent_outputs": {},
+            "synthesizer_mode": "summarize_outputs",
+        },
+        "controller failed",
+    )
+
+    assert "Final Answer: <answer>" not in answer
+    assert "<answer>" not in answer
+    assert "No agent outputs were available" in answer
 
 
 @pytest.mark.asyncio

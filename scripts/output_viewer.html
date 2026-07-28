@@ -69,9 +69,12 @@
     .mini-panel { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; margin: 8px 0; }
     .benchmark-block { border: 1px solid var(--line); border-radius: 8px; background: white; padding: 14px; margin: 14px 0; }
     .benchmark-methods { display: grid; gap: 8px; margin-top: 12px; }
-    .method-row { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(180px, 2fr) repeat(4, minmax(90px, auto)); gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 8px; }
+    .method-row { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(180px, 2fr) minmax(72px, auto) minmax(112px, auto) minmax(86px, auto) minmax(100px, auto) minmax(80px, auto); gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 8px; }
     .route-breakdown { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     .metric-label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    .source-chip { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--line); border-radius: 999px; background: white; padding: 2px 8px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .source-chip.current { color: var(--good); background: #f5fbf7; }
+    .source-chip.reused { color: var(--accent); background: var(--accent-soft); }
     .accuracy-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .accuracy-table th, .accuracy-table td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: middle; }
     .accuracy-table th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
@@ -434,6 +437,7 @@
         method_averages: typeof summary.method_averages === 'object' && summary.method_averages ? summary.method_averages : {},
         results: Array.isArray(summary.results) ? summary.results.map(compactResult) : [],
         run_config: runConfig,
+        comparison: normalizeRunComparison(identity, summary, runConfig),
         csv_path: csvPath || '',
         csv_rows: csvPath ? parseCsv(filesByPath.get(csvPath).text) : [],
         correctness_rows: correctnessPath ? parseCsv(filesByPath.get(correctnessPath).text) : [],
@@ -454,6 +458,28 @@
         model,
         resolved_model: String(settings.resolved_model || model),
         run_id: runId,
+      };
+    }
+
+    function normalizeRunComparison(identity, summary, runConfig) {
+      const config = Object.keys(runConfig).length ? runConfig : (summary.run_config || {});
+      const explicit = config.comparison && typeof config.comparison === 'object' ? config.comparison : {};
+      const settings = config.settings || {};
+      const scope = explicit.scope && typeof explicit.scope === 'object' ? explicit.scope : {
+        benchmark: identity.benchmark,
+        resolved_model: settings.resolved_model || identity.resolved_model || identity.model,
+        limit: settings.limit ?? null,
+        seed: settings.seed ?? null,
+        data_file: settings.data_file ?? null,
+        ma_proofbench_level: settings.ma_proofbench_level ?? null,
+        olymmath_subset: settings.olymmath_subset ?? null,
+        swebench_instance_ids: settings.swebench_instance_ids ?? null,
+      };
+      return {
+        schema_version: explicit.schema_version || 0,
+        fingerprint: explicit.fingerprint || stableStringify(scope),
+        compatibility_key: stableStringify(scope),
+        scope,
       };
     }
 
@@ -504,6 +530,7 @@
         workflow: Array.isArray(methodTrace.workflow) ? methodTrace.workflow : [],
         orchestrator_plan: methodTrace.orchestrator_plan || {},
         orchestrator: normalizeOrchestrator(methodTrace),
+        dynamic_orchestration: normalizeDynamicOrchestration(methodTrace),
         raw_trace_excerpt: truncateText(trace, 80000),
       };
     }
@@ -518,6 +545,19 @@
           : selectedAgents(methodTrace),
         raw_output: methodTrace.orchestrator_raw_output || methodTrace.raw_orchestrator_output || '',
         prompt: methodTrace.orchestrator_prompt || '',
+      };
+    }
+
+    function normalizeDynamicOrchestration(methodTrace) {
+      const trace = methodTrace.dynamic_orchestration_trace && typeof methodTrace.dynamic_orchestration_trace === 'object'
+        ? methodTrace.dynamic_orchestration_trace
+        : null;
+      if (!trace) return null;
+      return {
+        final_answer: trace.final_answer || methodTrace.final_answer || '',
+        forced_final: Boolean(trace.forced_final),
+        max_orchestrator_rounds: trace.max_orchestrator_rounds,
+        rounds: Array.isArray(trace.rounds) ? trace.rounds : [],
       };
     }
 
@@ -1036,13 +1076,15 @@
         const models = latestModelsForBenchmark(benchmarkRuns);
         const selectedModel = selectedAccuracyModel(benchmark, models);
         const latestRun = latestRunForModel(benchmarkRuns, selectedModel);
+        const compatibleRuns = latestRun ? compatibleAccuracyRuns(benchmarkRuns, selectedModel, latestRun) : [];
         return {
           benchmark,
           label: latestRun?.benchmark_display_name || benchmark,
           models,
           selected_model: selectedModel,
           run: latestRun,
-          rows: latestRun ? methodSummaryRows(latestRun) : [],
+          compatible_runs: compatibleRuns,
+          rows: latestRun ? comparisonMethodRows(compatibleRuns, latestRun) : [],
         };
       }).filter((group) => group.run && group.rows.length);
     }
@@ -1081,7 +1123,7 @@
           <div class="toolbar">
             <div>
               <h3>${esc(group.label)}</h3>
-              <div class="subtle">latest run: ${esc(group.run.run_id)} · ${esc(group.run.path)}</div>
+              <div class="subtle">anchor run: ${esc(group.run.run_id)} · compatible runs: ${esc(group.compatible_runs.length)}</div>
             </div>
             <div class="field">
               <label for="accuracyModel_${esc(group.benchmark)}">Model</label>
@@ -1109,9 +1151,21 @@
           <div><span class="metric-label">Correct / Total</span>${esc(row.correct)} / ${esc(row.total)}</div>
           <div><span class="metric-label">Invalid</span>${esc(row.invalid)} (${esc(percent(row.invalid_rate))})</div>
           <div><span class="metric-label">Avg tokens</span>${esc(round(row.avg_total_tokens))}</div>
+          <div><span class="metric-label">Source</span>${renderSourceCell(row)}</div>
           ${renderRouteBreakdown(row)}
+          ${renderDynamicOrchestrationRoundBreakdown(row)}
         </div>
       `;
+    }
+
+    function renderSourceCell(row) {
+      const sourceClass = row.source_is_current ? 'current' : 'reused';
+      const label = row.source_is_current ? 'current' : 'reused';
+      const details = [
+        `Full source run: ${row.source_run_id || row.run_id || ''}`,
+        `Path: ${row.source_path || ''}`,
+      ].filter(Boolean).join('\n');
+      return `<span class="source-chip ${sourceClass}" title="${esc(details)}" aria-label="${esc(details)}">${esc(label)}</span>`;
     }
 
     function renderRouteBreakdown(row) {
@@ -1123,6 +1177,18 @@
           <span class="metric-label">Dynamic route split</span>
           <span class="pill">direct: ${esc(direct.total)} · acc ${esc(percent(direct.accuracy))} · ${esc(direct.correct)}/${esc(direct.total)}</span>
           <span class="pill">multi_agent: ${esc(multiAgent.total)} · acc ${esc(percent(multiAgent.accuracy))} · ${esc(multiAgent.correct)}/${esc(multiAgent.total)}</span>
+        </div>
+      `;
+    }
+
+    function renderDynamicOrchestrationRoundBreakdown(row) {
+      if (row.method !== 'dynamic_orchestration' || !Array.isArray(row.round_breakdown) || !row.round_breakdown.length) return '';
+      return `
+        <div class="route-breakdown">
+          <span class="metric-label">Dynamic orchestration rounds</span>
+          ${row.round_breakdown.map((item) => `
+            <span class="pill">${esc(item.label)}: ${esc(item.total)} · acc ${esc(percent(item.accuracy))} · ${esc(item.correct)}/${esc(item.total)}</span>
+          `).join('')}
         </div>
       `;
     }
@@ -1158,7 +1224,30 @@
       return leftKey.localeCompare(rightKey);
     }
 
-    function methodSummaryRows(run) {
+    function compatibleAccuracyRuns(runs, model, anchorRun) {
+      const anchorFingerprint = comparisonFingerprint(anchorRun);
+      return runs
+        .filter((run) => accuracyModelName(run) === model)
+        .filter((run) => comparisonFingerprint(run) === anchorFingerprint)
+        .sort((left, right) => compareRunRecency(right, left));
+    }
+
+    function comparisonFingerprint(run) {
+      return run?.comparison?.compatibility_key || run?.comparison?.fingerprint || stableStringify(run?.comparison?.scope || {});
+    }
+
+    function comparisonMethodRows(compatibleRuns, currentRun) {
+      const rowsByMethod = new Map();
+      for (const run of compatibleRuns) {
+        for (const row of methodSummaryRows(run, currentRun)) {
+          if (state.method !== 'all' && row.method !== state.method) continue;
+          if (!rowsByMethod.has(row.method)) rowsByMethod.set(row.method, row);
+        }
+      }
+      return [...rowsByMethod.values()].sort((left, right) => left.method.localeCompare(right.method));
+    }
+
+    function methodSummaryRows(run, currentRun = run) {
       const summaries = normalizedMethodSummaries(run)
         .filter((row) => state.method === 'all' || row.method === state.method);
       return summaries.map((row) => ({
@@ -1166,7 +1255,12 @@
         benchmark: run.benchmark_display_name || run.benchmark,
         model: run.resolved_model || run.model,
         run_id: run.run_id,
+        source_run_id: run.run_id,
+        source_path: run.path,
+        source_is_current: Boolean(currentRun && run.path === currentRun.path),
+        source_label: currentRun && run.path === currentRun.path ? 'source: current' : `source: reused ${run.run_id}`,
         route_breakdown: row.method === 'multiagent_dynamic_streaming' ? dynamicStreamingRouteBreakdown(run) : null,
+        round_breakdown: row.method === 'dynamic_orchestration' ? dynamicOrchestrationRoundBreakdown(run) : null,
       }));
     }
 
@@ -1176,6 +1270,37 @@
         direct: routeStats(dynamicExamples, 'direct'),
         multi_agent: routeStats(dynamicExamples, 'multi_agent'),
       };
+    }
+
+    function dynamicOrchestrationRoundBreakdown(run) {
+      const examples = (run.examples || []).filter((example) => example.method === 'dynamic_orchestration');
+      const buckets = new Map();
+      for (const example of examples) {
+        const roundCount = dynamicOrchestrationRoundCount(example);
+        const key = roundCount > 0 ? String(roundCount) : 'unknown';
+        const bucket = buckets.get(key) || { key, label: roundCount > 0 ? `${roundCount} rounds` : 'unknown rounds', total: 0, correct: 0 };
+        bucket.total += 1;
+        if (example.correct === true || example.correct === 'True') bucket.correct += 1;
+        buckets.set(key, bucket);
+      }
+      return [...buckets.values()]
+        .sort((left, right) => {
+          if (left.key === 'unknown') return 1;
+          if (right.key === 'unknown') return -1;
+          return Number(left.key) - Number(right.key);
+        })
+        .map((bucket) => ({
+          ...bucket,
+          accuracy: bucket.total ? bucket.correct / bucket.total : 0,
+        }));
+    }
+
+    function dynamicOrchestrationRoundCount(example) {
+      const trace = example.dynamic_orchestration && typeof example.dynamic_orchestration === 'object'
+        ? example.dynamic_orchestration
+        : null;
+      if (!trace || !Array.isArray(trace.rounds)) return 0;
+      return trace.rounds.length;
     }
 
     function routeStats(examples, routeMode) {
@@ -1246,6 +1371,12 @@
       const max = Number(maxValue);
       if (!Number.isFinite(number) || !Number.isFinite(max) || max <= 0) return 0;
       return Math.max(0, Math.min(100, (number / max) * 100)).toFixed(2);
+    }
+
+    function stableStringify(value) {
+      if (value === null || typeof value !== 'object') return JSON.stringify(value);
+      if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+      return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
     }
 
     function renderRunList(runs) {
@@ -1542,6 +1673,9 @@
     }
 
     function renderOrchestrator(example) {
+      if (example.dynamic_orchestration) {
+        return renderDynamicOrchestration(example.dynamic_orchestration);
+      }
       const orchestrator = example.orchestrator || {};
       const rawSections = [
         orchestrator.prompt ? `<details><summary>Raw orchestrator prompt</summary><pre>${esc(orchestrator.prompt)}</pre></details>` : '',
@@ -1576,6 +1710,60 @@
         <details open><summary>Validated orchestrator plan</summary><pre>${esc(pretty(orchestrator.plan || {}))}</pre></details>
         <details><summary>Agent assignments</summary><pre>${esc(pretty(orchestrator.assignments || []))}</pre></details>
         ${rawSections}
+      `;
+    }
+
+    function renderDynamicOrchestration(trace) {
+      return `
+        <div class="grid">
+          <div>
+            <h3>Dynamic Orchestration</h3>
+            <p>
+              <span class="pill">rounds: ${esc((trace.rounds || []).length)}</span>
+              <span class="pill">max rounds: ${esc(trace.max_orchestrator_rounds ?? '')}</span>
+              <span class="pill ${trace.forced_final ? 'warn' : 'good'}">forced final: ${esc(Boolean(trace.forced_final))}</span>
+            </p>
+          </div>
+          <div>
+            <h3>Final answer</h3>
+            <pre>${esc(trace.final_answer || '')}</pre>
+          </div>
+        </div>
+        ${(trace.rounds || []).map((round) => renderDynamicOrchestrationRound(round)).join('') || '<div class="empty">No orchestration rounds recorded.</div>'}
+      `;
+    }
+
+    function renderDynamicOrchestrationRound(round) {
+      const decision = round.decision && typeof round.decision === 'object' ? round.decision : {};
+      const agents = Array.isArray(round.selected_agents) ? round.selected_agents : [];
+      const aggregation = round.candidate_aggregation || round.candidate_aggregation_before || {};
+      return `
+        <details class="mini-panel" open>
+          <summary>Round ${esc(round.round ?? '')} · ${esc(decision.action || 'unknown')}</summary>
+          <p>
+            <span class="pill">action: ${esc(decision.action || '')}</span>
+            <span class="pill">tokens: ${esc(formatTokenUsage(round.token_usage))}</span>
+            <span class="pill">rule: ${esc(aggregation.selection_rule || '')}</span>
+            <span class="pill">strength: ${esc(aggregation.consensus_strength || '')}</span>
+          </p>
+          <h4>Reason</h4>
+          <pre>${esc(decision.reason || '')}</pre>
+          ${decision.round_goal ? `<h4>Round goal</h4><pre>${esc(decision.round_goal)}</pre>` : ''}
+          ${decision.final_answer ? `<h4>Round final answer</h4><pre>${esc(decision.final_answer)}</pre>` : ''}
+          <h4>Selected agents</h4>
+          ${agents.map((agent) => `
+            <div class="mini-panel">
+              <strong>${esc(agent.name || '')}</strong>
+              ${agent.role ? `<div><strong>Role</strong><br>${esc(agent.role)}</div>` : ''}
+              ${agent.description ? `<div><strong>Agent description</strong><br>${esc(agent.description)}</div>` : ''}
+              <p>${esc(agent.subtask || '')}</p>
+            </div>
+          `).join('') || '<p class="subtle">No agents selected in this round.</p>'}
+          <details><summary>Candidate aggregation</summary><pre>${esc(pretty(aggregation))}</pre></details>
+          <details><summary>Raw controller prompt</summary><pre>${esc(round.prompt || '')}</pre></details>
+          <details><summary>Raw controller output</summary><pre>${esc(round.raw_response || '')}</pre></details>
+          <details><summary>Round agent outputs</summary><pre>${esc(pretty(round.agent_outputs || {}))}</pre></details>
+        </details>
       `;
     }
 

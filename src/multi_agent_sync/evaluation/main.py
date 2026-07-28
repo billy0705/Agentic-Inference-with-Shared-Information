@@ -52,7 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated methods to compare. Supported: multiagent_streaming, "
             "multiagent_no_streaming, multiagent_dynamic_streaming, "
-            "multiagent_dynamic_no_streaming, multiagent_debate, majority_vote, single_agent, plain_llm. "
+            "multiagent_dynamic_no_streaming, dynamic_orchestration, multiagent_debate, "
+            "majority_vote, single_agent, plain_llm. "
             "Legacy alias: multiagent."
         ),
     )
@@ -201,6 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum stdout/stderr characters retained per Docker workspace command.",
     )
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent for multiagent runs.")
+    parser.add_argument(
+        "--max-orchestrator-rounds",
+        type=int,
+        default=3,
+        help="Maximum controller rounds for dynamic_orchestration.",
+    )
     parser.add_argument(
         "--single-agent-min-steps",
         type=int,

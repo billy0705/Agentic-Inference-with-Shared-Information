@@ -49,6 +49,11 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "open_prompt" in html
     assert "ACTION:" in html
     assert "normalizeOrchestrator" in html
+    assert "normalizeDynamicOrchestration" in html
+    assert "renderDynamicOrchestration" in html
+    assert "renderDynamicOrchestrationRound" in html
+    assert "dynamic_orchestration_trace" in html
+    assert "Dynamic Orchestration" in html
     assert "Routing decision reason" in html
     assert "Agent description" in html
     assert "runsForModelFilter" in html
@@ -57,11 +62,23 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "Accuracy Overview" in html
     assert "Latest Benchmark Accuracy" in html
     assert "accuracyBenchmarkGroups" in html
+    assert "comparisonFingerprint" in html
+    assert "compatibleAccuracyRuns" in html
+    assert "comparisonMethodRows" in html
+    assert "source_run_id" in html
+    assert "renderSourceCell" in html
+    assert "source-chip" in html
+    assert "Full source run" in html
+    assert "source: current" in html
+    assert "source: reused" in html
     assert "benchmark-block" in html
     assert "setAccuracyModel" in html
     assert "isExcludedAccuracyRun" in html
     assert "isFakeLabel" in html
     assert "dynamicStreamingRouteBreakdown" in html
+    assert "dynamicOrchestrationRoundBreakdown" in html
+    assert "renderDynamicOrchestrationRoundBreakdown" in html
+    assert "Dynamic orchestration rounds" in html
     assert "renderRouteBreakdown" in html
     assert "Dynamic route split" in html
     assert "Question Results" in html
