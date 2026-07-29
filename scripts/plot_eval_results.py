@@ -29,6 +29,12 @@ METHOD_ORDER = [
     "dynamic_orchestration",
 ]
 
+LABEL_ORDER = ["previous", "current"]
+LABEL_MARKERS = {
+    "previous": "*",
+    "current": "o",
+}
+
 
 @dataclass(frozen=True)
 class MethodResult:
@@ -37,12 +43,25 @@ class MethodResult:
     accuracy: float
     avg_total_tokens: float
     run_dir: Path
+    label: str = ""
+
+    @property
+    def display_name(self) -> str:
+        if not self.label:
+            return self.method
+        return f"{self.method} ({self.label})"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot latest benchmark results.")
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional JSON file with explicit runs to plot.",
+    )
     return parser.parse_args()
 
 
@@ -68,6 +87,58 @@ def collect_latest_results(output_root: Path) -> list[MethodResult]:
         records.extend(latest_by_method.values())
 
     return sorted(records, key=lambda row: (row.benchmark, method_sort_key(row.method)))
+
+
+def collect_configured_results(output_root: Path, config_path: Path) -> list[MethodResult]:
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    runs = config.get("runs", [])
+    if not isinstance(runs, list) or not runs:
+        return collect_latest_results(output_root)
+
+    records: list[MethodResult] = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        summary_path = resolve_config_summary_path(output_root, run)
+        benchmark = str(run.get("benchmark") or infer_benchmark(summary_path))
+        methods = run.get("methods")
+        label = str(run.get("label") or "")
+        allowed_methods = set(methods) if isinstance(methods, list) else None
+        for record in load_summary(summary_path, benchmark):
+            if allowed_methods is None or record.method in allowed_methods:
+                records.append(
+                    MethodResult(
+                        benchmark=record.benchmark,
+                        method=record.method,
+                        accuracy=record.accuracy,
+                        avg_total_tokens=record.avg_total_tokens,
+                        run_dir=record.run_dir,
+                        label=label,
+                    )
+                )
+
+    return sorted(records, key=lambda row: (row.benchmark, method_sort_key(row.method), label_sort_key(row.label)))
+
+
+def resolve_config_summary_path(output_root: Path, run: dict[str, object]) -> Path:
+    summary_path = run.get("summary_path")
+    if isinstance(summary_path, str) and summary_path:
+        path = Path(summary_path)
+        resolved_path = path if path.is_absolute() else path
+        if not resolved_path.exists():
+            raise FileNotFoundError(f"Configured summary not found: {resolved_path}")
+        return resolved_path
+
+    benchmark = run.get("benchmark")
+    model = run.get("model")
+    run_id = run.get("run_id")
+    if not all(isinstance(value, str) and value for value in (benchmark, model, run_id)):
+        raise ValueError("Each configured run needs summary_path or benchmark/model/run_id.")
+
+    path = output_root / str(benchmark) / str(model) / str(run_id) / "summary.json"
+    if not path.exists():
+        raise FileNotFoundError(f"Configured summary not found: {path}")
+    return path
 
 
 def latest_model_name(summary_paths: list[Path]) -> str:
@@ -130,17 +201,57 @@ def method_sort_key(method: str) -> tuple[int, str]:
         return (len(METHOD_ORDER), method)
 
 
+def label_sort_key(label: str) -> tuple[int, str]:
+    normalized = label.lower()
+    try:
+        return (LABEL_ORDER.index(normalized), normalized)
+    except ValueError:
+        return (len(LABEL_ORDER), normalized)
+
+
+def marker_for_label(label: str) -> str:
+    return LABEL_MARKERS.get(label.lower(), "o")
+
+
+def method_color_map(records: list[MethodResult]) -> dict[str, str]:
+    methods = sorted({record.method for record in records}, key=method_sort_key)
+    color_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    return {method: color_cycle[index % len(color_cycle)] for index, method in enumerate(methods)}
+
+
 def compute_pareto_front(records: list[MethodResult]) -> list[MethodResult]:
     best_accuracy = -math.inf
     front: list[MethodResult] = []
-    for record in sorted(records, key=lambda row: (row.avg_total_tokens, -row.accuracy, row.method)):
+    for record in sorted(records, key=lambda row: (row.avg_total_tokens, -row.accuracy, row.display_name)):
         if record.accuracy > best_accuracy:
             front.append(record)
             best_accuracy = record.accuracy
     return sorted(front, key=lambda row: row.avg_total_tokens, reverse=True)
 
 
-def write_accuracy_bar_plot(records: list[MethodResult], output_path: Path) -> None:
+def bar_plot_records(records: list[MethodResult]) -> list[MethodResult]:
+    selected: dict[tuple[str, str], MethodResult] = {}
+    for record in records:
+        key = (record.benchmark, record.method)
+        current = selected.get(key)
+        if current is None or bar_label_priority(record.label) > bar_label_priority(current.label):
+            selected[key] = record
+    return sorted(selected.values(), key=lambda row: (row.benchmark, method_sort_key(row.method)))
+
+
+def bar_label_priority(label: str) -> int:
+    normalized = label.lower()
+    if normalized == "previous":
+        return 2
+    if not normalized:
+        return 1
+    if normalized == "previous":
+        return 0
+    return 1
+
+
+def build_accuracy_bar_plot(records: list[MethodResult]) -> tuple[plt.Figure, plt.Axes]:
+    records = bar_plot_records(records)
     benchmarks = sorted({row.benchmark for row in records})
     methods = sorted({row.method for row in records}, key=method_sort_key)
     values = {(row.benchmark, row.method): row.accuracy for row in records}
@@ -154,7 +265,7 @@ def write_accuracy_bar_plot(records: list[MethodResult], output_path: Path) -> N
         accuracies = [values.get((benchmark, method), 0.0) for benchmark in benchmarks]
         ax.bar(offsets, accuracies, width=width, label=method.replace("_", " "))
 
-    ax.set_title("Latest benchmark accuracy by method")
+    ax.set_title("Benchmark accuracy by method")
     ax.set_xlabel("Benchmark")
     ax.set_ylabel("Accuracy")
     ax.set_xticks(x_positions)
@@ -163,17 +274,30 @@ def write_accuracy_bar_plot(records: list[MethodResult], output_path: Path) -> N
     ax.grid(axis="y", alpha=0.25)
     ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.02, 0.5))
     fig.tight_layout()
+    return fig, ax
+
+
+def write_accuracy_bar_plot(records: list[MethodResult], output_path: Path) -> None:
+    fig, _ = build_accuracy_bar_plot(records)
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
 
 
 def build_pareto_plot(records: list[MethodResult]) -> tuple[plt.Figure, plt.Axes]:
-    records = sorted(records, key=lambda row: method_sort_key(row.method))
+    records = sorted(records, key=lambda row: (method_sort_key(row.method), label_sort_key(row.label)))
     front = compute_pareto_front(records)
+    colors = method_color_map(records)
 
     fig, ax = plt.subplots(figsize=(8, 5))
     for row in records:
-        ax.scatter(row.avg_total_tokens, row.accuracy, s=70, label=row.method.replace("_", " "))
+        ax.scatter(
+            row.avg_total_tokens,
+            row.accuracy,
+            s=70,
+            color=colors[row.method],
+            marker=marker_for_label(row.label),
+            label=row.display_name.replace("_", " "),
+        )
 
     if len(front) > 1:
         ax.plot(
@@ -222,7 +346,7 @@ def write_plots(records: list[MethodResult], output_dir: Path) -> list[Path]:
 
 def main() -> int:
     args = parse_args()
-    records = collect_latest_results(args.input_dir)
+    records = collect_configured_results(args.input_dir, args.config) if args.config else collect_latest_results(args.input_dir)
     paths = write_plots(records, args.output_dir)
 
     print(f"Loaded {len(records)} method results from {len({row.benchmark for row in records})} benchmarks.")
