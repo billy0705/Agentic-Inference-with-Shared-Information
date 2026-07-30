@@ -10,6 +10,7 @@ from typing import Any
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.benchmarks import chess, gpqa, gsm8k, hotpotqa, ma_proofbench, mmlu_pro, olymmath, swe_bench_verified
 from multi_agent_sync.evaluation import swebench_harness
+from multi_agent_sync.evaluation.resume_helpers import resolve_resume_output_path, load_resume_results
 from multi_agent_sync.evaluation.kimina_docker import (
     DEFAULT_KIMINA_DOCKER_CONTAINER,
     DEFAULT_KIMINA_DOCKER_IMAGE,
@@ -18,7 +19,6 @@ from multi_agent_sync.evaluation.kimina_docker import (
 )
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
-
 
 DEFAULT_LIMIT = 0
 RANDOM_SEED = 42
@@ -66,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-dir", default=str(runner.DEFAULT_OUTPUT_DIR), help="Directory for benchmark result CSV files.")
     parser.add_argument("--output", default=None, help="Optional CSV filename or path for per-example results.")
+    parser.add_argument(
+        "--resume-run",
+        default=None,
+        help="Existing run output directory to continue by skipping completed JSON traces.",
+    )
     parser.add_argument(
         "--data-file",
         default=None,
@@ -250,16 +255,18 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
     resolved_model = runner.resolve_model_name(args)
     setattr(args, "resolved_model", resolved_model)
     llm = get_llm(resolved_model, openai=not getattr(args, "local_model", False), max_tokens=EVALUATION_MAX_TOKENS)
-    run_id = runner.create_run_id()
-    output_path = runner.resolve_output_path(benchmark, args, run_id=run_id)
+    resume_root = Path(args.resume_run) if getattr(args, "resume_run", None) else None
+    run_id = resume_root.name if resume_root is not None else runner.create_run_id()
+    output_path = resolve_resume_output_path(resume_root, benchmark, args, run_id)
+    trace_root = resume_root or runner.resolve_json_trace_root(args, run_id)
     run_config = runner.build_run_config(benchmark, args, methods, run_id=run_id, output_path=output_path)
     if args.save_json_traces:
-        runner.write_json_file(runner.resolve_json_trace_root(args, run_id) / "run_config.json", run_config)
-    results: list[dict[str, Any]] = []
+        runner.write_json_file(trace_root / "run_config.json", run_config)
+    results = load_resume_results(resume_root, benchmark.name, methods) if resume_root is not None else []
+    completed = {(int(result["index"]), str(result["method"])) for result in results if not result.get("error")}
 
     def flush_incremental_artifacts() -> None:
         runner.write_results_csv(output_path, results)
-        trace_root = runner.resolve_json_trace_root(args, run_id)
         runner.write_correctness_matrix_csv(trace_root, results, methods)
         summary = runner.summarize_results(results)
         if args.save_json_traces:
@@ -278,6 +285,8 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
         prompt, gold = benchmark.build_prompt(row_dict, rng)
         question_context = runner.build_question_context(row_dict)
         for method in methods:
+            if (idx, method) in completed:
+                continue
             started_at = time.perf_counter()
             method_trace: dict[str, Any] = {}
             try:
@@ -330,7 +339,7 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
                 "json_trace_path": "",
             }
             if args.save_json_traces:
-                trace_path = runner.resolve_example_trace_path(args, run_id, idx, method)
+                trace_path = trace_root / "examples" / f"{idx:04d}_{runner.safe_filename(method)}.json"
                 result["json_trace_path"] = str(trace_path)
                 runner.write_json_file(
                     trace_path,
@@ -363,6 +372,7 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
                     },
                 )
             results.append(result)
+            completed.add((idx, method))
             flush_incremental_artifacts()
             runner.print_result(result)
 
@@ -371,6 +381,9 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
     summary = runner.summarize_results(results)
     runner.print_summary(benchmark, summary, output_path)
     return results
+
+
+
 
 
 async def ensure_kimina_server_ready(benchmark: BenchmarkSpec, args: argparse.Namespace) -> KiminaDockerServer | None:

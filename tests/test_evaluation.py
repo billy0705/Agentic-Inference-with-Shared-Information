@@ -123,6 +123,59 @@ def test_evaluation_parser_sets_dynamic_orchestration_round_default():
     assert args.max_orchestrator_rounds == 3
 
 
+def test_evaluation_parser_accepts_resume_run():
+    args = evaluation.build_parser().parse_args(["--benchmark", "chess", "--resume-run", "output/chess/model/run-id"])
+
+    assert args.resume_run == "output/chess/model/run-id"
+
+
+def test_load_resume_results_reads_existing_trace(tmp_path):
+    run_root = tmp_path / "run-id"
+    trace_path = run_root / "examples" / "0003_single_agent.json"
+    trace_path.parent.mkdir(parents=True)
+    trace_path.write_text(
+        json.dumps(
+            {
+                "benchmark": "chess",
+                "method": "single_agent",
+                "index": 3,
+                "gold": "e4",
+                "pred": "e4",
+                "correct": True,
+                "returncode": 0,
+                "error": "",
+                "elapsed_seconds": 1.5,
+                "token_usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+                "raw_output": "OUTPUT: e4",
+                "score_metadata": {"valid_targets": ["e4"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    results = evaluation.load_resume_results(run_root, "chess", ["single_agent"])
+
+    assert results == [
+        {
+            "benchmark": "chess",
+            "method": "single_agent",
+            "index": 3,
+            "gold": "e4",
+            "pred": "e4",
+            "correct": True,
+            "returncode": 0,
+            "error": "",
+            "elapsed_seconds": 1.5,
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12,
+            "raw_output": "OUTPUT: e4",
+            "score_metadata": {"valid_targets": ["e4"]},
+            "json_trace_path": str(trace_path),
+        }
+    ]
+
+
 def test_parse_methods_accepts_multiagent_debate_method():
     assert runner.parse_methods("multiagent_debate,plain_llm") == ["multiagent_debate", "plain_llm"]
 
