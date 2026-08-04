@@ -25,7 +25,13 @@ async def orchestrator_node(state: GraphState) -> GraphState:
     task = state["task"]
     llm = state.get("llm") or get_llm()
     subagent_mode = state.get("subagent_mode", "fixed")
-    orchestrator_plan = await create_model_based_plan(task, llm, AGENT_REGISTRY, subagent_mode=subagent_mode)
+    orchestrator_plan = await create_model_based_plan(
+        task,
+        llm,
+        AGENT_REGISTRY,
+        subagent_mode=subagent_mode,
+        ordered_step_one=bool(state.get("ordered_step_one", False)),
+    )
     if state.get("enable_workspace_tools") and (
         orchestrator_plan.get("mode") == "direct" or not orchestrator_plan.get("selected_agents")
     ):
@@ -212,6 +218,15 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             if reactive_field in assignment:
                 agent_kwargs[reactive_field] = assignment[reactive_field]
         agents.append(agent_class(**agent_kwargs))
+
+    if state.get("ordered_step_one") and agents:
+        barrier = asyncio.Barrier(len(agents))
+        done_events = {agent.name: asyncio.Event() for agent in agents}
+        for agent in agents:
+            dependencies = list(agent.assignment.get("depends_on") or [])
+            agent.step_one_dependencies = [done_events[name] for name in dependencies]
+            agent.step_one_done = done_events[agent.name]
+            agent.step_one_barrier = barrier
 
     for agent in agents:
         agent.subscribe()

@@ -501,6 +501,102 @@ def test_dynamic_plan_preserves_workspace_access_in_assignments():
     assert assignments[1]["workspace_access"] == "none"
 
 
+def test_ordered_dynamic_plan_preserves_orchestrator_dependency_dag_in_assignments():
+    plan = validate_orchestrator_plan(
+        {
+            "mode": "multi_agent",
+            "task_type": "chess state tracking",
+            "task_summary": "Reconstruct the board and validate moves.",
+            "reason": "The task requires staged reconstruction and verification.",
+            "selected_agents": [
+                {
+                    "name": "Board Agent",
+                    "role": "Reconstructs the board.",
+                    "subtask": "Reconstruct the board.",
+                    "expected_output": "Board state.",
+                    "critical_debate": False,
+                    "depends_on": [],
+                },
+                {
+                    "name": "Candidate Agent",
+                    "role": "Generates moves.",
+                    "subtask": "Generate candidate moves.",
+                    "expected_output": "Candidate squares.",
+                    "critical_debate": False,
+                    "depends_on": ["Board Agent"],
+                },
+                {
+                    "name": "Review Agent",
+                    "role": "Checks move legality.",
+                    "subtask": "Review candidates.",
+                    "expected_output": "Validated square.",
+                    "critical_debate": True,
+                    "depends_on": ["Board Agent", "Candidate Agent"],
+                },
+            ],
+            "collaboration_protocol": {
+                "event_types_to_share": ["finding", "critique"],
+                "reactive_steps": False,
+                "notes": "Share upstream results.",
+            },
+        },
+        "Complete the chess move.",
+        AGENT_REGISTRY,
+        subagent_mode="dynamic",
+        ordered_step_one=True,
+    )
+
+    assert [agent["depends_on"] for agent in plan["selected_agents"]] == [
+        [],
+        ["BoardAgent"],
+        ["BoardAgent", "CandidateAgent"],
+    ]
+    assert [assignment["depends_on"] for assignment in selected_agents_to_assignments(plan)] == [
+        [],
+        ["BoardAgent"],
+        ["BoardAgent", "CandidateAgent"],
+    ]
+
+
+def test_ordered_dynamic_plan_rejects_cyclic_dependency_graph():
+    plan = validate_orchestrator_plan(
+        {
+            "mode": "multi_agent",
+            "task_type": "chess state tracking",
+            "task_summary": "Reconstruct the board and validate moves.",
+            "reason": "The task requires staged reconstruction and verification.",
+            "selected_agents": [
+                {
+                    "name": "BoardAgent",
+                    "subtask": "Reconstruct the board.",
+                    "expected_output": "Board state.",
+                    "critical_debate": False,
+                    "depends_on": ["ReviewAgent"],
+                },
+                {
+                    "name": "ReviewAgent",
+                    "subtask": "Review candidates.",
+                    "expected_output": "Validated square.",
+                    "critical_debate": True,
+                    "depends_on": ["BoardAgent"],
+                },
+            ],
+            "collaboration_protocol": {
+                "event_types_to_share": ["finding", "critique"],
+                "reactive_steps": False,
+                "notes": "Share upstream results.",
+            },
+        },
+        "Complete the chess move.",
+        AGENT_REGISTRY,
+        subagent_mode="dynamic",
+        ordered_step_one=True,
+    )
+
+    assert "valid acyclic dependency map" in plan["reason"]
+    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent"]
+
+
 @pytest.mark.asyncio
 async def test_dynamic_mode_invalid_multi_agent_plan_falls_back_to_worker_and_critical_debate():
     llm = StaticLLM(

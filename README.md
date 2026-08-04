@@ -167,12 +167,17 @@ Supported methods:
 - `multiagent_streaming`
 - `multiagent_no_streaming`
 - `multiagent_dynamic_streaming`
+- `multiagent_ordered_dynamic_streaming`
 - `multiagent_dynamic_no_streaming`
 - `multiagent_debate`
 - `majority_vote`
 - `single_agent`
 - `plain_llm`
 - `multiagent` legacy alias for `multiagent_streaming`
+
+`multiagent_ordered_dynamic_streaming` runs its own orchestrator call. The orchestrator returns an acyclic
+`depends_on` map for the selected agents, and each agent waits only for those dependencies during step one.
+The non-ordered and ordered methods do not share or reuse orchestrator plans.
 
 Run a small GPQA evaluation:
 

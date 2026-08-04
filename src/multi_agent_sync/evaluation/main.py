@@ -52,7 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated methods to compare. Supported: multiagent_streaming, "
             "multiagent_no_streaming, multiagent_dynamic_streaming, "
-            "multiagent_dynamic_no_streaming, dynamic_orchestration, multiagent_debate, "
+            "multiagent_dynamic_no_streaming, multiagent_ordered_dynamic_streaming, "
+            "dynamic_orchestration, multiagent_debate, "
             "majority_vote, single_agent, plain_llm. "
             "Legacy alias: multiagent."
         ),
@@ -282,10 +283,10 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
             method_trace: dict[str, Any] = {}
             try:
                 workflow_config = build_method_workflow_config(benchmark, row_dict, method, args)
-                if workflow_config is None:
-                    run_result = await runner.run_method(method, prompt, llm, args)
-                else:
-                    run_result = await runner.run_method(method, prompt, llm, args, workflow_config=workflow_config)
+                run_kwargs: dict[str, Any] = {}
+                if workflow_config is not None:
+                    run_kwargs["workflow_config"] = workflow_config
+                run_result = await runner.run_method(method, prompt, llm, args, **run_kwargs)
                 raw_output = run_result.raw_output
                 returncode = run_result.returncode
                 elapsed_seconds = run_result.elapsed_seconds

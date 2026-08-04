@@ -95,10 +95,12 @@ def test_parse_methods_accepts_comma_separated_methods():
 
 
 def test_parse_methods_accepts_dynamic_multiagent_methods():
-    assert runner.parse_methods("multiagent_dynamic_streaming,multiagent_dynamic_no_streaming,plain_llm") == [
+    assert runner.parse_methods(
+        "multiagent_dynamic_streaming,multiagent_ordered_dynamic_streaming,multiagent_dynamic_no_streaming"
+    ) == [
         "multiagent_dynamic_streaming",
+        "multiagent_ordered_dynamic_streaming",
         "multiagent_dynamic_no_streaming",
-        "plain_llm",
     ]
 
 
@@ -2527,12 +2529,13 @@ async def test_run_method_records_response_metadata_token_usage():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "expected_subagent_mode", "expected_streaming"),
+    ("method", "expected_subagent_mode", "expected_streaming", "expected_ordered"),
     [
-        ("multiagent_streaming", "fixed", True),
-        ("multiagent_no_streaming", "fixed", False),
-        ("multiagent_dynamic_streaming", "dynamic", True),
-        ("multiagent_dynamic_no_streaming", "dynamic", False),
+        ("multiagent_streaming", "fixed", True, False),
+        ("multiagent_no_streaming", "fixed", False, False),
+        ("multiagent_dynamic_streaming", "dynamic", True, False),
+        ("multiagent_ordered_dynamic_streaming", "dynamic", True, True),
+        ("multiagent_dynamic_no_streaming", "dynamic", False, False),
     ],
 )
 async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
@@ -2540,6 +2543,7 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
     method,
     expected_subagent_mode,
     expected_streaming,
+    expected_ordered,
 ):
     captured_kwargs = {}
 
@@ -2558,7 +2562,12 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
     assert captured_kwargs["subagent_mode"] == expected_subagent_mode
     assert captured_kwargs["benchmark"] == "gpqa"
     assert captured_kwargs["enable_agent_message_streaming"] is expected_streaming
-    expected_synthesizer_mode = "summarize_outputs" if method == "multiagent_dynamic_streaming" else "generic"
+    assert captured_kwargs["ordered_step_one"] is expected_ordered
+    expected_synthesizer_mode = (
+        "summarize_outputs"
+        if method in {"multiagent_dynamic_streaming", "multiagent_ordered_dynamic_streaming"}
+        else "generic"
+    )
     assert captured_kwargs["synthesizer_mode"] == expected_synthesizer_mode
 
 

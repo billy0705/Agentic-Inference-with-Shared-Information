@@ -16,6 +16,7 @@ async def run_multiagent(
     *,
     enable_agent_message_streaming: bool = True,
     subagent_mode: str = "fixed",
+    ordered_step_one: bool = False,
     workflow_config: BenchmarkWorkflowConfig | None = None,
 ) -> tuple[str, int, dict[str, Any]]:
     docker_workspace = None
@@ -45,6 +46,7 @@ async def run_multiagent(
             total_runtime_timeout=args.total_runtime_timeout,
             synthesis_timeout=args.synthesis_timeout,
             enable_agent_message_streaming=enable_agent_message_streaming,
+            ordered_step_one=ordered_step_one,
             stream_to_console=False,
             no_color=True,
             enable_workspace_tools=workflow_config is not None,
@@ -161,6 +163,7 @@ def extract_workflow_trace(state: dict[str, Any]) -> dict[str, Any]:
         "run_id",
         "mode",
         "subagent_mode",
+        "ordered_step_one",
         "task_type",
         "reason",
         "plan",

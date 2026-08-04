@@ -21,6 +21,7 @@ class SelectedAgent(TypedDict, total=False):
     rules: list[str]
     critical_debate: bool
     workspace_access: str
+    depends_on: list[str]
 
 
 class CollaborationProtocol(TypedDict):
@@ -59,9 +60,10 @@ async def create_model_based_plan(
     llm: Any,
     available_agents: Mapping[str, Any],
     subagent_mode: SubagentMode = "fixed",
+    ordered_step_one: bool = False,
 ) -> OrchestratorPlan:
     prompt = (
-        build_dynamic_orchestrator_prompt(task)
+        build_dynamic_orchestrator_prompt(task, ordered_step_one=ordered_step_one)
         if subagent_mode == "dynamic"
         else build_orchestrator_prompt(task, available_agents)
     )
@@ -77,7 +79,13 @@ async def create_model_based_plan(
             subagent_mode=subagent_mode,
         )
 
-    return validate_orchestrator_plan(raw_plan, task, available_agents, subagent_mode=subagent_mode)
+    return validate_orchestrator_plan(
+        raw_plan,
+        task,
+        available_agents,
+        subagent_mode=subagent_mode,
+        ordered_step_one=ordered_step_one,
+    )
 
 
 async def create_orchestrator_plan(
@@ -85,8 +93,15 @@ async def create_orchestrator_plan(
     llm: Any,
     available_agents: Mapping[str, Any],
     subagent_mode: SubagentMode = "fixed",
+    ordered_step_one: bool = False,
 ) -> OrchestratorPlan:
-    return await create_model_based_plan(task, llm, available_agents, subagent_mode=subagent_mode)
+    return await create_model_based_plan(
+        task,
+        llm,
+        available_agents,
+        subagent_mode=subagent_mode,
+        ordered_step_one=ordered_step_one,
+    )
 
 
 def build_orchestrator_prompt(task: str, available_agents: Mapping[str, Any]) -> str:
@@ -103,8 +118,12 @@ def build_orchestrator_prompt(task: str, available_agents: Mapping[str, Any]) ->
     )
 
 
-def build_dynamic_orchestrator_prompt(task: str) -> str:
-    return render_prompt("orchestrator/dynamic_model_plan.j2", task=task)
+def build_dynamic_orchestrator_prompt(task: str, *, ordered_step_one: bool = False) -> str:
+    return render_prompt(
+        "orchestrator/dynamic_model_plan.j2",
+        task=task,
+        ordered_step_one=ordered_step_one,
+    )
 
 
 def extract_json_object(content: str) -> dict[str, Any]:
@@ -136,6 +155,7 @@ def validate_orchestrator_plan(
     task: str,
     available_agents: Mapping[str, Any],
     subagent_mode: SubagentMode = "fixed",
+    ordered_step_one: bool = False,
 ) -> OrchestratorPlan:
     mode = raw_plan.get("mode")
     if mode == "direct":
@@ -176,6 +196,15 @@ def validate_orchestrator_plan(
             task,
             available_agents,
             reason="Model orchestrator did not select a valid dynamic multi-agent pool.",
+            subagent_mode=subagent_mode,
+        )
+    elif subagent_mode == "dynamic" and ordered_step_one and not has_valid_ordered_dependency_graph(
+        raw_plan.get("selected_agents"), selected_agents
+    ):
+        return create_fallback_plan(
+            task,
+            available_agents,
+            reason="Model orchestrator did not provide a valid acyclic dependency map for ordered step one.",
             subagent_mode=subagent_mode,
         )
     elif subagent_mode == "fixed" and (not selected_agents or _is_critic_alone(selected_agents)):
@@ -330,12 +359,53 @@ def normalize_dynamic_selected_agents(value: Any) -> list[SelectedAgent]:
                 "expected_output": _clean_text(item.get("expected_output")) or dynamic_default_expected_output(critical_debate),
                 "critical_debate": critical_debate,
                 "workspace_access": normalize_workspace_access(item.get("workspace_access")),
+                "depends_on": normalize_dependency_names(item.get("depends_on")),
             }
         )
         seen.add(name)
         if len(selected_agents) == MAX_SELECTED_AGENTS:
             break
     return selected_agents
+
+
+def normalize_dependency_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    dependencies = [sanitize_dynamic_agent_name(item) for item in value]
+    return list(dict.fromkeys(name for name in dependencies if name))
+
+
+def has_valid_ordered_dependency_graph(raw_value: Any, selected_agents: list[SelectedAgent]) -> bool:
+    if not isinstance(raw_value, list):
+        return False
+    raw_agents = [item for item in raw_value if isinstance(item, Mapping) and sanitize_dynamic_agent_name(item.get("name"))]
+    if len(raw_agents) != len(selected_agents):
+        return False
+    if any("depends_on" not in item or not isinstance(item.get("depends_on"), list) for item in raw_agents):
+        return False
+
+    agent_names = {agent["name"] for agent in selected_agents}
+    dependencies_by_agent = {
+        agent["name"]: list(agent.get("depends_on") or [])
+        for agent in selected_agents
+    }
+    for agent_name, dependencies in dependencies_by_agent.items():
+        if agent_name in dependencies or any(dependency not in agent_names for dependency in dependencies):
+            return False
+
+    remaining = set(agent_names)
+    resolved: set[str] = set()
+    while remaining:
+        ready = {
+            agent_name
+            for agent_name in remaining
+            if set(dependencies_by_agent[agent_name]).issubset(resolved)
+        }
+        if not ready:
+            return False
+        remaining -= ready
+        resolved |= ready
+    return True
 
 
 def sanitize_dynamic_agent_name(value: Any) -> str:
@@ -556,6 +626,7 @@ def selected_agents_to_assignments(plan: OrchestratorPlan, max_steps: int = 3) -
             "rules": agent.get("rules", []),
             "critical_debate": agent.get("critical_debate", False),
             "workspace_access": agent.get("workspace_access", "none"),
+            "depends_on": list(agent.get("depends_on") or []),
         }
         for agent in plan["selected_agents"]
     ]

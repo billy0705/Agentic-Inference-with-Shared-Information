@@ -46,6 +46,7 @@ VALID_METHODS = {
     "multiagent_streaming",
     "multiagent_no_streaming",
     "multiagent_dynamic_streaming",
+    "multiagent_ordered_dynamic_streaming",
     "multiagent_dynamic_no_streaming",
     "dynamic_orchestration",
     "multiagent_debate",
@@ -234,6 +235,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "local_model": getattr(args, "local_model", False),
         "subagent_mode": method_subagent_mode(method),
         "message_streaming": method_message_streaming(method),
+        "ordered_step_one": method == "multiagent_ordered_dynamic_streaming",
         "max_steps": args.max_steps,
         "max_orchestrator_rounds": getattr(args, "max_orchestrator_rounds", None),
         "single_agent_min_steps": getattr(args, "single_agent_min_steps", None),
@@ -573,6 +575,16 @@ async def run_method(
             args,
             enable_agent_message_streaming=True,
             subagent_mode="dynamic",
+            workflow_config=workflow_config,
+        )
+    elif method == "multiagent_ordered_dynamic_streaming":
+        raw_output, returncode, trace = await run_multiagent(
+            prompt,
+            metered_llm,
+            args,
+            enable_agent_message_streaming=True,
+            subagent_mode="dynamic",
+            ordered_step_one=True,
             workflow_config=workflow_config,
         )
     elif method == "multiagent_dynamic_no_streaming":

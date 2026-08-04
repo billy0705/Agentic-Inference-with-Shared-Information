@@ -1,5 +1,6 @@
 import asyncio
 import importlib.metadata
+import json
 from dataclasses import dataclass
 
 import pytest
@@ -92,6 +93,59 @@ class DynamicFakeLLM:
             assert "CriticalDebateAgent" in prompt
             return FakeResponse("Summarized dynamic-agent answer.")
         return FakeResponse("Unexpected prompt")
+
+
+class OrderedStepLLM:
+    def __init__(self) -> None:
+        self.agent_calls: list[tuple[str, int, str]] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if "dynamic subagent orchestrator" in prompt:
+            agents = [
+                ("BoardAgent", False, []),
+                ("CandidateAgent", False, ["BoardAgent"]),
+                ("ReviewAgent", True, ["CandidateAgent"]),
+            ]
+            selected = [
+                {
+                    "name": name,
+                    "role": name,
+                    "description": name,
+                    "rules": ["Share findings."],
+                    "subtask": name,
+                    "expected_output": name,
+                    "critical_debate": critical,
+                    "depends_on": depends_on,
+                }
+                for name, critical, depends_on in agents
+            ]
+            return FakeResponse(
+                json.dumps(
+                    {
+                        "mode": "multi_agent",
+                        "task_type": "chess",
+                        "task_summary": "Track a chess position.",
+                        "reason": "State reconstruction and review are required.",
+                        "selected_agents": selected,
+                        "collaboration_protocol": {
+                            "event_types_to_share": ["finding", "critique", "warning"],
+                            "reactive_steps": False,
+                            "notes": "Share results.",
+                        },
+                    }
+                )
+            )
+        if "Summarizer for a dynamic multi-agent" in prompt:
+            return FakeResponse("(e5)")
+
+        name = next(name for name in ("BoardAgent", "CandidateAgent", "ReviewAgent") if f"Agent name:\n{name}" in prompt)
+        step = 1 if "Current step:\n1 of 2" in prompt else 2
+        self.agent_calls.append((name, step, prompt))
+        return FakeResponse(
+            f"SUMMARY:\n{name} step {step}.\n"
+            f"SHARE_FINDING:\nfinding from {name}\n"
+            "LOCAL_NOTES:\nANSWER_CHOICE: e5\nANSWER_REASON: valid"
+        )
 
 
 class DynamicDirectFakeLLM:
@@ -634,6 +688,37 @@ async def test_dynamic_workflow_constructs_free_named_agents_and_synthesizes_out
     assert state["selected_agents"][1]["critical_debate"] is True
     assert any(event.event_type == "critique" and event.source == "CriticalDebateAgent" for event in state["event_log"])
     assert state["final_answer"] == "Summarized dynamic-agent answer."
+
+
+@pytest.mark.asyncio
+async def test_ordered_dynamic_workflow_orders_only_step_one():
+    llm = OrderedStepLLM()
+
+    state = await run_workflow(
+        task="Given the chess game, find a valid destination square.",
+        llm=llm,
+        subagent_mode="dynamic",
+        ordered_step_one=True,
+        max_steps_per_agent=2,
+        total_runtime_timeout=5,
+        stream_to_console=False,
+        benchmark="chess",
+        synthesizer_mode="summarize_outputs",
+    )
+
+    assert [(name, step) for name, step, _ in llm.agent_calls[:3]] == [
+        ("BoardAgent", 1),
+        ("CandidateAgent", 1),
+        ("ReviewAgent", 1),
+    ]
+    assert all(step == 2 for _, step, _ in llm.agent_calls[3:])
+    assert "finding from BoardAgent" in llm.agent_calls[1][2]
+    assert "finding from CandidateAgent" in llm.agent_calls[2][2]
+    assert [agent["depends_on"] for agent in state["orchestrator_plan"]["selected_agents"]] == [
+        [],
+        ["BoardAgent"],
+        ["CandidateAgent"],
+    ]
 
 
 @pytest.mark.asyncio

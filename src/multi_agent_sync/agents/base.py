@@ -79,6 +79,9 @@ class BaseAgent:
     local_output: str = ""
     is_done: bool = False
     reactive_steps_used: int = 0
+    step_one_dependencies: list[asyncio.Event] = field(default_factory=list)
+    step_one_done: asyncio.Event | None = None
+    step_one_barrier: asyncio.Barrier | None = None
     _subscribed: bool = False
     _last_step_trace_data: dict[str, Any] = field(default_factory=dict)
 
@@ -156,7 +159,14 @@ class BaseAgent:
                 await self.publish_warning("Agent runtime limit reached before all steps completed.")
                 break
 
+            if step_index == 1 and self.step_one_dependencies:
+                await asyncio.gather(*(event.wait() for event in self.step_one_dependencies))
             result = await self.run_step_and_record(step_index)
+            if step_index == 1:
+                if self.step_one_done is not None:
+                    self.step_one_done.set()
+                if self.step_one_barrier is not None:
+                    await self.step_one_barrier.wait()
             last_step_index = step_index
             if result.status == "final":
                 final_response_received = True
