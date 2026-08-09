@@ -201,6 +201,12 @@ uv run evaluation --benchmark mmlu_pro --methods multiagent_streaming,multiagent
 uv run evaluation --benchmark olymmath --olymmath-subset en-hard --methods multiagent_streaming,plain_llm --limit 10
 ```
 
+Resume an interrupted evaluation run:
+
+```bash
+uv run evaluation --resume-run output/<benchmark>/<model>/<run_id>
+```
+
 Use a local benchmark file:
 
 ```bash
@@ -217,6 +223,7 @@ Useful evaluation flags:
 - `--limit <n>`: number of examples to evaluate; default `0` runs the full split
 - `--output-dir <path>`: output root, default `output`
 - `--output <file-or-path>`: CSV output name/path
+- `--resume-run <path>`: continue an existing run by skipping completed JSON traces
 - `--save-json-traces` / `--no-save-json-traces`: write per-example traces
 - `--max-steps <n>`: max steps per agent for multi-agent methods
 - `--single-agent-min-steps <n>`: minimum steps for `single_agent` and `majority_vote` voters, default 3
