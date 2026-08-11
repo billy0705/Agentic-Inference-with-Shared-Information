@@ -262,7 +262,8 @@ def test_parser_accepts_no_kimina_docker_flag():
     assert args.kimina_docker is False
 
 
-def test_run_config_records_kimina_docker_settings(tmp_path):
+def test_run_config_records_kimina_docker_settings(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "current_git_commit_id", lambda: "abc123def456")
     args = evaluation.build_parser().parse_args(
         [
             "--benchmark",
@@ -290,6 +291,7 @@ def test_run_config_records_kimina_docker_settings(tmp_path):
         output_path=tmp_path / "results.csv",
     )
 
+    assert config["git_commit_id"] == "abc123def456"
     assert config["settings"]["kimina_docker"] is True
     assert config["settings"]["kimina_docker_image"] == "custom/kimina:latest"
     assert config["settings"]["kimina_docker_container"] == "kimina-test"

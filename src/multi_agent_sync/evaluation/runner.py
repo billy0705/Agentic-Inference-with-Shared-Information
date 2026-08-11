@@ -5,6 +5,7 @@ import csv
 import json
 import os
 import re
+import subprocess
 import time
 from urllib.request import Request, urlopen
 from collections import defaultdict
@@ -146,6 +147,24 @@ def to_jsonable(value: Any) -> Any:
     return str(value)
 
 
+def current_git_commit_id() -> str | None:
+    repo_root = Path(__file__).resolve().parents[3]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    commit_id = result.stdout.strip()
+    if result.returncode != 0 or not commit_id:
+        return None
+    return commit_id
+
+
 def build_run_config(
     benchmark: BenchmarkSpec,
     args: argparse.Namespace,
@@ -156,6 +175,7 @@ def build_run_config(
 ) -> dict[str, Any]:
     return {
         "run_id": run_id,
+        "git_commit_id": current_git_commit_id(),
         "benchmark": benchmark.name,
         "benchmark_display_name": benchmark.display_name,
         "methods": methods,
