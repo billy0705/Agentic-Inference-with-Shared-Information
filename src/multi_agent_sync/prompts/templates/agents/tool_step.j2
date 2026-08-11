@@ -25,6 +25,11 @@ Challenge assumptions, identify contradictions, and share critiques that other a
 
 Assigned subtask:
 {{ assigned_subtask }}
+{% if expected_output %}
+
+Expected output:
+{{ expected_output }}
+{% endif %}
 
 Docker workspace:
 You may use the bash tool. Every bash command is executed inside the Docker container with working directory /workspace.

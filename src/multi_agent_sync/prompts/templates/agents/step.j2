@@ -51,6 +51,11 @@ Agent rules:
 {% endif %}
 Assigned subtask:
 {{ assigned_subtask }}
+{% if expected_output %}
+
+Expected output:
+{{ expected_output }}
+{% endif %}
 
 [STEP DYNAMIC SUFFIX]
 {% if is_reactive %}

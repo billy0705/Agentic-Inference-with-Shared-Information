@@ -297,6 +297,7 @@ class BaseAgent:
         ]
         notes = "\n".join(f"- {note}" for note in self.local_notes[-8:]) or "- None yet."
         events = "\n".join(event_lines) or "- No shared findings yet."
+        expected_output = str((self.assignment or {}).get("expected_output") or "").strip()
         if self.has_workspace_tool:
             return render_prompt(
                 "agents/tool_step.j2",
@@ -307,6 +308,7 @@ class BaseAgent:
                 rules=self.rules,
                 critical_debate=self.critical_debate,
                 assigned_subtask=self.assigned_subtask,
+                expected_output=expected_output,
                 workspace_access=self.workspace_access,
                 is_reactive=is_reactive,
                 reactive_reason=reactive_reason or "important_unused_events_received",
@@ -327,6 +329,7 @@ class BaseAgent:
             rules=self.rules,
             critical_debate=self.critical_debate,
             assigned_subtask=self.assigned_subtask,
+            expected_output=expected_output,
             is_reactive=is_reactive,
             reactive_reason=reactive_reason or "important_unused_events_received",
             step_index=step_index,

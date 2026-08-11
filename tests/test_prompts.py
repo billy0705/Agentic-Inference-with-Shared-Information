@@ -114,6 +114,11 @@ async def test_agent_prompt_is_rendered_from_template():
         assigned_subtask="Research synchronization",
         llm=None,
         event_streamer=InMemoryEventStreamer(),
+        assignment={
+            "agent_name": "ResearchAgent",
+            "task": "Research synchronization",
+            "expected_output": "Concise synchronization risks and recommendations.",
+        },
     )
 
     prompt = await agent.build_prompt(step_index=1, relevant_events=[])
@@ -129,6 +134,7 @@ async def test_agent_prompt_is_rendered_from_template():
     assert "[GLOBAL STATIC PREFIX]\nBuild a chess website" in prompt
     assert "Agent name:\nResearchAgent" in prompt
     assert "Assigned subtask:\nResearch synchronization" in prompt
+    assert "Expected output:\nConcise synchronization risks and recommendations." in prompt
     assert "Current step:\n1 of 3" in prompt
     assert "Local notes:\n- None yet." in prompt
     assert "Shared findings:\n- No shared findings yet." in prompt
@@ -171,6 +177,11 @@ async def test_tool_agent_prompt_does_not_repeat_final_sections():
         assigned_subtask="Run a bash command.",
         llm=None,
         event_streamer=InMemoryEventStreamer(),
+        assignment={
+            "agent_name": "CodingAgent",
+            "task": "Run a bash command.",
+            "expected_output": "A command result summary and implementation direction.",
+        },
         bash_tool=object(),
         workspace_access="write",
         allow_agent_early_stop=True,
@@ -179,7 +190,9 @@ async def test_tool_agent_prompt_does_not_repeat_final_sections():
     prompt = await agent.build_prompt(step_index=1, relevant_events=[])
 
     assert "If you are ready to finish this agent's work" in prompt
+    assert "Expected output:\nA command result summary and implementation direction." in prompt
     assert "FINAL:" in prompt
+    assert "ANSWER_CHOICE:" in prompt
     assert prompt.count("SHARE_FINDING:") == 1
     assert prompt.count("LOCAL_NOTES:") == 1
 
