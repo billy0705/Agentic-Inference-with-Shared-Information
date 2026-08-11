@@ -15,11 +15,11 @@ Candidate aggregation:
 
 Instructions:
 - Identify the final answer candidates already present in the agent last summaries.
-- Use the candidate aggregation first, as evidence rather than as an automatic authority.
-- If needs_review is false and a majority_vote selected_candidate exists, keep that candidate unless the agent summaries clearly contradict it.
-- If needs_review is true, or candidates conflict without a majority, audit the candidate reasons and choose the best-supported candidate from the agent outputs.
+- Use the candidate aggregation as evidence, not as an automatic authority.
+- If needs_review is false and a selected_candidate exists, keep that candidate unless the agent summaries clearly contradict it.
+- If needs_review is true, audit the candidate reasons and choose the best-supported candidate from the agent outputs.
 - Treat weak majority, ties, and single-candidate-only cases as requiring evidence review.
-- Use each agent's role, subtask, description, and explanation except when candidates conflict.
+- Use each agent's role, subtask, description, and explanation excerpt when candidates conflict.
 - Do not introduce a new answer that is absent from the agent candidate list unless no candidate was extractable.
 - If the agent outputs include a clear final-answer format, keep that same final-answer format.
 - Keep the response concise.

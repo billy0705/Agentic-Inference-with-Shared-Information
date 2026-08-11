@@ -88,7 +88,7 @@ ANSWER_CHOICE: <the current Lean proof/candidate direction, or "undecided">
 ANSWER_REASON: <one sentence explaining why you choose this proof/candidate direction>
 {% endif %}
 
-{% if allow_agent_early_stop|default(false) or step_index >= max_steps %}
+{% if allow_agent_early_stop|default(false) %}
 
 If you are ready to finish this agent's work, add this FINAL section before the existing SHARE_FINDING and LOCAL_NOTES sections.
 

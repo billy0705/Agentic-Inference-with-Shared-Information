@@ -199,6 +199,24 @@ async def test_agent_prompt_can_offer_early_stop_final_format():
 
 
 @pytest.mark.asyncio
+async def test_agent_prompt_omits_final_format_on_last_step_without_early_stop():
+    agent = ResearchAgent(
+        run_id="run-prompts",
+        task="Build a chess website",
+        assigned_subtask="Research synchronization",
+        llm=None,
+        event_streamer=InMemoryEventStreamer(),
+        max_steps=3,
+        allow_agent_early_stop=False,
+    )
+
+    prompt = await agent.build_prompt(step_index=3, relevant_events=[])
+
+    assert "If you are ready to finish this agent's work" not in prompt
+    assert "FINAL:" not in prompt
+
+
+@pytest.mark.asyncio
 async def test_tool_agent_prompt_does_not_repeat_final_sections():
     agent = CodingAgent(
         run_id="run-prompts",

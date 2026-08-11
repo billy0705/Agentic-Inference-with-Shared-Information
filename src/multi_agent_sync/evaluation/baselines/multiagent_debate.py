@@ -9,7 +9,7 @@ from multi_agent_sync.token_usage import extract_token_usage
 
 
 DEBATE_AGENT_COUNT = 3
-DEBATE_ROUNDS = 2
+DEBATE_ROUNDS = 3
 
 
 async def run_multiagent_debate(prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int, dict[str, Any]]:

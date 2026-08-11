@@ -24,7 +24,7 @@ SHARE_FINDING:
 LOCAL_NOTES:
 ANSWER_CHOICE: <the answer/candidate you currently choose, or "undecided">
 ANSWER_REASON: <one sentence explaining why you choose this answer/candidate>
-{% if allow_agent_early_stop or step_index >= max_steps %}
+{% if allow_agent_early_stop %}
 
 If you are ready to finish this agent's work, add this FINAL section before the existing SHARE_FINDING and LOCAL_NOTES sections.
 
