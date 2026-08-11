@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from multi_agent_sync.agents.registry import AGENT_REGISTRY
+from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
 from multi_agent_sync.agents.dynamic_agent import DynamicAgent
 from multi_agent_sync.debate_prompts import build_debate_round_prompt, debate_prompt_style, render_debate_context
 from multi_agent_sync.events.event import AgentEvent
@@ -165,6 +166,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     llm = state.get("llm") or get_llm()
     max_steps = state.get("max_steps_per_agent", 3)
     allow_agent_early_stop = bool(state.get("allow_agent_early_stop", False))
+    agent_runtime_timeout = state.get("agent_runtime_timeout", DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS)
     enable_agent_message_streaming = state.get("enable_agent_message_streaming", True)
     trace_logger = state.get("trace_logger") or TraceLogger()
     subagent_mode = state.get("subagent_mode", "fixed")
@@ -182,7 +184,11 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
         enable_workspace_tools=enable_workspace_tools,
     )
     for assignment in assignments:
-        assignment = {**assignment, "allow_agent_early_stop": allow_agent_early_stop}
+        assignment = {
+            **assignment,
+            "allow_agent_early_stop": allow_agent_early_stop,
+            "agent_runtime_timeout": agent_runtime_timeout,
+        }
         agent_name = assignment["agent_name"]
         agent_class = DynamicAgent if subagent_mode == "dynamic" else AGENT_REGISTRY.get(agent_name)
         if agent_class is None:
@@ -204,6 +210,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             "assignment": assignment,
             "trace_logger": trace_logger,
             "max_steps": assignment.get("max_steps", max_steps),
+            "max_runtime_seconds": agent_runtime_timeout,
             "allow_agent_early_stop": allow_agent_early_stop,
             "enable_message_streaming": enable_agent_message_streaming,
             "workspace_access": assignment.get("workspace_access", "none"),
@@ -236,7 +243,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
         try:
             outputs = await asyncio.wait_for(
                 asyncio.gather(*(agent.run() for agent in agents)),
-                timeout=state.get("total_runtime_timeout", 600.0),
+                timeout=state.get("total_runtime_timeout", 1800.0),
             )
         except asyncio.TimeoutError:
             for agent in agents:

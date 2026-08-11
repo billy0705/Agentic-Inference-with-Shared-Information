@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from multi_agent_sync.evaluation import runner
+from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
 from multi_agent_sync.evaluation.benchmarks import chess, gpqa, gsm8k, hotpotqa, ma_proofbench, mmlu_pro, olymmath, swe_bench_verified
 from multi_agent_sync.evaluation import swebench_harness
 from multi_agent_sync.evaluation.kimina_docker import (
@@ -222,8 +223,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--total-runtime-timeout",
         type=float,
-        default=600.0,
+        default=1800.0,
         help="Maximum total runtime per multiagent example, in seconds.",
+    )
+    parser.add_argument(
+        "--agent-runtime-timeout",
+        type=float,
+        default=DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS,
+        help=f"Maximum runtime per multiagent subagent, in seconds. Defaults to {DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS:g}.",
     )
     parser.add_argument("--synthesis-timeout", type=float, default=60.0, help="Maximum summarizer runtime, in seconds.")
     parser.add_argument("--seed", type=int, default=RANDOM_SEED, help="Random seed for answer shuffling.")

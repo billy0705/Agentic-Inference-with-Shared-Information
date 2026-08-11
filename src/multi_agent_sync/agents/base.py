@@ -13,6 +13,7 @@ from multi_agent_sync.token_usage import extract_token_usage
 
 
 MAX_LOCAL_NOTES_CHARS = 500
+DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS = 600.0
 
 
 def compact_local_notes(notes: str) -> str:
@@ -57,7 +58,7 @@ class BaseAgent:
     critical_debate: bool = False
     trace_logger: Any | None = None
     max_steps: int = 3
-    max_runtime_seconds: float = 180.0
+    max_runtime_seconds: float = DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
     max_events_per_agent: int = 50
     step_delay_seconds: float = 0.2
     enable_message_streaming: bool = True

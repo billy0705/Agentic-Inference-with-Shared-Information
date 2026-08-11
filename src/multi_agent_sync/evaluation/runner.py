@@ -210,6 +210,7 @@ def build_run_config(
             "single_agent_min_steps": getattr(args, "single_agent_min_steps", None),
             "single_agent_max_steps": getattr(args, "single_agent_max_steps", None),
             "total_runtime_timeout": args.total_runtime_timeout,
+            "agent_runtime_timeout": getattr(args, "agent_runtime_timeout", None),
             "synthesis_timeout": args.synthesis_timeout,
             "seed": args.seed,
             "data_file": args.data_file,
@@ -249,6 +250,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "swebench_instance_ids": getattr(args, "swebench_instance_ids", None),
         "workspace_image": getattr(args, "workspace_image", None),
         "total_runtime_timeout": args.total_runtime_timeout,
+        "agent_runtime_timeout": getattr(args, "agent_runtime_timeout", None),
         "synthesis_timeout": args.synthesis_timeout,
         "save_json_traces": args.save_json_traces,
     }
