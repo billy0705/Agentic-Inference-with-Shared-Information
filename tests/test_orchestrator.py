@@ -542,3 +542,22 @@ async def test_dynamic_mode_invalid_multi_agent_plan_falls_back_to_worker_and_cr
     assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent"]
     assert len(plan["selected_agents"]) >= 2
     assert any(agent["critical_debate"] for agent in plan["selected_agents"])
+
+
+@pytest.mark.asyncio
+async def test_dynamic_mode_uses_configured_agent_range_for_fallback():
+    llm = StaticLLM("not json")
+
+    plan = await create_model_based_plan(
+        "Implement dynamic subagents.",
+        llm,
+        AGENT_REGISTRY,
+        subagent_mode="dynamic",
+        min_dynamic_subagents=3,
+        max_dynamic_subagents=3,
+    )
+
+    assert plan["mode"] == "multi_agent"
+    assert plan["subagent_mode"] == "dynamic"
+    assert len(plan["selected_agents"]) == 3
+    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent", "EvidenceReviewAgent"]

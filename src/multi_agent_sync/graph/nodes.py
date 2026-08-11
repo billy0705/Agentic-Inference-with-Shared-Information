@@ -7,13 +7,20 @@ from collections.abc import Callable
 from typing import Any
 
 from multi_agent_sync.agents.registry import AGENT_REGISTRY
+from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
 from multi_agent_sync.agents.dynamic_agent import DynamicAgent
 from multi_agent_sync.debate_prompts import build_debate_round_prompt, debate_prompt_style, render_debate_context
 from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph.state import GraphState
 from multi_agent_sync.llm import get_llm
-from multi_agent_sync.orchestrator.orchestrator import create_fallback_plan, create_model_based_plan, selected_agents_to_assignments
+from multi_agent_sync.orchestrator.orchestrator import (
+    DEFAULT_MAX_DYNAMIC_SUBAGENTS,
+    DEFAULT_MIN_DYNAMIC_SUBAGENTS,
+    create_fallback_plan,
+    create_model_based_plan,
+    selected_agents_to_assignments,
+)
 from multi_agent_sync.prompts import render_prompt
 from multi_agent_sync.token_usage import extract_token_usage
 from multi_agent_sync.tools.bash import BashTool
@@ -25,7 +32,14 @@ async def orchestrator_node(state: GraphState) -> GraphState:
     task = state["task"]
     llm = state.get("llm") or get_llm()
     subagent_mode = state.get("subagent_mode", "fixed")
-    orchestrator_plan = await create_model_based_plan(task, llm, AGENT_REGISTRY, subagent_mode=subagent_mode)
+    orchestrator_plan = await create_model_based_plan(
+        task,
+        llm,
+        AGENT_REGISTRY,
+        subagent_mode=subagent_mode,
+        min_dynamic_subagents=state.get("min_dynamic_subagents", DEFAULT_MIN_DYNAMIC_SUBAGENTS),
+        max_dynamic_subagents=state.get("max_dynamic_subagents", DEFAULT_MAX_DYNAMIC_SUBAGENTS),
+    )
     if state.get("enable_workspace_tools") and (
         orchestrator_plan.get("mode") == "direct" or not orchestrator_plan.get("selected_agents")
     ):
@@ -151,6 +165,8 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
     llm = state.get("llm") or get_llm()
     max_steps = state.get("max_steps_per_agent", 3)
+    allow_agent_early_stop = bool(state.get("allow_agent_early_stop", False))
+    agent_runtime_timeout = state.get("agent_runtime_timeout", DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS)
     enable_agent_message_streaming = state.get("enable_agent_message_streaming", True)
     trace_logger = state.get("trace_logger") or TraceLogger()
     subagent_mode = state.get("subagent_mode", "fixed")
@@ -168,6 +184,11 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
         enable_workspace_tools=enable_workspace_tools,
     )
     for assignment in assignments:
+        assignment = {
+            **assignment,
+            "allow_agent_early_stop": allow_agent_early_stop,
+            "agent_runtime_timeout": agent_runtime_timeout,
+        }
         agent_name = assignment["agent_name"]
         agent_class = DynamicAgent if subagent_mode == "dynamic" else AGENT_REGISTRY.get(agent_name)
         if agent_class is None:
@@ -189,6 +210,8 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             "assignment": assignment,
             "trace_logger": trace_logger,
             "max_steps": assignment.get("max_steps", max_steps),
+            "max_runtime_seconds": agent_runtime_timeout,
+            "allow_agent_early_stop": allow_agent_early_stop,
             "enable_message_streaming": enable_agent_message_streaming,
             "workspace_access": assignment.get("workspace_access", "none"),
         }
@@ -220,7 +243,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
         try:
             outputs = await asyncio.wait_for(
                 asyncio.gather(*(agent.run() for agent in agents)),
-                timeout=state.get("total_runtime_timeout", 600.0),
+                timeout=state.get("total_runtime_timeout", 1800.0),
             )
         except asyncio.TimeoutError:
             for agent in agents:

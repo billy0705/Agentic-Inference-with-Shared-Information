@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
+from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
 from multi_agent_sync.evaluation.types import BenchmarkWorkflowConfig
 from multi_agent_sync.graph.dynamic_orchestration import run_dynamic_orchestration_workflow
 from multi_agent_sync.graph.workflow import run_workflow
@@ -43,7 +44,9 @@ async def run_multiagent(
             subagent_mode=subagent_mode,
             max_steps_per_agent=args.max_steps,
             total_runtime_timeout=args.total_runtime_timeout,
+            agent_runtime_timeout=getattr(args, "agent_runtime_timeout", DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS),
             synthesis_timeout=args.synthesis_timeout,
+            allow_agent_early_stop=getattr(args, "allow_agent_early_stop", False),
             enable_agent_message_streaming=enable_agent_message_streaming,
             stream_to_console=False,
             no_color=True,
@@ -166,6 +169,8 @@ def extract_workflow_trace(state: dict[str, Any]) -> dict[str, Any]:
         "plan",
         "selected_agents",
         "assignments",
+        "allow_agent_early_stop",
+        "agent_runtime_timeout",
         "orchestrator_plan",
         "event_log",
         "agent_outputs",

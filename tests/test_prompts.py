@@ -4,6 +4,7 @@ import random
 import pytest
 
 from multi_agent_sync.agents.research_agent import ResearchAgent
+from multi_agent_sync.agents.coding_agent import CodingAgent
 from multi_agent_sync.evaluation import gpqa, gsm8k, hotpotqa, mmlu_pro
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph import nodes
@@ -114,6 +115,11 @@ async def test_agent_prompt_is_rendered_from_template():
         assigned_subtask="Research synchronization",
         llm=None,
         event_streamer=InMemoryEventStreamer(),
+        assignment={
+            "agent_name": "ResearchAgent",
+            "task": "Research synchronization",
+            "expected_output": "Concise synchronization risks and recommendations.",
+        },
     )
 
     prompt = await agent.build_prompt(step_index=1, relevant_events=[])
@@ -129,6 +135,7 @@ async def test_agent_prompt_is_rendered_from_template():
     assert "[GLOBAL STATIC PREFIX]\nBuild a chess website" in prompt
     assert "Agent name:\nResearchAgent" in prompt
     assert "Assigned subtask:\nResearch synchronization" in prompt
+    assert "Expected output:\nConcise synchronization risks and recommendations." in prompt
     assert "Current step:\n1 of 3" in prompt
     assert "Local notes:\n- None yet." in prompt
     assert "Shared findings:\n- No shared findings yet." in prompt
@@ -139,6 +146,7 @@ async def test_agent_prompt_is_rendered_from_template():
     assert "Respond with concise summaries only." in prompt
     assert "ANSWER_CHOICE:" in prompt
     assert "ANSWER_REASON:" in prompt
+    assert "FINAL:" not in prompt
     assert "NEXT_STEP:" not in prompt
     assert "CONFIDENCE:" not in prompt
     assert "confidence" not in prompt.lower()
@@ -155,6 +163,7 @@ def test_tool_agent_prompt_allows_sharing_candidate_and_short_reason():
         rules=[],
         critical_debate=False,
         assigned_subtask="Find the candidate fix.",
+        expected_output="",
         workspace_access="write",
         is_reactive=False,
         reactive_reason="",
@@ -168,6 +177,53 @@ def test_tool_agent_prompt_allows_sharing_candidate_and_short_reason():
 
     assert "Shared findings may include an answer/candidate plus a short reason; verify them before adopting." in prompt
     assert "<one useful finding for other agents; may include your current answer/candidate and one short reason" in prompt
+
+
+@pytest.mark.asyncio
+async def test_agent_prompt_can_offer_early_stop_final_format():
+    agent = ResearchAgent(
+        run_id="run-prompts",
+        task="Build a chess website",
+        assigned_subtask="Research synchronization",
+        llm=None,
+        event_streamer=InMemoryEventStreamer(),
+        allow_agent_early_stop=True,
+    )
+
+    prompt = await agent.build_prompt(step_index=1, relevant_events=[])
+
+    assert "If you are ready to finish this agent's work" in prompt
+    assert "FINAL:" in prompt
+    assert prompt.count("SHARE_FINDING:") == 1
+    assert prompt.count("LOCAL_NOTES:") == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_agent_prompt_does_not_repeat_final_sections():
+    agent = CodingAgent(
+        run_id="run-prompts",
+        task="Inspect the workspace",
+        assigned_subtask="Run a bash command.",
+        llm=None,
+        event_streamer=InMemoryEventStreamer(),
+        assignment={
+            "agent_name": "CodingAgent",
+            "task": "Run a bash command.",
+            "expected_output": "A command result summary and implementation direction.",
+        },
+        bash_tool=object(),
+        workspace_access="write",
+        allow_agent_early_stop=True,
+    )
+
+    prompt = await agent.build_prompt(step_index=1, relevant_events=[])
+
+    assert "If you are ready to finish this agent's work" in prompt
+    assert "Expected output:\nA command result summary and implementation direction." in prompt
+    assert "FINAL:" in prompt
+    assert "ANSWER_CHOICE:" in prompt
+    assert prompt.count("SHARE_FINDING:") == 1
+    assert prompt.count("LOCAL_NOTES:") == 1
 
 
 def test_graph_prompts_are_not_embedded_in_node_functions():
@@ -204,6 +260,7 @@ def test_dynamic_orchestrator_prompt_allows_direct_and_requires_detailed_subagen
     assert "The reason must explain truthfully why direct or multi_agent was selected." in prompt
     assert "Never claim 100% certainty for a normal benchmark question unless the answer is explicitly given in the prompt." in prompt
     assert "Diverse subagents" in prompt
+    assert "If multi_agent, create 2 to 4 subagents." in prompt
     assert "Do not create overlapping roles" in prompt
     assert "evidence, check, or perspective" in prompt
     assert '"direct_certainty": "100_percent"' in prompt
@@ -211,3 +268,25 @@ def test_dynamic_orchestrator_prompt_allows_direct_and_requires_detailed_subagen
     assert '"role": "specific expertise and responsibility for this subagent"' in prompt
     assert '"description": "unique evidence, constraints, checks, or perspective' in prompt
     assert "Analyze this benchmark result." in prompt
+
+
+def test_dynamic_orchestrator_prompt_uses_configured_agent_range():
+    prompt = orchestrator.build_dynamic_orchestrator_prompt(
+        "Analyze this benchmark result.",
+        min_dynamic_subagents=3,
+        max_dynamic_subagents=4,
+    )
+
+    assert "If multi_agent, create 3 to 4 subagents." in prompt
+    assert "If multi_agent, create 2 to 4 subagents." not in prompt
+
+
+def test_dynamic_orchestrator_prompt_uses_single_agent_count_when_range_matches():
+    prompt = orchestrator.build_dynamic_orchestrator_prompt(
+        "Analyze this benchmark result.",
+        min_dynamic_subagents=3,
+        max_dynamic_subagents=3,
+    )
+
+    assert "If multi_agent, create 3 subagents." in prompt
+    assert "If multi_agent, create 3 to 3 subagents." not in prompt

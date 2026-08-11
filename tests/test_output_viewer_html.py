@@ -52,6 +52,21 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "normalizeDynamicOrchestration" in html
     assert "renderDynamicOrchestration" in html
     assert "renderDynamicOrchestrationRound" in html
+    assert "renderDynamicOrchestrationPlan" in html
+    assert "renderDynamicOrchestrationPool" in html
+    assert "renderDynamicOrchestrationReportRows" in html
+    assert "renderDynamicOrchestrationStepUsage" in html
+    assert "dynamic_orchestration_trace" in html
+    assert "Dynamic Orchestration" in html
+    assert "Workflow plan" in html
+    assert "Fixed subagent pool" in html
+    assert "Current step" in html
+    assert "Step result" in html
+    assert "Step assignments" in html
+    assert "Reporting agents" in html
+    assert "Support-only agents" in html
+    assert "report_policy" in html
+    assert "support_excerpt" in html
     assert "dynamic_orchestration_trace" in html
     assert "Dynamic Orchestration" in html
     assert "Routing decision reason" in html
@@ -62,15 +77,77 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "Accuracy Overview" in html
     assert "Run Analysis" in html
     assert "renderRunAnalysisPanel" in html
+    assert "analysisSelectionContext" in html
+    assert "score_metadata: normalizeScoreMetadata" in html
+    assert "normalizeScoreMetadata" in html
+    assert "acceptedAnswersForExample" in html
+    assert "valid_targets" in html
+    assert "formatAcceptedAnswers" in html
+    assert "selectedAnalysisBenchmark" in html
+    assert "selectedAnalysisModel" in html
+    assert "setAnalysisBenchmark" in html
+    assert "setAnalysisModel" in html
+    assert "BASELINE_METHOD_DEFAULTS" in html
+    assert "single_agent" in html
+    assert "majority_vote" in html
+    assert "multiagent_debate" in html
+    assert "Baseline methods" in html
+    assert "Baseline correct, current wrong" in html
+    assert "Selected baselines correct" not in html
+    assert "setAnalysisBaselineMethod" in html
+    assert "Baseline sources" in html
     assert "runAnalysisRows" in html
     assert "classifyAnalysisIssue" in html
     assert "renderAnalysisIssueRow" in html
-    assert "our method wrong, other correct" in html
-    assert "candidate majority wrong" in html
+    assert "baseline correct, current wrong" in html
+    assert "current wrong, selected baselines wrong or missing" in html
+    assert "current correct, selected baselines wrong" in html
+    assert "current correct, selected baseline also correct" in html
+    assert "Error distribution" in html
+    assert "renderErrorDistributionChart" in html
+    assert "Round majority and agreement" in html
+    assert "renderConsensusTrendChart" in html
+    assert "analysisRoundMetric: 'correct_majority'" in html
+    assert "analysisRoundMetricOptions" in html
+    assert "selectedAnalysisRoundMetric" in html
+    assert "setAnalysisRoundMetric" in html
+    assert "Round bar" in html
+    assert "Correct majority" in html
+    assert "Same choice" in html
+    assert "Same correct choice" in html
+    assert "MAX_ANALYSIS_ROUNDS = 3" in html
+    assert "analysisRoundIsVisible" in html
+    assert "Round-level answer analysis" in html
+    assert "correct majority" in html
+    assert "wrong majority" in html
+    assert "same correct choice" in html
+    assert "barWidth(row[metric.key], row.total)" in html
+    assert "barWidth(row.correct_majority, maxTotal)" not in html
+    assert "round answer correct" not in html
+    assert "round answer wrong" not in html
+    assert "correct_subagents" in html
+    assert "Decision changed after shared findings" not in html
+    assert "Same choice after more rounds" not in html
+    assert "agents changed after shared info" in html
+    assert "final agents all agree" in html
+    assert "analysisRoundRows" in html
+    assert "analysisDecisionShift" in html
+    assert "analysisConsensusTrend" in html
+    assert "wrong subagent consensus" in html
+    assert "wrong tie-break / final selection" in html
+    assert "buildFailureExplanation" in html
+    assert "Why our method failed" in html
+    assert "Why wrong subagents did not choose gold" in html
+    assert "latestAgentCandidates" in html
+    assert "candidateRationale" in html
+    assert "wrong subagent consensus ignored a correct minority" in html
+    assert "tie-break or final selector did not use the correct subagent" in html
+    assert "subagent majority chose the wrong answer" not in html
+    assert "final selected answer is wrong" not in html
+    assert "candidate majority wrong" not in html
+    assert "candidate selected wrong" not in html
     assert "no majority, summarizer wrong" in html
     assert "summarizer overrode correct aggregation" in html
-    assert "all methods wrong" in html
-    assert "our method correct, others wrong" in html
     assert "analysis_target_method" in html
     assert "candidate_aggregation" in html
     assert "setAnalysisMethod" in html
@@ -137,7 +214,13 @@ def test_static_output_viewer_exposes_required_filters_and_tabs():
     assert "eventTypeIsVisible" in html
     assert "renderPageTabs" in html
     assert 'page: \'accuracy\'' in html
+    assert "analysisBenchmark: ''" in html
+    assert "analysisModels: {}" in html
     assert 'analysisMethod: \'multiagent_dynamic_streaming\'' in html
+    assert "analysisBaselineMethods: []" in html
+    assert "analysisRoundMetric: 'correct_majority'" in html
+    assert 'id="analysisBenchmarkSelect"' in html
+    assert 'id="analysisModelSelect"' in html
 
     for tab in ("Overview", "Orchestrator", "Prompt", "Output", "Agents", "Summarizer", "Events", "Tools", "Raw"):
         assert tab in html

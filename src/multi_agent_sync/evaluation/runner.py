@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import time
 from urllib.request import Request, urlopen
 from collections import defaultdict
@@ -149,6 +150,24 @@ def to_jsonable(value: Any) -> Any:
     return str(value)
 
 
+def current_git_commit_id() -> str | None:
+    repo_root = Path(__file__).resolve().parents[3]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    commit_id = result.stdout.strip()
+    if result.returncode != 0 or not commit_id:
+        return None
+    return commit_id
+
+
 def build_run_config(
     benchmark: BenchmarkSpec,
     args: argparse.Namespace,
@@ -160,6 +179,7 @@ def build_run_config(
     comparison = build_comparison_metadata(benchmark, args)
     return {
         "run_id": run_id,
+        "git_commit_id": current_git_commit_id(),
         "benchmark": benchmark.name,
         "benchmark_display_name": benchmark.display_name,
         "methods": methods,
@@ -192,9 +212,11 @@ def build_run_config(
             "workspace_image": getattr(args, "workspace_image", None),
             "max_steps": args.max_steps,
             "max_orchestrator_rounds": getattr(args, "max_orchestrator_rounds", None),
+            "allow_agent_early_stop": getattr(args, "allow_agent_early_stop", False),
             "single_agent_min_steps": getattr(args, "single_agent_min_steps", None),
             "single_agent_max_steps": getattr(args, "single_agent_max_steps", None),
             "total_runtime_timeout": args.total_runtime_timeout,
+            "agent_runtime_timeout": getattr(args, "agent_runtime_timeout", None),
             "synthesis_timeout": args.synthesis_timeout,
             "seed": args.seed,
             "data_file": args.data_file,
@@ -236,6 +258,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "message_streaming": method_message_streaming(method),
         "max_steps": args.max_steps,
         "max_orchestrator_rounds": getattr(args, "max_orchestrator_rounds", None),
+        "allow_agent_early_stop": getattr(args, "allow_agent_early_stop", False),
         "single_agent_min_steps": getattr(args, "single_agent_min_steps", None),
         "single_agent_max_steps": getattr(args, "single_agent_max_steps", None),
         "attempts": getattr(args, "attempts", 1),
@@ -257,6 +280,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "swebench_instance_ids": getattr(args, "swebench_instance_ids", None),
         "workspace_image": getattr(args, "workspace_image", None),
         "total_runtime_timeout": args.total_runtime_timeout,
+        "agent_runtime_timeout": getattr(args, "agent_runtime_timeout", None),
         "synthesis_timeout": args.synthesis_timeout,
         "save_json_traces": args.save_json_traces,
     }

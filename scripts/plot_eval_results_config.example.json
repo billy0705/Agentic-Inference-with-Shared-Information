@@ -1,0 +1,85 @@
+{
+  "runs": [
+    {
+      "summary_path": "output/chess/gemma-4-E4B-it/20260728T085652Z_a4c0a9ef/summary.json",
+      "methods": ["dynamic_orchestration"]
+    },
+    {
+      "summary_path": "output/chess/gemma-4-E4B-it/20260728T085652Z_a4c0a9ef/summary.json",
+      "label": "current",
+      "methods": ["multiagent_dynamic_streaming"]
+    },
+    {
+      "summary_path": "output/gpqa/gemma-4-E4B-it/20260728T000503Z_42c22c91/summary.json",
+      "methods": ["dynamic_orchestration"]
+    },
+    {
+      "summary_path": "output/gpqa/gemma-4-E4B-it/20260728T000503Z_42c22c91/summary.json",
+      "label": "current",
+      "methods": ["multiagent_dynamic_streaming"]
+    },
+    {
+      "summary_path": "output/gsm8k/gemma-4-E4B-it/20260728T044801Z_14a8d505/summary.json",
+      "methods": ["dynamic_orchestration"]
+    },
+    {
+      "summary_path": "output/gsm8k/gemma-4-E4B-it/20260728T044801Z_14a8d505/summary.json",
+      "label": "current",
+      "methods": ["multiagent_dynamic_streaming"]
+    },
+    {
+      "summary_path": "output/mmlu_pro/gemma-4-E4B-it/20260728T061919Z_41c07fe1/summary.json",
+      "methods": ["dynamic_orchestration"]
+    },
+    {
+      "summary_path": "output/mmlu_pro/gemma-4-E4B-it/20260728T061919Z_41c07fe1/summary.json",
+      "label": "current",
+      "methods": ["multiagent_dynamic_streaming"]
+    },
+    {
+      "summary_path": "output/chess/gemma-4-E4B-it/20260721T233004Z_dccba90a/summary.json",
+      "methods": ["single_agent", "majority_vote", "multiagent_debate"]
+    },
+    {
+      "summary_path": "output/chess/gemma-4-E4B-it/20260721T233004Z_dccba90a/summary.json",
+      "label": "previous",
+      "methods": ["multiagent_dynamic_streaming"]
+    },
+    {
+      "summary_path": "output/gpqa/gemma-4-E4B-it/20260722T002800Z_72d34446/summary.json",
+      "methods": ["single_agent", "majority_vote", "multiagent_debate"]
+    },
+    {
+      "summary_path": "output/gpqa/gemma-4-E4B-it/20260722T002800Z_72d34446/summary.json",
+      "label": "previous",
+      "methods": ["multiagent_dynamic_streaming"]
+    },
+    {
+      "summary_path": "output/gsm8k/gemma-4-E4B-it/20260722T045417Z_1461cc11/summary.json",
+      "methods": ["single_agent", "majority_vote", "multiagent_debate"]
+    },
+    {
+      "summary_path": "output/gsm8k/gemma-4-E4B-it/20260722T045417Z_1461cc11/summary.json",
+      "label": "previous",
+      "methods": ["multiagent_dynamic_streaming"]
+    },
+    {
+      "summary_path": "output/mmlu_pro/gemma-4-E4B-it/20260722T060804Z_51fb0d08/summary.json",
+      "methods": ["single_agent", "majority_vote", "multiagent_debate"]
+    },
+    {
+      "summary_path": "output/mmlu_pro/gemma-4-E4B-it/20260722T060804Z_51fb0d08/summary.json",
+      "label": "previous",
+      "methods": ["multiagent_dynamic_streaming"]
+    },
+    {
+      "summary_path": "output/olymmath/gemma-4-E4B-it/20260722T110219Z_1c4206c8/summary.json",
+      "methods": ["single_agent", "majority_vote", "multiagent_debate"]
+    },
+    {
+      "summary_path": "output/olymmath/gemma-4-E4B-it/20260722T110219Z_1c4206c8/summary.json",
+      "label": "previous",
+      "methods": ["multiagent_dynamic_streaming"]
+    }
+  ]
+}

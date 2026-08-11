@@ -25,6 +25,11 @@ Challenge assumptions, identify contradictions, and share critiques that other a
 
 Assigned subtask:
 {{ assigned_subtask }}
+{% if expected_output|default("") %}
+
+Expected output:
+{{ expected_output }}
+{% endif %}
 
 Docker workspace:
 You may use the bash tool. Every bash command is executed inside the Docker container with working directory /workspace.
@@ -83,14 +88,10 @@ ANSWER_CHOICE: <the current Lean proof/candidate direction, or "undecided">
 ANSWER_REASON: <one sentence explaining why you choose this proof/candidate direction>
 {% endif %}
 
-To finish this agent's work:
+{% if allow_agent_early_stop|default(false) or step_index >= max_steps %}
+
+If you are ready to finish this agent's work, add this FINAL section before the existing SHARE_FINDING and LOCAL_NOTES sections.
 
 FINAL:
 <final concise output for this assigned subtask>
-
-SHARE_FINDING:
-<one useful finding for other agents; may include your current answer/candidate and one short reason, or leave blank>
-
-LOCAL_NOTES:
-ANSWER_CHOICE: <the final answer/candidate/implementation direction you choose>
-ANSWER_REASON: <one sentence explaining why this is the final answer/candidate/direction>
+{% endif %}

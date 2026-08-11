@@ -6,6 +6,7 @@ import os
 
 from rich.console import Console
 
+from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
 from multi_agent_sync.artifacts import build_token_usage_by_step, format_token_usage_by_step, save_run_artifacts
 from multi_agent_sync.graph.workflow import run_workflow
 from multi_agent_sync.llm import get_llm
@@ -18,6 +19,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default=None, help="Model name to use for the selected provider.")
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent.")
     parser.add_argument(
+        "--allow-agent-early-stop",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Allow agents to stop before --max-steps when they return FINAL. Disabled by default.",
+    )
+    parser.add_argument(
         "--subagent-mode",
         choices=("fixed", "dynamic"),
         default="fixed",
@@ -26,8 +33,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--total-runtime-timeout",
         type=float,
-        default=600.0,
-        help="Maximum total runtime for all agents, in seconds. Defaults to 600.",
+        default=1800.0,
+        help="Maximum total runtime for all agents, in seconds. Defaults to 1800.",
+    )
+    parser.add_argument(
+        "--agent-runtime-timeout",
+        type=float,
+        default=DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS,
+        help=f"Maximum runtime per agent, in seconds. Defaults to {DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS:g}.",
     )
     parser.add_argument("--no-color", action="store_true", help="Disable colored terminal output.")
     parser.add_argument("--runs-dir", default="runs", help="Directory where run artifacts are saved.")
@@ -83,6 +96,8 @@ async def async_main(args: argparse.Namespace) -> None:
             subagent_mode=args.subagent_mode,
             max_steps_per_agent=args.max_steps,
             total_runtime_timeout=args.total_runtime_timeout,
+            agent_runtime_timeout=args.agent_runtime_timeout,
+            allow_agent_early_stop=args.allow_agent_early_stop,
             stream_to_console=True,
             no_color=args.no_color,
             enable_workspace_tools=args.docker_workspace,

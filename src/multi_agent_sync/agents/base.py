@@ -13,6 +13,7 @@ from multi_agent_sync.token_usage import extract_token_usage
 
 
 MAX_LOCAL_NOTES_CHARS = 500
+DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS = 600.0
 
 
 def compact_local_notes(notes: str) -> str:
@@ -57,7 +58,7 @@ class BaseAgent:
     critical_debate: bool = False
     trace_logger: Any | None = None
     max_steps: int = 3
-    max_runtime_seconds: float = 180.0
+    max_runtime_seconds: float = DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
     max_events_per_agent: int = 50
     step_delay_seconds: float = 0.2
     enable_message_streaming: bool = True
@@ -65,6 +66,7 @@ class BaseAgent:
     feedback_tool: Any | None = None
     final_guard_tool: Any | None = None
     workspace_access: str = "none"
+    allow_agent_early_stop: bool = False
     tool_observations: list[dict[str, Any]] = field(default_factory=list)
     final_guard_retry_steps: int = 2
     reactive_steps_enabled: bool = True
@@ -158,7 +160,7 @@ class BaseAgent:
 
             result = await self.run_step_and_record(step_index)
             last_step_index = step_index
-            if result.status == "final":
+            if result.status == "final" and (self.allow_agent_early_stop or step_index >= self.max_steps):
                 final_response_received = True
                 break
             if self.is_final_guard_retry(result) and final_guard_extra_steps == 0:
@@ -296,6 +298,7 @@ class BaseAgent:
         ]
         notes = "\n".join(f"- {note}" for note in self.local_notes[-8:]) or "- None yet."
         events = "\n".join(event_lines) or "- No shared findings yet."
+        expected_output = str((self.assignment or {}).get("expected_output") or "").strip()
         if self.has_workspace_tool:
             return render_prompt(
                 "agents/tool_step.j2",
@@ -306,11 +309,13 @@ class BaseAgent:
                 rules=self.rules,
                 critical_debate=self.critical_debate,
                 assigned_subtask=self.assigned_subtask,
+                expected_output=expected_output,
                 workspace_access=self.workspace_access,
                 is_reactive=is_reactive,
                 reactive_reason=reactive_reason or "important_unused_events_received",
                 step_index=step_index,
                 max_steps=self.max_steps,
+                allow_agent_early_stop=self.allow_agent_early_stop,
                 notes=notes,
                 events=events,
                 tool_observations=self.format_tool_observations(),
@@ -325,10 +330,12 @@ class BaseAgent:
             rules=self.rules,
             critical_debate=self.critical_debate,
             assigned_subtask=self.assigned_subtask,
+            expected_output=expected_output,
             is_reactive=is_reactive,
             reactive_reason=reactive_reason or "important_unused_events_received",
             step_index=step_index,
             max_steps=self.max_steps,
+            allow_agent_early_stop=self.allow_agent_early_stop,
             notes=notes,
             events=events,
         )
@@ -548,6 +555,7 @@ class BaseAgent:
             "agent_name": self.name,
             "task": self.assigned_subtask,
             "max_steps": self.max_steps,
+            "allow_agent_early_stop": self.allow_agent_early_stop,
         }
 
     def _log_step_trace(

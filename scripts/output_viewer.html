@@ -72,12 +72,24 @@
     .method-row { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(180px, 2fr) minmax(72px, auto) minmax(112px, auto) minmax(86px, auto) minmax(100px, auto) minmax(80px, auto); gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 8px; }
     .route-breakdown { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     .analysis-summary { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; margin: 12px 0; }
+    .analysis-controls { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 10px; align-items: end; }
+    .analysis-baselines { grid-column: 1 / -1; }
+    .checkbox-group { display: flex; flex-wrap: wrap; gap: 8px; }
+    .check-pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: white; border-radius: 999px; min-height: 28px; padding: 4px 10px; font-size: 12px; font-weight: 800; text-transform: none; color: var(--ink); }
+    .check-pill input { width: auto; margin: 0; }
     .analysis-bucket { border: 1px solid var(--line); border-radius: 8px; background: white; padding: 12px; margin: 12px 0; }
     .analysis-list { display: grid; gap: 8px; margin-top: 10px; }
     .analysis-row { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 10px; }
     .analysis-row-header { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
     .analysis-row-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
     .analysis-jump { border: 1px solid var(--accent); color: var(--accent); background: white; border-radius: 6px; padding: 5px 8px; font-size: 12px; font-weight: 800; }
+    .analysis-chart { display: grid; gap: 8px; margin: 10px 0; }
+    .chart-row { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(160px, 3fr) 44px; gap: 10px; align-items: center; font-size: 13px; }
+    .chart-track { height: 14px; border-radius: 999px; background: var(--code); border: 1px solid var(--line); overflow: hidden; }
+    .chart-fill { height: 100%; background: var(--accent); }
+    .round-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+    .round-table th, .round-table td { border-bottom: 1px solid var(--line); padding: 7px; text-align: left; vertical-align: top; }
+    .round-table th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
     .metric-label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; }
     .source-chip { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--line); border-radius: 999px; background: white; padding: 2px 8px; font-size: 12px; font-weight: 800; white-space: nowrap; }
     .source-chip.current { color: var(--good); background: #f5fbf7; }
@@ -113,8 +125,9 @@
     @media (max-width: 900px) {
       .app { grid-template-columns: 1fr; }
       aside { height: auto; position: static; }
-      .stats, .grid { grid-template-columns: 1fr; }
+      .stats, .grid, .analysis-summary { grid-template-columns: 1fr; }
       .method-row { grid-template-columns: 1fr; }
+      .analysis-controls, .chart-row { grid-template-columns: 1fr; }
       .page-tabs { flex-wrap: wrap; }
     }
   </style>
@@ -163,6 +176,8 @@
     const TEXT_LIMIT = 300000;
     const COMMUNICATION_EVENT_TYPES = ['finding', 'critique', 'warning', 'question'];
     const LIFECYCLE_EVENT_TYPES = ['task_started', 'plan_created', 'agent_started', 'final_summary'];
+    const BASELINE_METHOD_DEFAULTS = ['single_agent', 'majority_vote', 'multiagent_debate'];
+    const MAX_ANALYSIS_ROUNDS = 3;
     const state = {
       files: [],
       folderHandle: null,
@@ -176,7 +191,11 @@
       eventAgent: 'all',
       eventType: 'communication',
       accuracyModels: {},
+      analysisBenchmark: '',
+      analysisModels: {},
       analysisMethod: 'multiagent_dynamic_streaming',
+      analysisBaselineMethods: [],
+      analysisRoundMetric: 'correct_majority',
       page: 'accuracy',
       tab: 'Overview',
       search: '',
@@ -348,7 +367,11 @@
       state.eventAgent = 'all';
       state.eventType = 'communication';
       state.accuracyModels = {};
+      state.analysisBenchmark = '';
+      state.analysisModels = {};
       state.analysisMethod = 'multiagent_dynamic_streaming';
+      state.analysisBaselineMethods = [];
+      state.analysisRoundMetric = 'correct_majority';
       $('sourceStatus').textContent = `${statusText} ${state.data.runs.length} runs found.`;
       render();
     }
@@ -525,6 +548,7 @@
         correct: trace.correct ?? result.correct,
         pred: trace.pred ?? result.pred,
         gold: trace.gold ?? result.gold,
+        score_metadata: normalizeScoreMetadata(trace.score_metadata ?? result.score_metadata),
         error: truncateText(trace.error ?? result.error ?? ''),
         prompt: truncateText(trace.prompt || methodTrace.prompt || ''),
         raw_output: truncateText(trace.raw_output || result.raw_output || ''),
@@ -572,6 +596,8 @@
         final_answer: trace.final_answer || methodTrace.final_answer || '',
         forced_final: Boolean(trace.forced_final),
         max_orchestrator_rounds: trace.max_orchestrator_rounds,
+        workflow_plan: Array.isArray(trace.workflow_plan) ? trace.workflow_plan : [],
+        subagent_pool: Array.isArray(trace.subagent_pool) ? trace.subagent_pool : [],
         rounds: Array.isArray(trace.rounds) ? trace.rounds : [],
       };
     }
@@ -853,6 +879,20 @@
       };
     }
 
+    function normalizeScoreMetadata(scoreMetadata) {
+      if (!scoreMetadata) return {};
+      if (typeof scoreMetadata === 'object') return scoreMetadata;
+      if (typeof scoreMetadata === 'string') {
+        try {
+          const parsed = JSON.parse(scoreMetadata.replace(/'/g, '"'));
+          return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+      return {};
+    }
+
     function formatTokenUsage(tokenUsage) {
       const usage = normalizeTokenUsage(tokenUsage);
       return `prompt=${formatTokenValue(usage.prompt_tokens)}, completion=${formatTokenValue(usage.completion_tokens)}, total=${formatTokenValue(usage.total_tokens)}`;
@@ -1001,7 +1041,7 @@
       renderStats(runs);
       renderPageTabs();
       renderAccuracyPanel();
-      renderRunAnalysisPanel(run);
+      renderRunAnalysisPanel();
       renderRunList(runs);
       renderRunPanel(run);
       renderExampleSelect(run);
@@ -1397,25 +1437,128 @@
       return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
     }
 
-    function renderRunAnalysisPanel(run) {
-      if (!run) {
-        $('analysisPanel').innerHTML = '<div class="empty">No run selected.</div>';
+    function renderRunAnalysisPanel() {
+      const context = analysisSelectionContext();
+      if (!context.benchmarks.length) {
+        $('analysisPanel').innerHTML = '<div class="empty">No benchmark summary rows are available for analysis.</div>';
         return;
       }
-      const methods = runMethods(run);
-      const targetMethod = analysisTargetMethod(run);
+      if (!context.run) {
+        $('analysisPanel').innerHTML = renderAnalysisSelectors(context) + '<div class="empty">No run is available for the selected benchmark/model.</div>';
+        return;
+      }
+      const methods = runMethods(context.run);
+      const targetMethod = analysisTargetMethod(context.run);
       if (!targetMethod) {
-        $('analysisPanel').innerHTML = '<div class="empty">No method results are available for this run.</div>';
+        $('analysisPanel').innerHTML = renderAnalysisSelectors(context) + '<div class="empty">No method results are available for this run.</div>';
         return;
       }
-      const rows = runAnalysisRows(run, targetMethod);
+      const baselineOptions = analysisBaselineOptions(context, targetMethod);
+      const baselineMethods = selectedAnalysisBaselineMethods(baselineOptions);
+      const baselineSources = analysisBaselineSources(context.compatible_runs, context.run, baselineMethods);
+      const rows = runAnalysisRows(context.run, targetMethod, baselineSources);
       const summary = analysisSummary(rows);
       const buckets = analysisBuckets();
       $('analysisPanel').innerHTML = `
         <div class="toolbar">
           <div>
-            <h2>Single Run Analysis</h2>
-            <div class="subtle">${esc(run.benchmark_display_name)} · ${esc(run.run_id)} · ${esc(run.path)}</div>
+            <h2>Run Analysis</h2>
+            <div class="subtle">${esc(context.run.benchmark_display_name)} · current ${esc(context.run.run_id)} · selected baselines from previous compatible runs</div>
+          </div>
+          <span class="pill">compatible runs: ${esc(context.compatible_runs.length)}</span>
+        </div>
+        ${renderAnalysisSelectors(context, methods, targetMethod, baselineOptions, baselineMethods, baselineSources)}
+        <div class="analysis-summary">
+          <div class="stat"><span class="subtle">Current correct / total</span><strong>${esc(summary.correct)} / ${esc(summary.total)}</strong></div>
+          <div class="stat"><span class="subtle">Current accuracy</span><strong>${esc(percent(summary.accuracy))}</strong></div>
+          <div class="stat"><span class="subtle">Baseline correct, current wrong</span><strong>${esc(summary.regressions)}</strong></div>
+          <div class="stat"><span class="subtle">Invalid</span><strong>${esc(summary.invalid)}</strong></div>
+        </div>
+        ${renderErrorDistributionChart(rows)}
+        ${renderConsensusTrendChart(rows)}
+        ${buckets.map((bucket) => renderAnalysisBucket(bucket, rows.filter((row) => row.bucket === bucket.key))).join('')}
+      `;
+    }
+
+    function analysisSelectionContext() {
+      const runs = state.data.runs.filter((run) => !isExcludedAccuracyRun(run));
+      const benchmarks = latestBenchmarksForAnalysis(runs);
+      const benchmark = selectedAnalysisBenchmark(benchmarks);
+      const benchmarkRuns = runs.filter((run) => run.benchmark === benchmark);
+      const models = latestModelsForBenchmark(benchmarkRuns);
+      const selectedModel = selectedAnalysisModel(benchmark, models);
+      const run = latestRunForModel(benchmarkRuns, selectedModel);
+      const compatibleRuns = run ? compatibleAccuracyRuns(benchmarkRuns, selectedModel, run) : [];
+      const previousRun = run ? compatibleRuns.find((candidate) => candidate.path !== run.path) || null : null;
+      return { benchmarks, benchmark, benchmark_runs: benchmarkRuns, models, selected_model: selectedModel, run, compatible_runs: compatibleRuns, previous_run: previousRun };
+    }
+
+    function latestBenchmarksForAnalysis(runs) {
+      const latestByBenchmark = new Map();
+      for (const run of runs) {
+        const current = latestByBenchmark.get(run.benchmark);
+        if (!current || compareRunRecency(run, current) > 0) latestByBenchmark.set(run.benchmark, run);
+      }
+      return [...latestByBenchmark.entries()]
+        .sort(([, leftRun], [, rightRun]) => compareRunRecency(rightRun, leftRun))
+        .map(([benchmark]) => benchmark);
+    }
+
+    function selectedAnalysisBenchmark(benchmarks) {
+      if (state.analysisBenchmark && benchmarks.includes(state.analysisBenchmark)) return state.analysisBenchmark;
+      if (state.benchmark !== 'all' && benchmarks.includes(state.benchmark)) {
+        state.analysisBenchmark = state.benchmark;
+        return state.analysisBenchmark;
+      }
+      state.analysisBenchmark = benchmarks[0] || '';
+      return state.analysisBenchmark;
+    }
+
+    function selectedAnalysisModel(benchmark, models) {
+      const selected = state.analysisModels[benchmark];
+      if (selected && models.includes(selected)) return selected;
+      const fallback = state.model !== 'all' && models.includes(state.model) ? state.model : models[0] || '';
+      if (fallback) state.analysisModels[benchmark] = fallback;
+      return fallback;
+    }
+
+    function analysisBaselineOptions(context, targetMethod) {
+      const previousRuns = (context.compatible_runs || []).filter((run) => run.path !== context.run?.path);
+      return unique(previousRuns.flatMap((run) => runMethods(run))).filter((method) => method !== targetMethod);
+    }
+
+    function selectedAnalysisBaselineMethods(options) {
+      const selected = state.analysisBaselineMethods.filter((method) => options.includes(method));
+      if (selected.length) return selected;
+      const defaults = BASELINE_METHOD_DEFAULTS.filter((method) => options.includes(method));
+      state.analysisBaselineMethods = defaults.length ? defaults : options.slice(0, 3);
+      return state.analysisBaselineMethods;
+    }
+
+    function analysisBaselineSources(compatibleRuns, currentRun, baselineMethods) {
+      const sources = new Map();
+      const previousRuns = (compatibleRuns || []).filter((run) => run.path !== currentRun?.path);
+      for (const method of baselineMethods) {
+        const sourceRun = previousRuns.find((run) => runMethods(run).includes(method));
+        if (sourceRun) sources.set(method, sourceRun);
+      }
+      return sources;
+    }
+
+    function renderAnalysisSelectors(context, methods = [], targetMethod = '', baselineOptions = [], baselineMethods = [], baselineSources = new Map()) {
+      return `
+        <div class="analysis-controls">
+          <div class="field">
+            <label for="analysisBenchmarkSelect">Benchmark</label>
+            <select id="analysisBenchmarkSelect" onchange="setAnalysisBenchmark(this.value)">
+              ${context.benchmarks.map((benchmark) => `<option value="${esc(benchmark)}" ${benchmark === context.benchmark ? 'selected' : ''}>${esc(benchmark)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <label for="analysisModelSelect">Model</label>
+            <select id="analysisModelSelect" onchange="setAnalysisModel(this.value)">
+              ${context.models.map((model) => `<option value="${esc(model)}" ${model === context.selected_model ? 'selected' : ''}>${esc(model)}</option>`).join('')}
+            </select>
           </div>
           <div class="field">
             <label for="analysisMethodSelect">Analysis method</label>
@@ -1423,15 +1566,38 @@
               ${methods.map((method) => `<option value="${esc(method)}" ${method === targetMethod ? 'selected' : ''}>${esc(method)}</option>`).join('')}
             </select>
           </div>
+          <div class="field analysis-baselines">
+            <label>Baseline methods</label>
+            ${renderAnalysisBaselineControls(baselineOptions, baselineMethods)}
+          </div>
         </div>
-        <div class="analysis-summary">
-          <div class="stat"><span class="subtle">Target method</span><strong>${esc(targetMethod)}</strong></div>
-          <div class="stat"><span class="subtle">Correct / total</span><strong>${esc(summary.correct)} / ${esc(summary.total)}</strong></div>
-          <div class="stat"><span class="subtle">Accuracy</span><strong>${esc(percent(summary.accuracy))}</strong></div>
-          <div class="stat"><span class="subtle">Invalid</span><strong>${esc(summary.invalid)}</strong></div>
-        </div>
-        ${buckets.map((bucket) => renderAnalysisBucket(bucket, rows.filter((row) => row.bucket === bucket.key))).join('')}
+        <p class="subtle">
+          Current source: ${esc(context.run?.path || 'n/a')}<br>
+          Baseline sources: ${esc(formatBaselineSources(baselineMethods, baselineSources))}
+        </p>
       `;
+    }
+
+    function renderAnalysisBaselineControls(options, selectedMethods) {
+      if (!options.length) return '<div class="empty">No previous baseline methods are available for this benchmark/model.</div>';
+      return `
+        <div class="checkbox-group">
+          ${options.map((method) => `
+            <label class="check-pill">
+              <input type="checkbox" ${selectedMethods.includes(method) ? 'checked' : ''} onchange="setAnalysisBaselineMethod('${esc(jsString(method))}', this.checked)">
+              ${esc(method)}
+            </label>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function formatBaselineSources(baselineMethods, baselineSources) {
+      const rows = baselineMethods.map((method) => {
+        const source = baselineSources.get(method);
+        return source ? `${method} -> ${source.run_id}` : `${method} -> missing`;
+      });
+      return rows.join('; ') || 'none';
     }
 
     function analysisTargetMethod(run) {
@@ -1451,64 +1617,113 @@
       render();
     }
 
+    function setAnalysisBaselineMethod(method, checked) {
+      const current = new Set(state.analysisBaselineMethods);
+      if (checked) current.add(method);
+      else current.delete(method);
+      state.analysisBaselineMethods = [...current];
+      state.page = 'analysis';
+      render();
+    }
+
+    function setAnalysisBenchmark(benchmark) {
+      state.analysisBenchmark = benchmark;
+      state.analysisMethod = 'multiagent_dynamic_streaming';
+      state.analysisBaselineMethods = [];
+      state.page = 'analysis';
+      render();
+    }
+
+    function setAnalysisModel(model) {
+      if (state.analysisBenchmark) state.analysisModels[state.analysisBenchmark] = model;
+      state.analysisMethod = 'multiagent_dynamic_streaming';
+      state.analysisBaselineMethods = [];
+      state.page = 'analysis';
+      render();
+    }
+
     function analysisBuckets() {
       return [
-        { key: 'our_wrong_other_correct', label: 'our method wrong, other correct', tone: 'bad' },
+        { key: 'current_wrong_baseline_correct', label: 'baseline correct, current wrong', tone: 'bad' },
         { key: 'invalid', label: 'invalid / extraction issue', tone: 'warn' },
-        { key: 'all_methods_wrong', label: 'all methods wrong', tone: 'bad' },
-        { key: 'our_correct_others_wrong', label: 'our method correct, others wrong', tone: 'good' },
+        { key: 'current_wrong_baseline_wrong', label: 'current wrong, selected baselines wrong or missing', tone: 'bad' },
+        { key: 'current_correct_baseline_wrong', label: 'current correct, selected baselines wrong', tone: 'good' },
+        { key: 'current_correct_baseline_correct', label: 'current correct, selected baseline also correct', tone: 'good' },
       ];
     }
 
-    function runAnalysisRows(run, targetMethod) {
+    function runAnalysisRows(run, targetMethod, baselineSources) {
       return questionResultRows(run).map((row) => {
         const target = row.methods[targetMethod];
         if (!target) return null;
-        const otherExamples = Object.entries(row.methods)
-          .filter(([method]) => method !== targetMethod)
-          .map(([method, example]) => ({ method, example }));
-        const correctOthers = otherExamples.filter((item) => isCorrectExample(item.example)).map((item) => item.method);
-        const wrongOthers = otherExamples.filter((item) => !isCorrectExample(item.example)).map((item) => item.method);
-        const issue = classifyAnalysisIssue(target, correctOthers, wrongOthers);
+        const baselineExamples = analysisBaselineExamples(row.index, baselineSources);
+        const roundRows = analysisRoundRows(target);
+        const decisionShift = analysisDecisionShift(roundRows);
+        const consensus = analysisConsensusTrend(roundRows);
+        const issue = classifyAnalysisIssue(target, baselineExamples);
+        const failureExplanation = buildFailureExplanation(target, baselineExamples, roundRows, issue);
         return {
           index: row.index,
           target_method: targetMethod,
           example: target,
-          correct_others: correctOthers,
-          wrong_others: wrongOthers,
-          bucket: analysisBucketForExample(target, correctOthers, wrongOthers),
+          baseline_examples: baselineExamples,
+          correct_baselines: baselineExamples.filter((item) => isCorrectExample(item.example)).map((item) => item.method),
+          bucket: analysisBucketForExample(target, baselineExamples),
           issue,
+          failure_explanation: failureExplanation,
+          round_rows: roundRows,
+          decision_shift: decisionShift,
+          consensus,
         };
       }).filter(Boolean);
     }
 
-    function analysisBucketForExample(example, correctOthers, wrongOthers) {
-      if (isInvalidExample(example)) return 'invalid';
-      if (isCorrectExample(example)) {
-        return wrongOthers.length ? 'our_correct_others_wrong' : 'our_correct';
-      }
-      return correctOthers.length ? 'our_wrong_other_correct' : 'all_methods_wrong';
+    function analysisBaselineExamples(index, baselineSources) {
+      return [...baselineSources.entries()].map(([method, sourceRun]) => ({
+        method,
+        source_run_id: sourceRun.run_id,
+        source_path: sourceRun.path,
+        example: findExampleByIndexAndMethod(sourceRun, index, method),
+      })).filter((item) => item.example);
     }
 
-    function classifyAnalysisIssue(example, correctOthers, wrongOthers) {
+    function findExampleByIndexAndMethod(run, index, method) {
+      if (!run) return null;
+      return (run.examples || []).find((example) => String(example.index) === String(index) && example.method === method) || null;
+    }
+
+    function analysisBucketForExample(example, baselineExamples) {
+      if (isInvalidExample(example)) return 'invalid';
+      const baselineCorrect = baselineExamples.some((item) => isCorrectExample(item.example));
+      if (isCorrectExample(example)) {
+        return baselineCorrect ? 'current_correct_baseline_correct' : 'current_correct_baseline_wrong';
+      }
+      return baselineCorrect ? 'current_wrong_baseline_correct' : 'current_wrong_baseline_wrong';
+    }
+
+    function classifyAnalysisIssue(example, baselineExamples) {
       if (isInvalidExample(example)) return 'invalid/extraction';
-      if (isCorrectExample(example)) return wrongOthers.length ? 'our method correct, others wrong' : 'correct';
+      const baselineCorrect = baselineExamples.some((item) => isCorrectExample(item.example));
+      if (isCorrectExample(example)) {
+        return baselineCorrect ? 'correct' : 'current fixed selected baseline error';
+      }
       if (example.route_mode === 'direct') return 'direct route wrong';
 
       const aggregation = example.candidate_aggregation || {};
       const selected = aggregation.selected_candidate;
       const selectionRule = String(aggregation.selection_rule || '');
-      const selectedMatchesGold = selected !== null && selected !== undefined && comparableAnswer(selected) === comparableAnswer(example.gold);
-      if (selectedMatchesGold && comparableAnswer(example.pred) !== comparableAnswer(example.gold)) {
+      const acceptedAnswers = acceptedAnswersForExample(example);
+      const selectedMatchesGold = selected !== null && selected !== undefined && answerMatches(selected, example.gold, acceptedAnswers);
+      if (selectedMatchesGold && !answerMatches(example.pred, example.gold, acceptedAnswers)) {
         return 'summarizer overrode correct aggregation';
       }
-      if (selected !== null && selected !== undefined && comparableAnswer(selected) !== comparableAnswer(example.gold)) {
+      if (selected !== null && selected !== undefined && !answerMatches(selected, example.gold, acceptedAnswers)) {
         return selectionRule === 'majority_vote' || selectionRule === 'unanimous_single_candidate'
-          ? 'candidate majority wrong'
-          : 'candidate selected wrong';
+          ? 'wrong subagent consensus'
+          : 'wrong tie-break / final selection';
       }
       if (selectionRule === 'tie_requires_role_aware_synthesis') return 'no majority, summarizer wrong';
-      if (correctOthers.length) return 'other method correct';
+      if (baselineCorrect) return 'selected baseline correct';
       return 'method answer wrong';
     }
 
@@ -1537,9 +1752,115 @@
       return {
         total,
         correct,
+        regressions: rows.filter((row) => !isCorrectExample(row.example) && row.baseline_examples.some((item) => isCorrectExample(item.example))).length,
         invalid,
         accuracy: total ? correct / total : 0,
       };
+    }
+
+    function errorDistribution(rows) {
+      const counts = new Map();
+      for (const row of rows) {
+        if (isCorrectExample(row.example)) continue;
+        counts.set(row.issue, (counts.get(row.issue) || 0) + 1);
+      }
+      return [...counts.entries()].sort((left, right) => right[1] - left[1]).map(([label, count]) => ({ label, count }));
+    }
+
+    function renderErrorDistributionChart(rows) {
+      const distribution = errorDistribution(rows);
+      if (!distribution.length) return '<div class="analysis-bucket"><h3>Error distribution</h3><div class="empty">No current-method errors in this selection.</div></div>';
+      const maxCount = Math.max(...distribution.map((row) => row.count), 1);
+      return `
+        <section class="analysis-bucket">
+          <div class="toolbar">
+            <div>
+              <h3>Error distribution</h3>
+              <div class="subtle">Counts current-method failures by the most likely trace-level cause.</div>
+            </div>
+            <span class="pill">${esc(distribution.reduce((sum, row) => sum + row.count, 0))} errors</span>
+          </div>
+          <div class="analysis-chart">
+            ${distribution.map((row) => `
+              <div class="chart-row">
+                <strong>${esc(row.label)}</strong>
+                <div class="chart-track"><div class="chart-fill" style="width: ${esc(barWidth(row.count, maxCount))}%"></div></div>
+                <span>${esc(row.count)}</span>
+              </div>
+            `).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderConsensusTrendChart(rows) {
+      const roundStats = analysisRoundStats(rows);
+      if (!roundStats.length) return '';
+      const metric = selectedAnalysisRoundMetric();
+      return `
+        <section class="analysis-bucket">
+          <div class="toolbar">
+            <div>
+              <h3>Round majority and agreement</h3>
+              <div class="subtle">Shows when subagents already have a correct-answer majority and when they converge to one choice. Uses benchmark valid targets when available.</div>
+            </div>
+            <div class="field">
+              <label for="analysisRoundMetricSelect">Round bar</label>
+              <select id="analysisRoundMetricSelect" onchange="setAnalysisRoundMetric(this.value)">
+                ${analysisRoundMetricOptions().map((option) => `<option value="${esc(option.key)}" ${option.key === metric.key ? 'selected' : ''}>${esc(option.label)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="analysis-chart">
+            ${roundStats.map((row) => `
+              <div class="chart-row">
+                <strong>Round ${esc(row.round)}</strong>
+                <div>
+                  <div class="chart-track" title="${esc(metric.label)}"><div class="chart-fill" style="width: ${esc(barWidth(row[metric.key], row.total))}%"></div></div>
+                  <div class="subtle">correct majority ${esc(row.correct_majority)}/${esc(row.total)} · same choice ${esc(row.same_choice)}/${esc(row.total)} · same correct choice ${esc(row.same_correct_choice)}/${esc(row.total)}</div>
+                </div>
+                <span>${esc(percent(row.total ? row[metric.key] / row.total : 0))}</span>
+              </div>
+            `).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function analysisRoundMetricOptions() {
+      return [
+        { key: 'correct_majority', label: 'Correct majority' },
+        { key: 'same_choice', label: 'Same choice' },
+        { key: 'same_correct_choice', label: 'Same correct choice' },
+      ];
+    }
+
+    function selectedAnalysisRoundMetric() {
+      const options = analysisRoundMetricOptions();
+      return options.find((option) => option.key === state.analysisRoundMetric) || options[0];
+    }
+
+    function setAnalysisRoundMetric(metric) {
+      state.analysisRoundMetric = metric;
+      state.page = 'analysis';
+      render();
+    }
+
+    function analysisRoundStats(rows) {
+      const byRound = new Map();
+      for (const row of rows) {
+        for (const roundRow of row.round_rows || []) {
+          if (!analysisRoundIsVisible(roundRow)) continue;
+          const key = String(roundRow.round);
+          const bucket = byRound.get(key) || { round: key, total: 0, correct_majority: 0, same_choice: 0, same_correct_choice: 0 };
+          bucket.total += 1;
+          if (roundRow.correct_majority) bucket.correct_majority += 1;
+          if (roundRow.all_same_choice) bucket.same_choice += 1;
+          if (roundRow.same_correct_choice) bucket.same_correct_choice += 1;
+          byRound.set(key, bucket);
+        }
+      }
+      return [...byRound.values()].sort((left, right) => compareExampleIndex(left.round, right.round));
     }
 
     function renderAnalysisBucket(bucket, rows) {
@@ -1561,10 +1882,11 @@
 
     function analysisBucketDescription(key) {
       const descriptions = {
-        our_wrong_other_correct: 'Cases to inspect first: the target method failed while at least one baseline succeeded.',
+        current_wrong_baseline_correct: 'Error analysis focus: examples where our current method failed but at least one selected baseline method succeeded.',
         invalid: 'Missing predictions, extraction failures, or recorded errors.',
-        all_methods_wrong: 'Hard cases where every available method failed.',
-        our_correct_others_wrong: 'Cases where the target method found an answer missed by at least one baseline.',
+        current_wrong_baseline_wrong: 'Hard cases where the current method failed and no selected baseline method succeeded.',
+        current_correct_baseline_wrong: 'Cases where the current method fixed failures from all selected baseline methods.',
+        current_correct_baseline_correct: 'Cases where both current and at least one selected baseline method are correct.',
       };
       return descriptions[key] || '';
     }
@@ -1583,18 +1905,197 @@
             <button class="analysis-jump" type="button" onclick="selectExampleByIndexAndMethod('${esc(jsString(row.index))}', '${esc(jsString(row.target_method))}')">Open trace</button>
           </div>
           <div class="analysis-row-meta">
-            <span class="pill">pred: ${esc(example.pred)}</span>
+            <span class="pill">current pred: ${esc(example.pred)}</span>
             <span class="pill">gold: ${esc(example.gold)}</span>
-            <span class="pill">correct baselines: ${esc(row.correct_others.join(', ') || 'none')}</span>
+            <span class="pill">correct baselines: ${esc(row.correct_baselines.join(', ') || 'none')}</span>
             <span class="pill">route: ${esc(example.route_mode || 'n/a')}</span>
             <span class="pill">aggregation: ${esc(aggregation.selection_rule || 'n/a')}</span>
             <span class="pill">selected: ${esc(aggregation.selected_candidate ?? 'n/a')}</span>
             <span class="pill">counts: ${esc(pretty(aggregation.counts || {}))}</span>
           </div>
+          ${renderDecisionShift(row)}
+          ${renderFailureExplanation(row)}
+          ${renderBaselineExampleDetails(row.baseline_examples)}
+          ${renderRoundAnalysisTable(row.round_rows)}
           ${candidates.length ? `<details><summary>Agent candidates</summary><pre>${esc(pretty(candidates.map(compactAnalysisCandidate)))}</pre></details>` : ''}
           ${example.summarizer_final_answer || example.summarizer_raw_response ? `<details><summary>Summarizer output</summary><pre>${esc(truncateText(example.summarizer_final_answer || example.summarizer_raw_response, 6000))}</pre></details>` : ''}
         </div>
       `;
+    }
+
+    function renderFailureExplanation(row) {
+      const explanation = row.failure_explanation;
+      if (!explanation || !explanation.should_render) return '';
+      return `
+        <details class="mini-panel" open>
+          <summary>Why our method failed</summary>
+          <div class="analysis-row-meta">
+            <span class="pill">baseline correct: ${esc(explanation.correct_baselines.join(', ') || 'none')}</span>
+            <span class="pill">subagent choices: ${esc(explanation.choice_summary || 'n/a')}</span>
+            <span class="pill">correct subagents: ${esc(explanation.correct_subagents.join(', ') || 'none')}</span>
+            <span class="pill">final selected: ${esc(explanation.final_selected ?? 'n/a')}</span>
+            <span class="pill">likely failure: ${esc(explanation.likely_failure)}</span>
+          </div>
+          ${explanation.wrong_rationales.length ? `
+            <h4>Why wrong subagents did not choose gold</h4>
+            <div class="analysis-list">
+              ${explanation.wrong_rationales.map((item) => `
+                <div class="mini-panel">
+                  <strong>${esc(item.agent)}</strong>
+                  <p>
+                    <span class="pill">chose: ${esc(item.candidate)}</span>
+                    <span class="pill">gold: ${esc(explanation.gold)}</span>
+                    <span class="pill">round: ${esc(item.round)}</span>
+                  </p>
+                  <div class="subtle">${esc(item.rationale || 'No rationale excerpt was recorded for this candidate.')}</div>
+                </div>
+              `).join('')}
+            </div>
+          ` : '<div class="subtle">No wrong subagent rationale was available in the trace.</div>'}
+        </details>
+      `;
+    }
+
+    function renderBaselineExampleDetails(baselineExamples) {
+      if (!baselineExamples.length) return '<div class="subtle">Selected baseline details: none available for this question id.</div>';
+      return `
+        <details>
+          <summary>Selected baseline details</summary>
+          <div class="analysis-row-meta">
+            ${baselineExamples.map((item) => `
+              <span class="pill ${isCorrectExample(item.example) ? 'good' : 'bad'}">
+                ${esc(item.method)}: ${esc(resultStatus(item.example).label)} · pred ${esc(item.example.pred)} · run ${esc(item.source_run_id)}
+              </span>
+            `).join('')}
+          </div>
+        </details>
+      `;
+    }
+
+    function buildFailureExplanation(example, baselineExamples, roundRows, issue) {
+      const correctBaselines = baselineExamples.filter((item) => isCorrectExample(item.example)).map((item) => item.method);
+      const shouldRender = !isCorrectExample(example) && correctBaselines.length > 0;
+      const finalRound = roundRows.at(-1) || {};
+      const finalSelected = finalRound.selected_candidate ?? example.pred ?? null;
+      const acceptedAnswers = acceptedAnswersForExample(example);
+      const latestCandidates = latestAgentCandidates(roundRows);
+      const wrongRationales = latestCandidates
+        .filter((candidate) => !answerMatches(candidate.candidate, example.gold, acceptedAnswers))
+        .map((candidate) => ({
+          agent: candidate.agent_name || 'unknown',
+          candidate: candidate.candidate,
+          round: candidate.round ?? 'n/a',
+          rationale: candidateRationale(candidate),
+        }));
+      const correctSubagents = unique(latestCandidates
+        .filter((candidate) => answerMatches(candidate.candidate, example.gold, acceptedAnswers))
+        .map((candidate) => candidate.agent_name || 'unknown'));
+      return {
+        should_render: shouldRender,
+        correct_baselines: correctBaselines,
+        choice_summary: formatChoiceSummary(finalRound.counts || countCandidates(latestCandidates)),
+        correct_subagents: correctSubagents,
+        final_selected: finalSelected,
+        likely_failure: likelyFailureReason(issue, finalRound, correctSubagents),
+        wrong_rationales: wrongRationales,
+        gold: formatAcceptedAnswers(example),
+      };
+    }
+
+    function latestAgentCandidates(roundRows) {
+      const latest = new Map();
+      for (const roundRow of roundRows || []) {
+        for (const candidate of roundRow.agent_candidates || []) {
+          const agent = candidate.agent_name || 'unknown';
+          latest.set(agent, { ...candidate, round: roundRow.round });
+        }
+      }
+      return [...latest.values()];
+    }
+
+    function formatChoiceSummary(counts) {
+      return Object.entries(counts || {})
+        .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+        .map(([candidate, count]) => `${candidate}=${count}`)
+        .join(', ');
+    }
+
+    function candidateRationale(candidate) {
+      return truncateInline(candidate.reason_excerpt || candidate.support_excerpt || candidate.summary || candidate.output || '', 280);
+    }
+
+    function likelyFailureReason(issue, finalRound, correctSubagents) {
+      if (issue === 'wrong subagent consensus') {
+        return correctSubagents.length
+          ? 'wrong subagent consensus ignored a correct minority'
+          : 'wrong subagent consensus; no subagent with an extracted candidate chose gold';
+      }
+      if (issue === 'wrong tie-break / final selection') {
+        return correctSubagents.length
+          ? 'tie-break or final selector did not use the correct subagent'
+          : 'tie-break or final selector chose a wrong candidate';
+      }
+      if (issue === 'summarizer overrode correct aggregation') return 'summarizer overrode a correct aggregated candidate';
+      if (issue === 'direct route wrong') return 'direct route skipped multi-agent correction';
+      if (finalRound?.selected_correct === false) return 'final selected answer differs from gold';
+      return issue || 'method failed while a selected baseline succeeded';
+    }
+
+    function renderDecisionShift(row) {
+      const changed = row.decision_shift.changed_agents;
+      const afterShared = row.decision_shift.after_shared_changes;
+      const consensus = row.consensus;
+      return `
+        <div class="analysis-row-meta">
+          <span class="pill">agents changed after shared info: ${esc(afterShared.length ? afterShared.map((item) => item.agent).join(', ') : 'none')}</span>
+          <span class="pill">agents changed answer: ${esc(changed.length ? changed.map((item) => item.agent).join(', ') : 'none')}</span>
+          <span class="pill">final agents all agree: ${esc(consensus.final_all_same ? 'yes' : 'no')}</span>
+          <span class="pill">final agreement strength: ${esc(consensus.final_strength || 'n/a')}</span>
+        </div>
+      `;
+    }
+
+    function renderRoundAnalysisTable(roundRows) {
+      if (!roundRows.length) {
+        return '<div class="empty">No round-level candidate data available for this example.</div>';
+      }
+      return `
+        <details open>
+          <summary>Round-level answer analysis</summary>
+          <table class="round-table">
+            <thead>
+              <tr>
+                <th>Round</th>
+                <th>Selected answer</th>
+                <th>Majority</th>
+                <th>Correct subagents</th>
+                <th>Shared findings used</th>
+                <th>Agreement</th>
+                <th>Counts</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${roundRows.map((roundRow) => `
+                <tr>
+                  <td>${esc(roundRow.round)}</td>
+                  <td>${esc(roundRow.selected_candidate ?? 'n/a')}</td>
+                  <td><span class="${roundRow.correct_majority ? 'good' : roundRow.has_majority ? 'bad' : 'warn'}">${esc(roundMajorityLabel(roundRow))}</span></td>
+                  <td>${esc(roundRow.correct_subagents.join(', ') || 'none')}</td>
+                  <td>${esc(roundRow.shared_agents.join(', ') || 'none')}</td>
+                  <td>${esc(roundRow.consensus_strength || 'n/a')} · same choice: ${esc(roundRow.all_same_choice ? 'yes' : 'no')} · same correct: ${esc(roundRow.same_correct_choice ? 'yes' : 'no')}</td>
+                  <td><code>${esc(pretty(roundRow.counts || {}))}</code></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </details>
+      `;
+    }
+
+    function roundMajorityLabel(roundRow) {
+      if (roundRow.correct_majority) return 'correct majority';
+      if (roundRow.has_majority) return 'wrong majority';
+      return 'no majority';
     }
 
     function compactAnalysisCandidate(candidate) {
@@ -1605,6 +2106,267 @@
         critical_debate: candidate.critical_debate,
         role: candidate.role,
         reason: candidate.reason_excerpt,
+      };
+    }
+
+    function analysisRoundRows(example) {
+      const orchestrationRounds = example.dynamic_orchestration?.rounds;
+      let rows = [];
+      if (Array.isArray(orchestrationRounds) && orchestrationRounds.length) {
+        rows = orchestrationRounds.map((round, index) => normalizeAnalysisRound(round, example, index));
+      } else {
+        rows = agentStepAnalysisRoundRows(example);
+      }
+      return rows.filter(analysisRoundIsVisible);
+    }
+
+    function analysisRoundIsVisible(roundRow) {
+      const roundNumber = Number(roundRow.round);
+      return !Number.isFinite(roundNumber) || roundNumber <= MAX_ANALYSIS_ROUNDS;
+    }
+
+    function normalizeAnalysisRound(round, example, index) {
+      const aggregation = round.candidate_aggregation || round.candidate_aggregation_before || {};
+      const decision = round.decision && typeof round.decision === 'object' ? round.decision : {};
+      const decisionCandidate = candidateFromText(decision.final_answer || round.final_answer || '');
+      const roundAggregation = {
+        ...aggregation,
+        selected_candidate: aggregation.selected_candidate ?? (decisionCandidate || null),
+      };
+      const agentCandidates = normalizedCandidateRows(aggregation, round);
+      return buildAnalysisRoundRow({
+        round: round.round ?? index + 1,
+        aggregation: roundAggregation,
+        agentCandidates,
+        sharedAgents: sharedFindingAgentsFromRound(round),
+        gold: example.gold,
+        acceptedAnswers: acceptedAnswersForExample(example),
+      });
+    }
+
+    function agentStepAnalysisRoundRows(example) {
+      const rowsByStep = new Map();
+      for (const agent of example.agents || []) {
+        for (const step of agent.steps || []) {
+          const stepNumber = step.step ?? 1;
+          const row = rowsByStep.get(stepNumber) || { round: stepNumber, agentCandidates: [], sharedAgents: new Set() };
+          const candidate = candidateFromStep(step) || candidateFromText(agent.final_output);
+          if (candidate) {
+            row.agentCandidates.push({
+              agent_name: agent.name,
+              candidate,
+              candidate_source: 'agent_step',
+              reason_excerpt: truncateInline(step.parsed_output?.summary || step.parsed_output?.output || step.raw_response || '', 280),
+              summary: step.parsed_output?.summary || '',
+              output: step.parsed_output?.output || step.raw_response || '',
+            });
+          }
+          if ((step.inbox_events || []).some(isSharedFindingEvent)) row.sharedAgents.add(agent.name);
+          rowsByStep.set(stepNumber, row);
+        }
+      }
+      return [...rowsByStep.values()].sort((left, right) => compareExampleIndex(left.round, right.round)).map((row) => {
+        const counts = countCandidates(row.agentCandidates);
+        return buildAnalysisRoundRow({
+          round: row.round,
+          aggregation: {
+            counts,
+            selected_candidate: topCandidateFromCounts(counts),
+            consensus_strength: consensusStrengthFromCounts(counts),
+            selection_rule: 'agent_step_majority',
+          },
+          agentCandidates: row.agentCandidates,
+          sharedAgents: [...row.sharedAgents],
+          gold: example.gold,
+          acceptedAnswers: acceptedAnswersForExample(example),
+        });
+      });
+    }
+
+    function buildAnalysisRoundRow({ round, aggregation, agentCandidates, sharedAgents, gold, acceptedAnswers = [] }) {
+      const counts = Object.keys(aggregation.counts || {}).length ? aggregation.counts : countCandidates(agentCandidates);
+      const topCandidate = topCandidateFromCounts(counts);
+      const selectedCandidate = aggregation.selected_candidate ?? topCandidate;
+      const candidateValues = agentCandidates.map((candidate) => comparableAnswer(candidate.candidate)).filter(Boolean);
+      const uniqueCandidates = new Set(candidateValues);
+      const countValues = Object.values(counts || {}).map(Number).filter((value) => value > 0);
+      const choiceTotal = countValues.reduce((sum, value) => sum + value, 0);
+      const topCount = topCandidate === null || topCandidate === undefined ? 0 : Number(counts[topCandidate] || 0);
+      const hasMajority = choiceTotal > 0 && topCount > choiceTotal / 2;
+      const correctMajority = hasMajority && answerMatches(topCandidate, gold, acceptedAnswers);
+      const allSameChoice = Object.keys(counts || {}).filter((key) => Number(counts[key]) > 0).length === 1 && choiceTotal > 1;
+      const correctSubagents = agentCandidates
+        .filter((candidate) => answerMatches(candidate.candidate, gold, acceptedAnswers))
+        .map((candidate) => candidate.agent_name || candidate.logical_agent_name || 'unknown');
+      return {
+        round,
+        top_candidate: topCandidate,
+        selected_candidate: selectedCandidate,
+        selected_correct: selectedCandidate === null || selectedCandidate === undefined ? null : answerMatches(selectedCandidate, gold, acceptedAnswers),
+        has_majority: hasMajority,
+        correct_majority: correctMajority,
+        consensus_strength: aggregation.consensus_strength || consensusStrengthFromCounts(aggregation.counts || {}),
+        counts,
+        correct_subagents: unique(correctSubagents),
+        shared_agents: unique(sharedAgents || []),
+        agent_candidates: agentCandidates,
+        all_same_choice: allSameChoice || (uniqueCandidates.size === 1 && candidateValues.length > 1),
+        same_correct_choice: (allSameChoice || (uniqueCandidates.size === 1 && candidateValues.length > 1)) && answerMatches(topCandidate, gold, acceptedAnswers),
+      };
+    }
+
+    function normalizedCandidateRows(aggregation, round) {
+      const rows = [];
+      const seen = new Set();
+      const addRow = (candidate, fallbackSource) => {
+        if (!candidate || typeof candidate !== 'object') return;
+        const agentName = candidate.agent_name || candidate.logical_agent_name || candidate.name || '';
+        const value = candidate.candidate ?? candidate.selected_candidate ?? candidate.answer ?? null;
+        if (value === null || value === undefined || value === '') return;
+        const key = `${agentName}:${value}:${fallbackSource}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        rows.push({
+          agent_name: agentName || 'unknown',
+          candidate: value,
+          candidate_source: candidate.candidate_source || fallbackSource,
+          critical_debate: candidate.critical_debate,
+          role: candidate.role,
+          reason_excerpt: candidate.reason_excerpt || candidate.support_excerpt || '',
+          support_excerpt: candidate.support_excerpt || '',
+          summary: candidate.summary || '',
+          output: candidate.output || '',
+        });
+      };
+      (Array.isArray(aggregation.candidates) ? aggregation.candidates : []).forEach((candidate) => addRow(candidate, 'candidate_aggregation'));
+      (Array.isArray(aggregation.reporting_agents) ? aggregation.reporting_agents : []).forEach((candidate) => addRow(candidate, 'reporting_agent'));
+      (Array.isArray(aggregation.supporting_agents) ? aggregation.supporting_agents : []).forEach((candidate) => addRow(candidate, 'supporting_agent'));
+      (Array.isArray(round.reporting_agents) ? round.reporting_agents : []).forEach((candidate) => addRow(candidate, 'round_reporting_agent'));
+      (Array.isArray(round.supporting_agents) ? round.supporting_agents : []).forEach((candidate) => addRow(candidate, 'round_supporting_agent'));
+      return rows;
+    }
+
+    function sharedFindingAgentsFromRound(round) {
+      const agents = new Set();
+      const traces = round.agent_traces && typeof round.agent_traces === 'object' ? round.agent_traces : {};
+      for (const [agentName, trace] of Object.entries(traces)) {
+        const steps = Array.isArray(trace.steps) ? trace.steps : [];
+        if (steps.some((step) => (step.inbox_events || []).some(isSharedFindingEvent))) agents.add(agentName);
+        const receipts = Array.isArray(trace.event_receipts) ? trace.event_receipts : [];
+        if (receipts.some((receipt) => receipt.accepted && isSharedFindingEvent(receipt))) agents.add(agentName);
+      }
+      return [...agents];
+    }
+
+    function isSharedFindingEvent(event) {
+      return COMMUNICATION_EVENT_TYPES.includes(event?.event_type);
+    }
+
+    function candidateFromStep(step) {
+      const parsed = step.parsed_output && typeof step.parsed_output === 'object' ? step.parsed_output : {};
+      return parsed.parsed_answer ||
+        parsed.answer_choice ||
+        parsed.final_answer ||
+        candidateFromText(parsed.local_notes) ||
+        candidateFromText(parsed.summary) ||
+        candidateFromText(parsed.output) ||
+        candidateFromText(step.raw_response);
+    }
+
+    function candidateFromText(value) {
+      const text = String(value ?? '');
+      if (!text.trim()) return '';
+      const answerChoice = text.match(/ANSWER_CHOICE\s*:\s*([^\n]+)/i);
+      if (answerChoice) return cleanCandidate(answerChoice[1]);
+      const finalAnswer = text.match(/Final\s+Answer\s*:\s*([^\n]+)/i);
+      if (finalAnswer) return cleanCandidate(finalAnswer[1]);
+      const boxed = text.match(/\\boxed\{([^}]+)\}/i);
+      if (boxed) return cleanCandidate(boxed[1]);
+      return '';
+    }
+
+    function cleanCandidate(value) {
+      return String(value ?? '').replace(/^[("*\s]+|[)"*\s.]+$/g, '').trim();
+    }
+
+    function countCandidates(candidates) {
+      const counts = {};
+      for (const candidate of candidates || []) {
+        const value = candidate?.candidate;
+        if (value === null || value === undefined || value === '') continue;
+        const key = String(value);
+        counts[key] = (counts[key] || 0) + 1;
+      }
+      return counts;
+    }
+
+    function topCandidateFromCounts(counts) {
+      const entries = Object.entries(counts || {}).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+      return entries.length ? entries[0][0] : null;
+    }
+
+    function consensusStrengthFromCounts(counts) {
+      const values = Object.values(counts || {}).map(Number).filter((value) => value > 0);
+      if (!values.length) return 'no_candidate';
+      if (values.length === 1) return 'unanimous';
+      const total = values.reduce((sum, value) => sum + value, 0);
+      const max = Math.max(...values);
+      return max / total >= 0.67 ? 'strong_majority' : 'weak_or_tie';
+    }
+
+    function acceptedAnswersForExample(example) {
+      const metadata = example?.score_metadata && typeof example.score_metadata === 'object' ? example.score_metadata : {};
+      const validTargets = Array.isArray(metadata.valid_targets) ? metadata.valid_targets : [];
+      const answers = validTargets.length ? validTargets : [example?.gold];
+      return unique(answers.map(comparableAnswer).filter(Boolean));
+    }
+
+    function formatAcceptedAnswers(example) {
+      const accepted = acceptedAnswersForExample(example);
+      if (accepted.length <= 1) return accepted[0] || example?.gold || 'n/a';
+      return `${accepted.slice(0, 8).join(', ')}${accepted.length > 8 ? `, +${accepted.length - 8} more` : ''}`;
+    }
+
+    function answerMatches(candidate, gold, acceptedAnswers = []) {
+      if (candidate === null || candidate === undefined) return false;
+      const normalizedCandidate = comparableAnswer(candidate);
+      if (!normalizedCandidate) return false;
+      if (acceptedAnswers.length) return acceptedAnswers.includes(normalizedCandidate);
+      if (gold === null || gold === undefined || gold === '') return false;
+      return normalizedCandidate === comparableAnswer(gold);
+    }
+
+    function analysisDecisionShift(roundRows) {
+      const latestByAgent = new Map();
+      const changedAgents = [];
+      const afterSharedChanges = [];
+      for (const roundRow of roundRows) {
+        const sharedAgents = new Set(roundRow.shared_agents || []);
+        for (const candidate of roundRow.agent_candidates || []) {
+          const agent = candidate.agent_name || 'unknown';
+          const value = comparableAnswer(candidate.candidate);
+          if (!value) continue;
+          const previous = latestByAgent.get(agent);
+          if (previous && previous.value !== value) {
+            const item = { agent, from: previous.raw, to: candidate.candidate, round: roundRow.round };
+            changedAgents.push(item);
+            if (sharedAgents.has(agent) || previous.shared) afterSharedChanges.push(item);
+          }
+          latestByAgent.set(agent, { value, raw: candidate.candidate, shared: sharedAgents.has(agent) });
+        }
+      }
+      return { changed_agents: changedAgents, after_shared_changes: afterSharedChanges };
+    }
+
+    function analysisConsensusTrend(roundRows) {
+      const finalRound = roundRows.at(-1) || {};
+      const firstRound = roundRows[0] || {};
+      const firstUnique = new Set((firstRound.agent_candidates || []).map((candidate) => comparableAnswer(candidate.candidate)).filter(Boolean)).size;
+      const finalUnique = new Set((finalRound.agent_candidates || []).map((candidate) => comparableAnswer(candidate.candidate)).filter(Boolean)).size;
+      return {
+        final_all_same: Boolean(finalRound.all_same_choice),
+        final_strength: finalRound.consensus_strength || '',
+        improved: firstUnique > finalUnique && finalUnique > 0,
       };
     }
 
@@ -1958,14 +2720,72 @@
             <pre>${esc(trace.final_answer || '')}</pre>
           </div>
         </div>
+        ${renderDynamicOrchestrationPlan(trace)}
+        ${renderDynamicOrchestrationPool(trace)}
         ${(trace.rounds || []).map((round) => renderDynamicOrchestrationRound(round)).join('') || '<div class="empty">No orchestration rounds recorded.</div>'}
+      `;
+    }
+
+    function renderDynamicOrchestrationPool(trace) {
+      const pool = Array.isArray(trace.subagent_pool) ? trace.subagent_pool : [];
+      if (!pool.length) {
+        return '<div class="empty">No fixed subagent_pool was recorded for this dynamic orchestration run.</div>';
+      }
+      return `
+        <details class="mini-panel" open>
+          <summary>Fixed subagent pool</summary>
+          <div class="grid">
+            ${pool.map((agent) => `
+              <div class="mini-panel">
+                <strong>${esc(agent.name || agent.agent_name || '')}</strong>
+                ${agent.role ? `<div><strong>Role</strong><br>${esc(agent.role)}</div>` : ''}
+                ${agent.description ? `<div><strong>Description</strong><br>${esc(agent.description)}</div>` : ''}
+                <p>
+                  <span class="pill">critical debate: ${esc(Boolean(agent.critical_debate))}</span>
+                  <span class="pill">workspace: ${esc(agent.workspace_access || 'none')}</span>
+                </p>
+              </div>
+            `).join('')}
+          </div>
+        </details>
+      `;
+    }
+
+    function renderDynamicOrchestrationPlan(trace) {
+      const plan = Array.isArray(trace.workflow_plan) ? trace.workflow_plan : [];
+      if (!plan.length) {
+        return '<div class="empty">No workflow plan was recorded for this dynamic orchestration run.</div>';
+      }
+      return `
+        <details class="mini-panel" open>
+          <summary>Workflow plan</summary>
+          <div class="grid">
+            ${plan.map((step, index) => `
+              <div class="mini-panel">
+                <strong>Step ${esc(index + 1)} · ${esc(step.step_id || '')}</strong>
+                <p>
+                  <span class="pill">status: ${esc(step.status || '')}</span>
+                </p>
+                ${step.objective ? `<div><strong>Objective</strong><br>${esc(step.objective)}</div>` : ''}
+                ${step.completion_criteria ? `<div><strong>Completion criteria</strong><br>${esc(step.completion_criteria)}</div>` : ''}
+                ${step.result ? `<div><strong>Result</strong><br>${esc(step.result)}</div>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        </details>
       `;
     }
 
     function renderDynamicOrchestrationRound(round) {
       const decision = round.decision && typeof round.decision === 'object' ? round.decision : {};
-      const agents = Array.isArray(round.selected_agents) ? round.selected_agents : [];
+      const stepAssignments = Array.isArray(round.step_assignments) ? round.step_assignments : [];
       const aggregation = round.candidate_aggregation || round.candidate_aggregation_before || {};
+      const reportingAgents = Array.isArray(round.reporting_agents)
+        ? round.reporting_agents
+        : (Array.isArray(aggregation.reporting_agents) ? aggregation.reporting_agents : []);
+      const supportingAgents = Array.isArray(round.supporting_agents)
+        ? round.supporting_agents
+        : (Array.isArray(aggregation.supporting_agents) ? aggregation.supporting_agents : []);
       return `
         <details class="mini-panel" open>
           <summary>Round ${esc(round.round ?? '')} · ${esc(decision.action || 'unknown')}</summary>
@@ -1977,22 +2797,75 @@
           </p>
           <h4>Reason</h4>
           <pre>${esc(decision.reason || '')}</pre>
+          ${renderDynamicOrchestrationStepUsage(round)}
           ${decision.round_goal ? `<h4>Round goal</h4><pre>${esc(decision.round_goal)}</pre>` : ''}
           ${decision.final_answer ? `<h4>Round final answer</h4><pre>${esc(decision.final_answer)}</pre>` : ''}
-          <h4>Selected agents</h4>
-          ${agents.map((agent) => `
+          <h4>Step assignments</h4>
+          ${stepAssignments.map((assignment) => `
             <div class="mini-panel">
-              <strong>${esc(agent.name || '')}</strong>
-              ${agent.role ? `<div><strong>Role</strong><br>${esc(agent.role)}</div>` : ''}
-              ${agent.description ? `<div><strong>Agent description</strong><br>${esc(agent.description)}</div>` : ''}
-              <p>${esc(agent.subtask || '')}</p>
+              <strong>${esc(assignment.agent_name || assignment.name || '')}</strong>
+              <p>
+                <span class="pill">report_policy: ${esc(assignment.report_policy || 'report')}</span>
+                <span class="pill">workspace: ${esc(assignment.workspace_access || 'none')}</span>
+              </p>
+              ${assignment.subtask ? `<div><strong>Subtask</strong><br>${esc(assignment.subtask)}</div>` : ''}
+              ${assignment.expected_output ? `<div><strong>Expected output</strong><br>${esc(assignment.expected_output)}</div>` : ''}
             </div>
-          `).join('') || '<p class="subtle">No agents selected in this round.</p>'}
+          `).join('') || '<p class="subtle">No step assignments in this round.</p>'}
+          ${renderDynamicOrchestrationReportRows('Reporting agents', reportingAgents)}
+          ${renderDynamicOrchestrationReportRows('Support-only agents', supportingAgents)}
           <details><summary>Candidate aggregation</summary><pre>${esc(pretty(aggregation))}</pre></details>
           <details><summary>Raw controller prompt</summary><pre>${esc(round.prompt || '')}</pre></details>
           <details><summary>Raw controller output</summary><pre>${esc(round.raw_response || '')}</pre></details>
           <details><summary>Round agent outputs</summary><pre>${esc(pretty(round.agent_outputs || {}))}</pre></details>
         </details>
+      `;
+    }
+
+    function renderDynamicOrchestrationReportRows(title, rows) {
+      if (!Array.isArray(rows) || !rows.length) {
+        return `<p class="subtle">${esc(title)}: none</p>`;
+      }
+      return `
+        <details class="mini-panel" open>
+          <summary>${esc(title)}</summary>
+          <div class="grid">
+            ${rows.map((row) => `
+              <div class="mini-panel">
+                <strong>${esc(row.agent_name || row.logical_agent_name || '')}</strong>
+                <p>
+                  <span class="pill">policy: ${esc(row.report_policy || '')}</span>
+                  <span class="pill">report: ${esc(row.reports_to_orchestrator ?? '')}</span>
+                  ${row.candidate !== undefined && row.candidate !== null ? `<span class="pill">candidate: ${esc(row.candidate)}</span>` : ''}
+                </p>
+                ${row.support_excerpt ? `<div><strong>Contribution</strong><br>${esc(row.support_excerpt)}</div>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        </details>
+      `;
+    }
+
+    function renderDynamicOrchestrationStepUsage(round) {
+      const step = round.current_step && typeof round.current_step === 'object' ? round.current_step : {};
+      const assignments = Array.isArray(round.assignments) ? round.assignments : [];
+      const stepAssignments = Array.isArray(round.step_assignments) ? round.step_assignments : [];
+      const agentNames = assignments.length
+        ? assignments.map((assignment) => assignment.agent_name || assignment.name).filter(Boolean)
+        : stepAssignments.map((assignment) => assignment.agent_name || assignment.name).filter(Boolean);
+      if (!Object.keys(step).length && !round.step_result && !agentNames.length) return '';
+      return `
+        <div class="mini-panel">
+          <h4>Current step</h4>
+          <p>
+            ${step.step_id ? `<span class="pill">${esc(step.step_id)}</span>` : ''}
+            ${step.status ? `<span class="pill">status: ${esc(step.status)}</span>` : ''}
+          </p>
+          ${step.objective ? `<div><strong>Objective</strong><br>${esc(step.objective)}</div>` : ''}
+          ${step.completion_criteria ? `<div><strong>Completion criteria</strong><br>${esc(step.completion_criteria)}</div>` : ''}
+          ${round.step_result ? `<div><strong>Step result</strong><br>${esc(round.step_result)}</div>` : ''}
+          ${agentNames.length ? `<div><strong>Subagents used for this step</strong><br>${agentNames.map((name) => `<span class="pill">${esc(name)}</span>`).join(' ')}</div>` : ''}
+        </div>
       `;
     }
 
