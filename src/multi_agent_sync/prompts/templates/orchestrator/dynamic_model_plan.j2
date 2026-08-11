@@ -12,7 +12,7 @@ Routing:
 - Never claim 100% certainty for a normal benchmark question unless the answer is explicitly given in the prompt.
 
 Diverse subagents:
-- If multi_agent, create 2 to 4 subagents.
+- If multi_agent, create {% if min_dynamic_subagents == max_dynamic_subagents %}{{ min_dynamic_subagents }}{% else %}{{ min_dynamic_subagents }} to {{ max_dynamic_subagents }}{% endif %} subagents.
 - Do not create overlapping roles or duplicate subtasks.
 - Each role must own a distinct evidence, check, or perspective.
 - Descriptions must name that agent's unique evidence/constraints/checks.

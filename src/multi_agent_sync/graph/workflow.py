@@ -6,8 +6,18 @@ from uuid import uuid4
 from langgraph.graph import END, START, StateGraph
 
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
-from multi_agent_sync.graph.nodes import direct_answer_node, orchestrator_node, route_after_orchestrator, run_multi_agent_runtime_node, synthesizer_node
+from multi_agent_sync.graph.nodes import (
+    direct_answer_node,
+    orchestrator_node,
+    route_after_orchestrator,
+    run_multi_agent_runtime_node,
+    synthesizer_node,
+)
 from multi_agent_sync.graph.state import GraphState
+from multi_agent_sync.orchestrator.orchestrator import (
+    DEFAULT_MAX_DYNAMIC_SUBAGENTS,
+    DEFAULT_MIN_DYNAMIC_SUBAGENTS,
+)
 from multi_agent_sync.streaming.console import ConsoleEventStreamer
 
 
@@ -37,6 +47,8 @@ async def run_workflow(
     llm: Any | None = None,
     subagent_mode: str = "fixed",
     max_steps_per_agent: int = 3,
+    min_dynamic_subagents: int = DEFAULT_MIN_DYNAMIC_SUBAGENTS,
+    max_dynamic_subagents: int = DEFAULT_MAX_DYNAMIC_SUBAGENTS,
     total_runtime_timeout: float = 600.0,
     synthesis_timeout: float = 60.0,
     enable_agent_message_streaming: bool = True,
@@ -72,6 +84,8 @@ async def run_workflow(
         "final_answer": "",
         "event_streamer": event_streamer,
         "max_steps_per_agent": max_steps_per_agent,
+        "min_dynamic_subagents": min_dynamic_subagents,
+        "max_dynamic_subagents": max_dynamic_subagents,
         "total_runtime_timeout": total_runtime_timeout,
         "synthesis_timeout": synthesis_timeout,
         "enable_agent_message_streaming": enable_agent_message_streaming,

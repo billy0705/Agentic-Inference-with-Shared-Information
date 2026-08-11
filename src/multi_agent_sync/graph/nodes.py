@@ -13,7 +13,13 @@ from multi_agent_sync.events.event import AgentEvent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph.state import GraphState
 from multi_agent_sync.llm import get_llm
-from multi_agent_sync.orchestrator.orchestrator import create_fallback_plan, create_model_based_plan, selected_agents_to_assignments
+from multi_agent_sync.orchestrator.orchestrator import (
+    DEFAULT_MAX_DYNAMIC_SUBAGENTS,
+    DEFAULT_MIN_DYNAMIC_SUBAGENTS,
+    create_fallback_plan,
+    create_model_based_plan,
+    selected_agents_to_assignments,
+)
 from multi_agent_sync.prompts import render_prompt
 from multi_agent_sync.token_usage import extract_token_usage
 from multi_agent_sync.tools.bash import BashTool
@@ -25,7 +31,14 @@ async def orchestrator_node(state: GraphState) -> GraphState:
     task = state["task"]
     llm = state.get("llm") or get_llm()
     subagent_mode = state.get("subagent_mode", "fixed")
-    orchestrator_plan = await create_model_based_plan(task, llm, AGENT_REGISTRY, subagent_mode=subagent_mode)
+    orchestrator_plan = await create_model_based_plan(
+        task,
+        llm,
+        AGENT_REGISTRY,
+        subagent_mode=subagent_mode,
+        min_dynamic_subagents=state.get("min_dynamic_subagents", DEFAULT_MIN_DYNAMIC_SUBAGENTS),
+        max_dynamic_subagents=state.get("max_dynamic_subagents", DEFAULT_MAX_DYNAMIC_SUBAGENTS),
+    )
     if state.get("enable_workspace_tools") and (
         orchestrator_plan.get("mode") == "direct" or not orchestrator_plan.get("selected_agents")
     ):

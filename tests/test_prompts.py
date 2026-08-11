@@ -176,6 +176,7 @@ def test_dynamic_orchestrator_prompt_allows_direct_and_requires_detailed_subagen
     assert "The reason must explain truthfully why direct or multi_agent was selected." in prompt
     assert "Never claim 100% certainty for a normal benchmark question unless the answer is explicitly given in the prompt." in prompt
     assert "Diverse subagents" in prompt
+    assert "If multi_agent, create 2 to 4 subagents." in prompt
     assert "Do not create overlapping roles" in prompt
     assert "evidence, check, or perspective" in prompt
     assert '"direct_certainty": "100_percent"' in prompt
@@ -183,3 +184,25 @@ def test_dynamic_orchestrator_prompt_allows_direct_and_requires_detailed_subagen
     assert '"role": "specific expertise and responsibility for this subagent"' in prompt
     assert '"description": "unique evidence, constraints, checks, or perspective' in prompt
     assert "Analyze this benchmark result." in prompt
+
+
+def test_dynamic_orchestrator_prompt_uses_configured_agent_range():
+    prompt = orchestrator.build_dynamic_orchestrator_prompt(
+        "Analyze this benchmark result.",
+        min_dynamic_subagents=3,
+        max_dynamic_subagents=4,
+    )
+
+    assert "If multi_agent, create 3 to 4 subagents." in prompt
+    assert "If multi_agent, create 2 to 4 subagents." not in prompt
+
+
+def test_dynamic_orchestrator_prompt_uses_single_agent_count_when_range_matches():
+    prompt = orchestrator.build_dynamic_orchestrator_prompt(
+        "Analyze this benchmark result.",
+        min_dynamic_subagents=3,
+        max_dynamic_subagents=3,
+    )
+
+    assert "If multi_agent, create 3 subagents." in prompt
+    assert "If multi_agent, create 3 to 3 subagents." not in prompt

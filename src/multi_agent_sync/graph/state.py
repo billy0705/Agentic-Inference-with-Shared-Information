@@ -28,6 +28,8 @@ class GraphState(TypedDict):
     trace_logger: NotRequired[Any]
     llm: NotRequired[Any]
     max_steps_per_agent: NotRequired[int]
+    min_dynamic_subagents: NotRequired[int]
+    max_dynamic_subagents: NotRequired[int]
     total_runtime_timeout: NotRequired[float]
     synthesis_timeout: NotRequired[float]
     enable_agent_message_streaming: NotRequired[bool]
