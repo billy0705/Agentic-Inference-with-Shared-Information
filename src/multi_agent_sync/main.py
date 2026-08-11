@@ -18,6 +18,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default=None, help="Model name to use for the selected provider.")
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent.")
     parser.add_argument(
+        "--allow-agent-early-stop",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Allow agents to stop before --max-steps when they return FINAL. Disabled by default.",
+    )
+    parser.add_argument(
         "--subagent-mode",
         choices=("fixed", "dynamic"),
         default="fixed",
@@ -83,6 +89,7 @@ async def async_main(args: argparse.Namespace) -> None:
             subagent_mode=args.subagent_mode,
             max_steps_per_agent=args.max_steps,
             total_runtime_timeout=args.total_runtime_timeout,
+            allow_agent_early_stop=args.allow_agent_early_stop,
             stream_to_console=True,
             no_color=args.no_color,
             enable_workspace_tools=args.docker_workspace,

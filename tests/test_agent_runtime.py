@@ -200,6 +200,19 @@ class LocalNotesOnlyLLM:
         )
 
 
+class AlwaysFinalLLM:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        self.prompts.append(prompt)
+        return FakeResponse(
+            "FINAL:\nFinal Answer: A\n"
+            "SHARE_FINDING:\n\n"
+            "LOCAL_NOTES:\nANSWER_CHOICE: A\nANSWER_REASON: Candidate A is selected."
+        )
+
+
 def build_agents(streamer: InMemoryEventStreamer, run_id: str = "run-agent-test"):
     llm = FakeLLM()
     kwargs = {
@@ -368,6 +381,52 @@ async def test_agent_prompt_reuses_only_short_local_notes_not_previous_summary()
         "ANSWER_CHOICE: A\nANSWER_REASON: Candidate A best matches the evidence.",
         "ANSWER_CHOICE: A\nANSWER_REASON: Candidate A remains the supported final answer.",
     ]
+
+
+@pytest.mark.asyncio
+async def test_agent_runs_configured_steps_when_early_stop_is_disabled():
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    llm = AlwaysFinalLLM()
+    agent = ResearchAgent(
+        run_id="run-no-early-stop",
+        task="Choose the best option.",
+        assigned_subtask="Pick an answer.",
+        llm=llm,
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        max_steps=3,
+        step_delay_seconds=0,
+        allow_agent_early_stop=False,
+    )
+
+    await agent.run()
+
+    assert len(llm.prompts) == 3
+    assert len(trace_logger.export()["ResearchAgent"]["steps"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_agent_can_stop_before_configured_steps_when_early_stop_is_enabled():
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    llm = AlwaysFinalLLM()
+    agent = ResearchAgent(
+        run_id="run-early-stop",
+        task="Choose the best option.",
+        assigned_subtask="Pick an answer.",
+        llm=llm,
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        max_steps=3,
+        step_delay_seconds=0,
+        allow_agent_early_stop=True,
+    )
+
+    await agent.run()
+
+    assert len(llm.prompts) == 1
+    assert len(trace_logger.export()["ResearchAgent"]["steps"]) == 1
 
 
 @pytest.mark.asyncio

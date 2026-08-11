@@ -164,6 +164,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
     llm = state.get("llm") or get_llm()
     max_steps = state.get("max_steps_per_agent", 3)
+    allow_agent_early_stop = bool(state.get("allow_agent_early_stop", False))
     enable_agent_message_streaming = state.get("enable_agent_message_streaming", True)
     trace_logger = state.get("trace_logger") or TraceLogger()
     subagent_mode = state.get("subagent_mode", "fixed")
@@ -181,6 +182,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
         enable_workspace_tools=enable_workspace_tools,
     )
     for assignment in assignments:
+        assignment = {**assignment, "allow_agent_early_stop": allow_agent_early_stop}
         agent_name = assignment["agent_name"]
         agent_class = DynamicAgent if subagent_mode == "dynamic" else AGENT_REGISTRY.get(agent_name)
         if agent_class is None:
@@ -202,6 +204,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             "assignment": assignment,
             "trace_logger": trace_logger,
             "max_steps": assignment.get("max_steps", max_steps),
+            "allow_agent_early_stop": allow_agent_early_stop,
             "enable_message_streaming": enable_agent_message_streaming,
             "workspace_access": assignment.get("workspace_access", "none"),
         }

@@ -65,6 +65,7 @@ class BaseAgent:
     feedback_tool: Any | None = None
     final_guard_tool: Any | None = None
     workspace_access: str = "none"
+    allow_agent_early_stop: bool = False
     tool_observations: list[dict[str, Any]] = field(default_factory=list)
     final_guard_retry_steps: int = 2
     reactive_steps_enabled: bool = True
@@ -158,7 +159,7 @@ class BaseAgent:
 
             result = await self.run_step_and_record(step_index)
             last_step_index = step_index
-            if result.status == "final":
+            if result.status == "final" and (self.allow_agent_early_stop or step_index >= self.max_steps):
                 final_response_received = True
                 break
             if self.is_final_guard_retry(result) and final_guard_extra_steps == 0:
@@ -311,6 +312,7 @@ class BaseAgent:
                 reactive_reason=reactive_reason or "important_unused_events_received",
                 step_index=step_index,
                 max_steps=self.max_steps,
+                allow_agent_early_stop=self.allow_agent_early_stop,
                 notes=notes,
                 events=events,
                 tool_observations=self.format_tool_observations(),
@@ -329,6 +331,7 @@ class BaseAgent:
             reactive_reason=reactive_reason or "important_unused_events_received",
             step_index=step_index,
             max_steps=self.max_steps,
+            allow_agent_early_stop=self.allow_agent_early_stop,
             notes=notes,
             events=events,
         )
@@ -548,6 +551,7 @@ class BaseAgent:
             "agent_name": self.name,
             "task": self.assigned_subtask,
             "max_steps": self.max_steps,
+            "allow_agent_early_stop": self.allow_agent_early_stop,
         }
 
     def _log_step_trace(

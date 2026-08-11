@@ -202,6 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent for multiagent runs.")
     parser.add_argument(
+        "--allow-agent-early-stop",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Allow multiagent subagents to stop before --max-steps when they return FINAL. Disabled by default.",
+    )
+    parser.add_argument(
         "--single-agent-min-steps",
         type=int,
         default=3,

@@ -4,6 +4,7 @@ import random
 import pytest
 
 from multi_agent_sync.agents.research_agent import ResearchAgent
+from multi_agent_sync.agents.coding_agent import CodingAgent
 from multi_agent_sync.evaluation import gpqa, gsm8k, hotpotqa, mmlu_pro
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph import nodes
@@ -136,10 +137,51 @@ async def test_agent_prompt_is_rendered_from_template():
     assert "Respond with concise summaries only." in prompt
     assert "ANSWER_CHOICE:" in prompt
     assert "ANSWER_REASON:" in prompt
+    assert "FINAL:" not in prompt
     assert "NEXT_STEP:" not in prompt
     assert "CONFIDENCE:" not in prompt
     assert "confidence" not in prompt.lower()
     assert "Respond with concise summaries only." not in inspect.getsource(ResearchAgent.build_prompt)
+
+
+@pytest.mark.asyncio
+async def test_agent_prompt_can_offer_early_stop_final_format():
+    agent = ResearchAgent(
+        run_id="run-prompts",
+        task="Build a chess website",
+        assigned_subtask="Research synchronization",
+        llm=None,
+        event_streamer=InMemoryEventStreamer(),
+        allow_agent_early_stop=True,
+    )
+
+    prompt = await agent.build_prompt(step_index=1, relevant_events=[])
+
+    assert "If you are ready to finish this agent's work" in prompt
+    assert "FINAL:" in prompt
+    assert prompt.count("SHARE_FINDING:") == 1
+    assert prompt.count("LOCAL_NOTES:") == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_agent_prompt_does_not_repeat_final_sections():
+    agent = CodingAgent(
+        run_id="run-prompts",
+        task="Inspect the workspace",
+        assigned_subtask="Run a bash command.",
+        llm=None,
+        event_streamer=InMemoryEventStreamer(),
+        bash_tool=object(),
+        workspace_access="write",
+        allow_agent_early_stop=True,
+    )
+
+    prompt = await agent.build_prompt(step_index=1, relevant_events=[])
+
+    assert "If you are ready to finish this agent's work" in prompt
+    assert "FINAL:" in prompt
+    assert prompt.count("SHARE_FINDING:") == 1
+    assert prompt.count("LOCAL_NOTES:") == 1
 
 
 def test_graph_prompts_are_not_embedded_in_node_functions():
