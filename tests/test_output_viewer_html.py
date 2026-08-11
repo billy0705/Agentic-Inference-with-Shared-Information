@@ -90,13 +90,14 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "majority_vote" in html
     assert "multiagent_debate" in html
     assert "Baseline methods" in html
-    assert "Selected baselines correct" in html
+    assert "Baseline correct, current wrong" in html
+    assert "Selected baselines correct" not in html
     assert "setAnalysisBaselineMethod" in html
     assert "Baseline sources" in html
     assert "runAnalysisRows" in html
     assert "classifyAnalysisIssue" in html
     assert "renderAnalysisIssueRow" in html
-    assert "our method incorrect, selected baseline correct" in html
+    assert "baseline correct, current wrong" in html
     assert "current wrong, selected baselines wrong or missing" in html
     assert "current correct, selected baselines wrong" in html
     assert "current correct, selected baseline also correct" in html
@@ -123,8 +124,10 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "round answer correct" not in html
     assert "round answer wrong" not in html
     assert "correct_subagents" in html
-    assert "Decision changed after shared findings" in html
-    assert "Same choice after more rounds" in html
+    assert "Decision changed after shared findings" not in html
+    assert "Same choice after more rounds" not in html
+    assert "agents changed after shared info" in html
+    assert "final agents all agree" in html
     assert "analysisRoundRows" in html
     assert "analysisDecisionShift" in html
     assert "analysisConsensusTrend" in html

@@ -1471,12 +1471,8 @@
         <div class="analysis-summary">
           <div class="stat"><span class="subtle">Current correct / total</span><strong>${esc(summary.correct)} / ${esc(summary.total)}</strong></div>
           <div class="stat"><span class="subtle">Current accuracy</span><strong>${esc(percent(summary.accuracy))}</strong></div>
-          <div class="stat"><span class="subtle">Selected baselines correct</span><strong>${esc(summary.baseline_correct)} / ${esc(summary.baseline_total)}</strong></div>
-          <div class="stat"><span class="subtle">Regressions</span><strong>${esc(summary.regressions)}</strong></div>
-          <div class="stat"><span class="subtle">Fixes</span><strong>${esc(summary.fixes)}</strong></div>
+          <div class="stat"><span class="subtle">Baseline correct, current wrong</span><strong>${esc(summary.regressions)}</strong></div>
           <div class="stat"><span class="subtle">Invalid</span><strong>${esc(summary.invalid)}</strong></div>
-          <div class="stat"><span class="subtle">Decision changed after shared findings</span><strong>${esc(summary.decision_changes_after_shared)}</strong></div>
-          <div class="stat"><span class="subtle">Same choice after more rounds</span><strong>${esc(summary.final_consensus)}</strong></div>
         </div>
         ${renderErrorDistributionChart(rows)}
         ${renderConsensusTrendChart(rows)}
@@ -1648,7 +1644,7 @@
 
     function analysisBuckets() {
       return [
-        { key: 'current_wrong_baseline_correct', label: 'our method incorrect, selected baseline correct', tone: 'bad' },
+        { key: 'current_wrong_baseline_correct', label: 'baseline correct, current wrong', tone: 'bad' },
         { key: 'invalid', label: 'invalid / extraction issue', tone: 'warn' },
         { key: 'current_wrong_baseline_wrong', label: 'current wrong, selected baselines wrong or missing', tone: 'bad' },
         { key: 'current_correct_baseline_wrong', label: 'current correct, selected baselines wrong', tone: 'good' },
@@ -1752,19 +1748,12 @@
     function analysisSummary(rows) {
       const total = rows.length;
       const correct = rows.filter((row) => isCorrectExample(row.example)).length;
-      const baselineTotal = rows.filter((row) => row.baseline_examples.length).length;
-      const baselineCorrect = rows.filter((row) => row.baseline_examples.some((item) => isCorrectExample(item.example))).length;
       const invalid = rows.filter((row) => isInvalidExample(row.example)).length;
       return {
         total,
         correct,
-        baseline_total: baselineTotal,
-        baseline_correct: baselineCorrect,
         regressions: rows.filter((row) => !isCorrectExample(row.example) && row.baseline_examples.some((item) => isCorrectExample(item.example))).length,
-        fixes: rows.filter((row) => isCorrectExample(row.example) && row.baseline_examples.length && !row.baseline_examples.some((item) => isCorrectExample(item.example))).length,
         invalid,
-        decision_changes_after_shared: rows.filter((row) => row.decision_shift.after_shared_changes.length).length,
-        final_consensus: rows.filter((row) => row.consensus.final_all_same).length,
         accuracy: total ? correct / total : 0,
       };
     }
@@ -2058,10 +2047,10 @@
       const consensus = row.consensus;
       return `
         <div class="analysis-row-meta">
-          <span class="pill">Decision changed after shared findings: ${esc(afterShared.length ? afterShared.map((item) => item.agent).join(', ') : 'none')}</span>
-          <span class="pill">Any decision changed: ${esc(changed.length ? changed.map((item) => item.agent).join(', ') : 'none')}</span>
-          <span class="pill">Same choice after more rounds: ${esc(consensus.final_all_same ? 'yes' : 'no')}</span>
-          <span class="pill">final consensus: ${esc(consensus.final_strength || 'n/a')}</span>
+          <span class="pill">agents changed after shared info: ${esc(afterShared.length ? afterShared.map((item) => item.agent).join(', ') : 'none')}</span>
+          <span class="pill">agents changed answer: ${esc(changed.length ? changed.map((item) => item.agent).join(', ') : 'none')}</span>
+          <span class="pill">final agents all agree: ${esc(consensus.final_all_same ? 'yes' : 'no')}</span>
+          <span class="pill">final agreement strength: ${esc(consensus.final_strength || 'n/a')}</span>
         </div>
       `;
     }

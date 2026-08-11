@@ -16,7 +16,7 @@ Candidate aggregation:
 Instructions:
 - Identify the final answer candidates already present in the agent last summaries.
 - Use the candidate aggregation first. If it has a majority_vote selected_candidate, keep that candidate as the final answer.
-- If candidates conflict without a majority, use each agent's role, subtask, description, and explanation excerpt to choose the best-supported candidate from the agent outputs.
+- If candidates conflict without a majority, use each agent's role, subtask, description, and explanation except to choose the best-supported candidate from the agent outputs.
 - Do not introduce a new answer that is absent from the agent candidate list unless no candidate was extractable.
 - If the agent outputs include a clear final-answer format, keep that same final-answer format.
 - Keep the response concise.
