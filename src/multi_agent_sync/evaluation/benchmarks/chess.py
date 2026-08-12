@@ -4,6 +4,7 @@ import argparse
 import json
 import random
 import re
+import runpy
 from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
@@ -21,6 +22,7 @@ DEFAULT_DOWNLOAD_URL = (
     "bigbench/benchmark_tasks/chess_state_tracking/synthetic_short/task.json"
 )
 SQUARE_PATTERN = re.compile(r"\b(?P<square>[a-h][1-8])\b", flags=re.IGNORECASE)
+get_final_piece = runpy.run_path(Path(__file__).with_name("chess") / "find_chess_piece.py")["get_final_piece"]
 
 
 def build_benchmark() -> BenchmarkSpec:
@@ -165,6 +167,11 @@ def score_response(row: dict[str, Any], raw_output: str, args: argparse.Namespac
         metadata={
             "output_regex": OUTPUT_REGEX,
             "valid_targets": targets,
+            "target_square": last_move_fragment(row["input"]),
+            "final_piece": get_final_piece(
+                row["input"],
+                square_name=last_move_fragment(row["input"]),
+            ),
         },
     )
 

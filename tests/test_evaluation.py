@@ -1810,6 +1810,8 @@ def test_chess_score_response_accepts_any_target_square():
     assert score.metadata == {
         "output_regex": "[a-h][1-8]",
         "valid_targets": ["h3", "g2"],
+        "target_square": "f1",
+        "final_piece": "bishop",
     }
 
 

@@ -178,6 +178,9 @@
     const LIFECYCLE_EVENT_TYPES = ['task_started', 'plan_created', 'agent_started', 'final_summary'];
     const BASELINE_METHOD_DEFAULTS = ['single_agent', 'majority_vote', 'multiagent_debate'];
     const MAX_ANALYSIS_ROUNDS = 3;
+    const BENCHMARK_SUBAGENT_ANALYZERS = {
+      chess: analyzeChessBoardStateSubagents,
+    };
     const state = {
       files: [],
       folderHandle: null,
@@ -1458,6 +1461,7 @@
       const baselineSources = analysisBaselineSources(context.compatible_runs, context.run, baselineMethods);
       const rows = runAnalysisRows(context.run, targetMethod, baselineSources);
       const summary = analysisSummary(rows);
+      const subagentAnalysis = analyzeBenchmarkSubagents(context.run, rows);
       const buckets = analysisBuckets();
       $('analysisPanel').innerHTML = `
         <div class="toolbar">
@@ -1475,6 +1479,7 @@
           <div class="stat"><span class="subtle">Invalid</span><strong>${esc(summary.invalid)}</strong></div>
         </div>
         ${renderErrorDistributionChart(rows)}
+        ${renderSubagentErrorCases(subagentAnalysis)}
         ${renderConsensusTrendChart(rows)}
         ${buckets.map((bucket) => renderAnalysisBucket(bucket, rows.filter((row) => row.bucket === bucket.key))).join('')}
       `;
@@ -1756,6 +1761,214 @@
         invalid,
         accuracy: total ? correct / total : 0,
       };
+    }
+
+    function analyzeBenchmarkSubagents(run, rows) {
+      const analyzer = BENCHMARK_SUBAGENT_ANALYZERS[String(run?.benchmark || '').toLowerCase()];
+      return analyzer ? analyzer(run, rows) : null;
+    }
+
+    function analyzeChessBoardStateSubagents(run, rows) {
+      const cases = [];
+      for (const row of rows) {
+        const example = row.example;
+        const expectedPiece = chessGroundTruthPiece(example);
+        const targetSquare = chessTargetSquare(example);
+        for (const agent of example.agents || []) {
+          const agentName = agent.name || 'Unnamed subagent';
+          if (!isBoardStateReconstructor(agent)) continue;
+          const predictedPiece = extractChessPieceClaim(agent.final_output, targetSquare);
+          cases.push({
+            index: row.index,
+            target_method: row.target_method,
+            agent: agentName,
+            target_square: targetSquare,
+            expected_piece: expectedPiece,
+            predicted_piece: predictedPiece,
+            status: !expectedPiece || !predictedPiece
+              ? 'unparsed'
+              : predictedPiece === expectedPiece ? 'correct' : 'wrong',
+          });
+        }
+      }
+      if (!cases.length) return null;
+
+      const agents = new Map();
+      for (const item of cases) {
+        const current = agents.get(item.agent) || { name: item.agent, total: 0, checked: 0, wrong: 0, unparsed: 0 };
+        current.total += 1;
+        if (item.status === 'unparsed') current.unparsed += 1;
+        else current.checked += 1;
+        if (item.status === 'wrong') current.wrong += 1;
+        agents.set(item.agent, current);
+      }
+      return {
+        benchmark: run.benchmark,
+        agents: [...agents.values()].sort((left, right) => right.wrong - left.wrong || left.name.localeCompare(right.name)),
+        cases,
+        failures: cases.filter((item) => item.status === 'wrong'),
+      };
+    }
+
+    function isBoardStateReconstructor(agent) {
+      const name = String(agent?.name || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+      if (/board.*state.*reconstruct|board.*reconstruct|state.*reconstruct/.test(name)) return true;
+      const assignment = agent?.assignment && typeof agent.assignment === 'object' ? agent.assignment : {};
+      if (assignment.critical_debate === true) return false;
+      const description = [assignment.role, assignment.description, assignment.task, assignment.subtask]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      const trackerLikeName = /(board|state).*(track|analyst|builder)/.test(name);
+      const reconstructionTask = /reconstruct|track.*(move|board)|determine.*(board|piece)/.test(description);
+      return trackerLikeName && reconstructionTask;
+    }
+
+    function chessTargetSquare(example) {
+      const metadataSquare = String(example?.score_metadata?.target_square || '').toLowerCase();
+      if (/^[a-h][1-8]$/.test(metadataSquare)) return metadataSquare;
+      const match = String(example?.prompt || '').match(/chess piece at\s+([a-h][1-8])/i);
+      return match ? match[1].toLowerCase() : '';
+    }
+
+    function chessGroundTruthPiece(example) {
+      const metadataPiece = normalizeChessPiece(example?.score_metadata?.final_piece);
+      if (metadataPiece) return metadataPiece;
+      const question = parseChessQuestion(example?.prompt);
+      return question ? replayChessPiece(question.moves, question.target_square) : '';
+    }
+
+    function parseChessQuestion(prompt) {
+      const match = String(prompt || '').match(/Given the chess game\s+(.+?),\s*give one valid destination square for the chess piece at\s+([a-h][1-8])/is);
+      if (!match) return null;
+      return {
+        moves: match[1].trim().split(/\s+/),
+        target_square: match[2].toLowerCase(),
+      };
+    }
+
+    function replayChessPiece(tokens, targetSquare) {
+      const board = initialChessBoard();
+      for (const rawToken of tokens || []) {
+        const token = String(rawToken).toLowerCase();
+        if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(token)) continue;
+        const source = token.slice(0, 2);
+        const destination = token.slice(2, 4);
+        const piece = board.get(source);
+        if (!piece) continue;
+
+        const destinationWasEmpty = !board.has(destination);
+        board.delete(source);
+        if (piece.endsWith('pawn') && source[0] !== destination[0] && destinationWasEmpty) {
+          board.delete(`${destination[0]}${source[1]}`);
+        }
+        board.set(destination, token[4] ? promotionPiece(piece, token[4]) : piece);
+
+        if (piece.endsWith('king') && Math.abs(source.charCodeAt(0) - destination.charCodeAt(0)) === 2) {
+          const rank = source[1];
+          const kingSide = destination[0] === 'g';
+          const rookSource = `${kingSide ? 'h' : 'a'}${rank}`;
+          const rookDestination = `${kingSide ? 'f' : 'd'}${rank}`;
+          const rook = board.get(rookSource);
+          if (rook) {
+            board.delete(rookSource);
+            board.set(rookDestination, rook);
+          }
+        }
+      }
+      return normalizeChessPiece(board.get(targetSquare));
+    }
+
+    function initialChessBoard() {
+      const board = new Map();
+      const backRank = ['rook', 'knight', 'bishop', 'queen', 'king', 'bishop', 'knight', 'rook'];
+      const files = 'abcdefgh';
+      for (let index = 0; index < files.length; index += 1) {
+        board.set(`${files[index]}1`, `white ${backRank[index]}`);
+        board.set(`${files[index]}2`, 'white pawn');
+        board.set(`${files[index]}7`, 'black pawn');
+        board.set(`${files[index]}8`, `black ${backRank[index]}`);
+      }
+      return board;
+    }
+
+    function promotionPiece(piece, symbol) {
+      const color = String(piece).startsWith('black') ? 'black' : 'white';
+      const names = { q: 'queen', r: 'rook', b: 'bishop', n: 'knight' };
+      return `${color} ${names[symbol] || 'queen'}`;
+    }
+
+    function normalizeChessPiece(value) {
+      const match = String(value || '').toLowerCase().match(/\b(pawn|knight|bishop|rook|queen|king)\b/);
+      return match ? match[1] : String(value || '').trim().toLowerCase() === 'empty' ? 'empty' : '';
+    }
+
+    function extractChessPieceClaim(output, targetSquare) {
+      if (!targetSquare) return '';
+      const square = targetSquare.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const colorAndPiece = '(?:(?:white|black)\\s+)?(pawn|knight|bishop|rook|queen|king)';
+      const patterns = [
+        new RegExp(`piece\\s+(?:currently\\s+)?at\\s+${square}\\s+(?:is|as)\\s+(?:the\\s+)?${colorAndPiece}`, 'gi'),
+        new RegExp(`${colorAndPiece}\\s+(?:currently\\s+)?(?:at|on)\\s+${square}\\b`, 'gi'),
+        new RegExp(`piece\\s+(?:currently\\s+)?(?:at|on)\\s+${square}[^.\\n]{0,50}?${colorAndPiece}`, 'gi'),
+      ];
+      const claims = [];
+      const text = String(output || '');
+      for (const pattern of patterns) {
+        let match = pattern.exec(text);
+        while (match) {
+          claims.push({ index: match.index || 0, piece: normalizeChessPiece(match[0]) });
+          match = pattern.exec(text);
+        }
+      }
+      claims.sort((left, right) => left.index - right.index);
+      return claims.length ? claims[claims.length - 1].piece : '';
+    }
+
+    function renderSubagentErrorCases(analysis) {
+      if (!analysis) return '';
+      return `
+        <section class="analysis-bucket">
+          <div class="toolbar">
+            <div>
+              <h3>Subagent error cases</h3>
+              <div class="subtle">Chess board-state reconstructors: predicted piece versus the piece computed from the move sequence.</div>
+            </div>
+            <span class="pill bad">${esc(analysis.failures.length)} wrong piece identifications</span>
+          </div>
+          <table class="round-table">
+            <thead><tr><th>Subagent</th><th>Wrong piece</th><th>Checked</th><th>Could not extract</th></tr></thead>
+            <tbody>
+              ${analysis.agents.map((agent) => `
+                <tr>
+                  <td>${esc(agent.name)}</td>
+                  <td><strong class="${agent.wrong ? 'bad' : 'good'}">${esc(agent.wrong)}</strong></td>
+                  <td>${esc(agent.checked)}</td>
+                  <td>${esc(agent.unparsed)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          <details ${analysis.failures.length ? 'open' : ''}>
+            <summary>Failure cases (${esc(analysis.failures.length)})</summary>
+            <div class="analysis-list">
+              ${analysis.failures.length ? analysis.failures.map((item) => `
+                <div class="analysis-row">
+                  <div class="analysis-row-header">
+                    <strong>#${esc(item.index)} · ${esc(item.agent)}</strong>
+                    <button class="analysis-jump" type="button" onclick="selectExampleByIndexAndMethod('${esc(jsString(item.index))}', '${esc(jsString(item.target_method))}')">Open trace</button>
+                  </div>
+                  <div class="analysis-row-meta">
+                    <span class="pill">square: ${esc(item.target_square || 'n/a')}</span>
+                    <span class="pill good">ground truth: ${esc(item.expected_piece || 'n/a')}</span>
+                    <span class="pill bad">subagent predicted: ${esc(item.predicted_piece || 'n/a')}</span>
+                  </div>
+                </div>
+              `).join('') : '<div class="empty">No incorrect piece identifications found.</div>'}
+            </div>
+          </details>
+        </section>
+      `;
     }
 
     function errorDistribution(rows) {

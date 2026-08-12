@@ -255,6 +255,12 @@ wheels = [
 ]
 
 [[package]]
+name = "chess"
+version = "1.11.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/09/7d04d7581ae3bb8b598017941781bceb7959dd1b13e3ebf7b6a2cd843bc9/chess-1.11.2.tar.gz", hash = "sha256:a8b43e5678fdb3000695bdaa573117ad683761e5ca38e591c4826eba6d25bb39", size = 6131385, upload-time = "2025-02-25T19:10:27.328Z" }
+
+[[package]]
 name = "click"
 version = "8.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1148,6 +1154,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "python-chess" },
     { name = "rich" },
     { name = "tqdm" },
 ]
@@ -1164,6 +1171,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
+    { name = "python-chess", specifier = ">=1.999" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "tqdm", specifier = ">=4.68.3" },
 ]
@@ -1882,6 +1890,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/43/7c/d36d04db312ecf4298932ef77e6e4a9e8ad017906e24e34f0b0c361a2473/pytest_asyncio-1.4.0.tar.gz", hash = "sha256:c6c0d2259945122819f171a32ecea2c349ead889ee28176caaf492143424be42", size = 58514, upload-time = "2026-05-26T09:56:04.083Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/03/e2/08a497ef684b88559c9cc5f4ad53a37e7b99e727094a86d6ea32536d5d3c/pytest_asyncio-1.4.0-py3-none-any.whl", hash = "sha256:933ca923a23075a87fb7070c0ec272a6848489824d887c85c812670932835aa1", size = 16930, upload-time = "2026-05-26T09:56:02.576Z" },
+]
+
+[[package]]
+name = "python-chess"
+version = "1.999"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "chess" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/60/7c7d132b6683ff215bf705fc55ffc0240a6cddea89657407ca0a4fb628d0/python-chess-1.999.tar.gz", hash = "sha256:8cad0388c42242d890ac6368ad64def15cd0165db033df0ad479492e266e5e6c", size = 1453, upload-time = "2020-10-26T11:30:10.118Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/38/47/dfebc06e589530691d33c71bc7b3d8d311252b58ae338980fd4327fe77f2/python_chess-1.999-py3-none-any.whl", hash = "sha256:93b562f8f1124cb7bf56fb095e18743758e69dc6a028ccda0badcaa5c59d88c8", size = 1401, upload-time = "2020-10-26T11:30:07.758Z" },
 ]
 
 [[package]]
