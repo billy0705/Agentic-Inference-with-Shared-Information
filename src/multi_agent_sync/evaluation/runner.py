@@ -212,6 +212,7 @@ def build_run_config(
             "workspace_image": getattr(args, "workspace_image", None),
             "max_steps": args.max_steps,
             "max_orchestrator_rounds": getattr(args, "max_orchestrator_rounds", None),
+            "debate_rounds": getattr(args, "debate_rounds", None),
             "allow_agent_early_stop": getattr(args, "allow_agent_early_stop", False),
             "single_agent_min_steps": getattr(args, "single_agent_min_steps", None),
             "single_agent_max_steps": getattr(args, "single_agent_max_steps", None),
@@ -258,6 +259,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "message_streaming": method_message_streaming(method),
         "max_steps": args.max_steps,
         "max_orchestrator_rounds": getattr(args, "max_orchestrator_rounds", None),
+        "debate_rounds": getattr(args, "debate_rounds", None),
         "allow_agent_early_stop": getattr(args, "allow_agent_early_stop", False),
         "single_agent_min_steps": getattr(args, "single_agent_min_steps", None),
         "single_agent_max_steps": getattr(args, "single_agent_max_steps", None),
@@ -286,7 +288,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
     }
     if method == "multiagent_debate":
         settings["debate_agents"] = DEBATE_AGENT_COUNT
-        settings["debate_rounds"] = DEBATE_ROUNDS
+        settings["debate_rounds"] = getattr(args, "debate_rounds", DEBATE_ROUNDS)
     if method == "majority_vote":
         settings["majority_vote_agents"] = MAJORITY_VOTE_AGENT_COUNT
     return settings

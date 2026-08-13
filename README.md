@@ -228,6 +228,7 @@ Useful evaluation flags:
 - `--max-steps <n>`: max steps per agent for multi-agent methods
 - `--single-agent-min-steps <n>`: minimum steps for `single_agent` and `majority_vote` voters, default 3
 - `--single-agent-max-steps <n>`: maximum steps for `single_agent` and `majority_vote` voters, default 7
+- `--debate-rounds <n>`: rounds for `multiagent_debate`, default 3
 - `--total-runtime-timeout <seconds>`: per-example multi-agent timeout
 - `--synthesis-timeout <seconds>`: synthesizer timeout
 - `--seed <n>`: answer shuffle seed
