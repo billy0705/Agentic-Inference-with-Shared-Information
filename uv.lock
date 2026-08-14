@@ -1152,6 +1152,11 @@ dependencies = [
     { name = "tqdm" },
 ]
 
+[package.optional-dependencies]
+vllm-server = [
+    { name = "vllm-server-launcher" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "datasets", specifier = ">=4.4.1" },
@@ -1166,7 +1171,9 @@ requires-dist = [
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "tqdm", specifier = ">=4.68.3" },
+    { name = "vllm-server-launcher", marker = "extra == 'vllm-server'", git = "ssh://git@github.com/machinelearningnuremberg/vllm-server.git?rev=dev-server-suman" },
 ]
+provides-extras = ["vllm-server"]
 
 [[package]]
 name = "multidict"
@@ -2295,6 +2302,14 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b4/22/14dbedb6b61f492d5524077fd10bbfb137583b0f0aafa6cd870ccb43f39a/uuid_utils-0.16.0-cp314-cp314t-win32.whl", hash = "sha256:756575d082ea4cb7d2f923d5b640c0efe7c82573aab49220c4e09b62d13737ff", size = 169358, upload-time = "2026-05-19T07:45:05.146Z" },
     { url = "https://files.pythonhosted.org/packages/25/f4/a636806c98401a1108f2456e9cc3fa39a618145bfb1d0860c57203159cfe/uuid_utils-0.16.0-cp314-cp314t-win_amd64.whl", hash = "sha256:aa50261a83991dbb570a00573741455bd8f3249444f7329e5bdcd494799d1504", size = 174813, upload-time = "2026-05-19T07:45:59.579Z" },
     { url = "https://files.pythonhosted.org/packages/75/12/3823742459d87a100deb24bb6b41692aa961b267abd130fa7739cdf7d409/uuid_utils-0.16.0-cp314-cp314t-win_arm64.whl", hash = "sha256:22a17e93a371d850ffce8fcdbacc2239f890efe73aa3262b6170c1febc08afe1", size = 171733, upload-time = "2026-05-19T07:45:29.283Z" },
+]
+
+[[package]]
+name = "vllm-server-launcher"
+version = "0.1.0"
+source = { git = "ssh://git@github.com/machinelearningnuremberg/vllm-server.git?rev=dev-server-suman#44d00ad62c7cdae6376fe2fa29b837f92e544e60" }
+dependencies = [
+    { name = "pyyaml" },
 ]
 
 [[package]]

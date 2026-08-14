@@ -20,6 +20,12 @@ from multi_agent_sync.evaluation.kimina_docker import (
 )
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.llm import get_llm
+from multi_agent_sync.vllm_server import (
+    add_spinup_server_arguments,
+    resolve_server_config,
+    should_spinup_server,
+    spinup_server,
+)
 
 DEFAULT_LIMIT = 0
 RANDOM_SEED = 42
@@ -246,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--synthesis-timeout", type=float, default=60.0, help="Maximum summarizer runtime, in seconds.")
     parser.add_argument("--seed", type=int, default=RANDOM_SEED, help="Random seed for answer shuffling.")
+    add_spinup_server_arguments(parser)
     return parser
 
 
@@ -550,10 +557,17 @@ def build_method_workflow_config(benchmark: BenchmarkSpec, row: dict[str, Any], 
 async def async_main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
+    vllm_server = None
     try:
+        if should_spinup_server(args):
+            vllm_server = spinup_server(resolve_server_config(args), timeout=args.server_startup_timeout)
+            args.model = "auto"
         await run_evaluation(args)
     except RuntimeError as exc:
         parser.exit(1, f"error: {exc}\n")
+    finally:
+        if vllm_server is not None:
+            vllm_server.stop()
 
 
 def main(argv: list[str] | None = None) -> None:

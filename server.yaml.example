@@ -1,0 +1,21 @@
+vllm:
+  model_name: google/gemma-4-E4B-it
+  sif_path: ../vllm-server/vllm.sif
+  port: 8000
+  log_path: vllm-server.log
+  engine_ready_timeout: 1800
+
+helma:
+  job_name: gpt-oss
+  nodes: 1
+  gres: "gpu:4"
+  partition: h100
+  output: out_single_node.out
+  time: "4:00:00"
+
+expt:
+  benchmark:
+    - gsm8k
+  methods:
+    - multiagent_dynamic_streaming
+  limit: 1
