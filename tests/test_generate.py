@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ class ConfigManagerStub:
     def __init__(self, expt=None, helma=None):
         self.sections = {"expt": expt or {}, "helma": helma or {}}
         self.config = SimpleNamespace(engine_ready_timeout=1800)
+        self.path = Path("/project/server.yaml")
 
     def section(self, name):
         return self.sections[name]
@@ -64,6 +66,21 @@ def test_load_experiment_config_validates_and_deduplicates_lists():
     assert config.benchmarks == ("gsm8k", "gpqa")
     assert config.methods == ("multiagent_dynamic_streaming", "plain_llm")
     assert config.limit == 2
+    assert config.resume_run is None
+
+
+def test_load_experiment_config_resolves_resume_run_relative_to_yaml():
+    manager = ConfigManagerStub(
+        {
+            "benchmark": ["gsm8k"],
+            "methods": ["plain_llm"],
+            "resume_run": "output/gsm8k/model/run-id",
+        }
+    )
+
+    config = generate.load_experiment_config(manager)
+
+    assert config.resume_run == Path("/project/output/gsm8k/model/run-id")
 
 
 @pytest.mark.parametrize(
@@ -74,6 +91,10 @@ def test_load_experiment_config_validates_and_deduplicates_lists():
         ({"benchmark": ["gsm8k"], "methods": []}, "expt.methods"),
         ({"benchmark": ["gsm8k"], "methods": ["unknown"]}, "Unknown method"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "limit": -1}, "expt.limit"),
+        (
+            {"benchmark": ["gsm8k", "gpqa"], "methods": ["plain_llm"], "resume_run": "output/run"},
+            "one configured benchmark",
+        ),
     ],
 )
 def test_load_experiment_config_rejects_invalid_values(expt, message):
@@ -101,7 +122,7 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
         return Server()
 
     async def fake_run_evaluation(args):
-        events.append(("run", args.benchmark, args.methods, args.limit))
+        events.append(("run", args.benchmark, args.methods, args.limit, args.resume_run))
         return []
 
     monkeypatch.setattr(generate, "get_config_manager", lambda: lambda path: manager)
@@ -112,7 +133,36 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
 
     assert events == [
         ("start", manager, 1800.0),
-        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1),
-        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1),
+        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, None),
+        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, None),
         ("stop",),
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_experiments_passes_configured_resume_run(monkeypatch):
+    captured = {}
+    manager = ConfigManagerStub(
+        {
+            "benchmark": ["gsm8k"],
+            "methods": ["plain_llm"],
+            "limit": 1,
+            "resume_run": "output/gsm8k/model/run-id",
+        }
+    )
+
+    class Server:
+        def stop(self):
+            pass
+
+    async def fake_run_evaluation(args):
+        captured["resume_run"] = args.resume_run
+        return []
+
+    monkeypatch.setattr(generate, "get_config_manager", lambda: lambda path: manager)
+    monkeypatch.setattr(generate, "spinup_server", lambda manager, timeout: Server())
+    monkeypatch.setattr(generate.evaluation, "run_evaluation", fake_run_evaluation)
+
+    await generate.run_experiments("server.yaml")
+
+    assert captured["resume_run"] == "/project/output/gsm8k/model/run-id"

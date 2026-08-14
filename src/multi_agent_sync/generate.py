@@ -17,6 +17,7 @@ class ExperimentConfig:
     benchmarks: tuple[str, ...]
     methods: tuple[str, ...]
     limit: int
+    resume_run: Path | None
 
 
 @dataclass(frozen=True)
@@ -97,10 +98,24 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
         raise ValueError("'expt.limit' must be a non-negative integer")
 
+    configured_resume_run = expt.get("resume_run")
+    if configured_resume_run is None:
+        resume_run = None
+    elif not isinstance(configured_resume_run, str) or not configured_resume_run.strip():
+        raise ValueError("'expt.resume_run' must be a non-empty path or null")
+    else:
+        resume_run = Path(configured_resume_run).expanduser()
+        if not resume_run.is_absolute():
+            resume_run = manager.path.parent / resume_run
+        resume_run = resume_run.resolve()
+        if len(normalized_benchmarks) != 1:
+            raise ValueError("'expt.resume_run' can only be used with one configured benchmark")
+
     return ExperimentConfig(
         benchmarks=normalized_benchmarks,
         methods=normalized_methods,
         limit=limit,
+        resume_run=resume_run,
     )
 
 
@@ -126,6 +141,7 @@ async def run_experiments(config_path: str | Path) -> None:
                     methods,
                     "--limit",
                     str(experiment.limit),
+                    *(["--resume-run", str(experiment.resume_run)] if experiment.resume_run else []),
                 ]
             )
             await evaluation.run_evaluation(args)
@@ -162,7 +178,8 @@ def main(argv: list[str] | None = None) -> None:
             experiment = load_experiment_config(manager)
             methods = ",".join(experiment.methods)
             for benchmark in experiment.benchmarks:
-                print(f"{benchmark}\t{methods}\t{experiment.limit}")
+                resume_run = str(experiment.resume_run) if experiment.resume_run else "-"
+                print(f"{benchmark}\t{methods}\t{experiment.limit}\t{resume_run}")
             return
         asyncio.run(run_experiments(args.config))
     except (RuntimeError, ValueError) as exc:

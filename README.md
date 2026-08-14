@@ -55,6 +55,8 @@ uv sync --extra vllm-server
 `server.yaml` contains `vllm`, `helma`, and `expt` settings. `generate.sh` runs
 normal evaluations locally and submits itself with `sbatch` on Helma. Plain
 `uv sync` excludes the private launcher; `--all-extras` requires SSH access.
+Set `expt.resume_run` to an existing run directory to pass `--resume-run` for a
+single benchmark; omit it or use `null` to start fresh.
 
 ## Environment Variables
 

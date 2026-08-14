@@ -21,10 +21,15 @@ if command -v sbatch >/dev/null 2>&1 && [[ "${RUN_LOCAL:-0}" != "1" ]]; then
 fi
 
 evaluation_matrix="$(uv run python -m multi_agent_sync.generate "$CONFIG_PATH" --print-evaluation-matrix)"
-while IFS=$'\t' read -r benchmark methods limit; do
-  uv run evaluation \
-    --benchmark "$benchmark" \
-    --methods "$methods" \
-    --limit "$limit" \
+while IFS=$'\t' read -r benchmark methods limit resume_run; do
+  evaluation_args=(
+    --benchmark "$benchmark"
+    --methods "$methods"
+    --limit "$limit"
     --server-config "$CONFIG_PATH"
+  )
+  if [[ "$resume_run" != "-" ]]; then
+    evaluation_args+=(--resume-run "$resume_run")
+  fi
+  uv run evaluation "${evaluation_args[@]}"
 done <<< "$evaluation_matrix"
