@@ -67,6 +67,50 @@ def test_load_experiment_config_validates_and_deduplicates_lists():
     assert config.methods == ("multiagent_dynamic_streaming", "plain_llm")
     assert config.limit == 2
     assert config.resume_run is None
+    assert config.benchmark_data_dir is None
+    assert config.output_dir == Path("/project/output")
+
+
+def test_load_experiment_config_resolves_benchmark_data_dir_relative_to_yaml():
+    manager = ConfigManagerStub(
+        {
+            "benchmark": ["gsm8k"],
+            "methods": ["plain_llm"],
+            "benchmark_data_dir": "benchmark-data",
+        }
+    )
+
+    config = generate.load_experiment_config(manager)
+
+    assert config.benchmark_data_dir == Path("/project/benchmark-data")
+
+
+def test_load_experiment_config_resolves_output_dir_relative_to_yaml():
+    manager = ConfigManagerStub(
+        {
+            "benchmark": ["gsm8k"],
+            "methods": ["plain_llm"],
+            "output_dir": "output",
+        }
+    )
+
+    config = generate.load_experiment_config(manager)
+
+    assert config.output_dir == Path("/project/output")
+
+
+def test_shell_environment_exports_includes_benchmark_data_dir():
+    manager = ConfigManagerStub(
+        {
+            "benchmark": ["gsm8k"],
+            "methods": ["plain_llm"],
+            "benchmark_data_dir": "/data/benchmark data",
+        }
+    )
+
+    config = generate.load_experiment_config(manager)
+
+    assert generate.shell_environment_exports(config) == ("export BENCHMARK_DATA_DIR='/data/benchmark data'",)
 
 
 def test_load_experiment_config_resolves_resume_run_relative_to_yaml():
@@ -91,6 +135,8 @@ def test_load_experiment_config_resolves_resume_run_relative_to_yaml():
         ({"benchmark": ["gsm8k"], "methods": []}, "expt.methods"),
         ({"benchmark": ["gsm8k"], "methods": ["unknown"]}, "Unknown method"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "limit": -1}, "expt.limit"),
+        ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "benchmark_data_dir": ""}, "expt.benchmark_data_dir"),
+        ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "output_dir": ""}, "expt.output_dir"),
         (
             {"benchmark": ["gsm8k", "gpqa"], "methods": ["plain_llm"], "resume_run": "output/run"},
             "one configured benchmark",
@@ -122,7 +168,7 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
         return Server()
 
     async def fake_run_evaluation(args):
-        events.append(("run", args.benchmark, args.methods, args.limit, args.resume_run))
+        events.append(("run", args.benchmark, args.methods, args.limit, args.output_dir, args.resume_run))
         return []
 
     monkeypatch.setattr(generate, "get_config_manager", lambda: lambda path: manager)
@@ -133,8 +179,8 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
 
     assert events == [
         ("start", manager, 1800.0),
-        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, None),
-        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, None),
+        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, "/project/output", None),
+        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, "/project/output", None),
         ("stop",),
     ]
 

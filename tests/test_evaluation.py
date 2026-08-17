@@ -4,6 +4,7 @@ import json
 import random
 import types
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,19 @@ from multi_agent_sync.evaluation.benchmarks import swe_bench_verified
 from multi_agent_sync.evaluation.baselines import multiagent_sync
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.evaluation.types import BenchmarkSpec, BenchmarkWorkflowConfig
+from multi_agent_sync.evaluation.dataset_files import benchmark_data_path
+
+
+def test_benchmark_data_path_defaults_to_repo_data_dir(monkeypatch):
+    monkeypatch.delenv("BENCHMARK_DATA_DIR", raising=False)
+
+    assert benchmark_data_path("gsm8k/gsm8k_test.jsonl") == Path("data/gsm8k/gsm8k_test.jsonl")
+
+
+def test_benchmark_data_path_uses_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("BENCHMARK_DATA_DIR", str(tmp_path))
+
+    assert benchmark_data_path("OlymMATH") == tmp_path / "OlymMATH"
 
 
 def test_baselines_package_exports_evaluation_methods():

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from multi_agent_sync.evaluation.dataset_files import load_or_download_rows
+from multi_agent_sync.evaluation.dataset_files import benchmark_data_path, load_or_download_rows
 from multi_agent_sync.evaluation.lean_feedback import LeanVerifierTool
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec, BenchmarkWorkflowConfig
 from multi_agent_sync.prompts import render_prompt
@@ -23,7 +23,7 @@ from multi_agent_sync.prompts import render_prompt
 DATASET_NAME = "openbmb/MA-ProofBench"
 SPLIT_NAME = "test"
 DEFAULT_OUTPUT_CSV = "ma_proofbench_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/ma_proofbench/ma_proofbench_test.jsonl")
+DEFAULT_LOCAL_DATA_FILE = benchmark_data_path("ma_proofbench/ma_proofbench_test.jsonl")
 SUCCESS_GOLD = "lean_verifies"
 SUCCESS_PRED = "verified"
 FAILED_PRED = "failed"

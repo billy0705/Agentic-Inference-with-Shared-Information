@@ -92,6 +92,11 @@ export HF_TOKEN=<your-token>
 ```
 
 `HF_TOKEN` is required for gated GPQA access unless you provide a local `--data-file`.
+Set `BENCHMARK_DATA_DIR` to store downloaded benchmark caches outside the repo-relative `data/` directory, for example:
+
+```bash
+export BENCHMARK_DATA_DIR=/path/to/benchmark-data
+```
 
 ### Lean / Kimina
 

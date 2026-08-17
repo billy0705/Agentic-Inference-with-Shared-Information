@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
+
+
+def benchmark_data_path(relative_path: str) -> Path:
+    return Path(os.getenv("BENCHMARK_DATA_DIR", "data")) / relative_path
 
 
 def load_or_download_rows(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +20,8 @@ class ExperimentConfig:
     methods: tuple[str, ...]
     limit: int
     resume_run: Path | None
+    benchmark_data_dir: Path | None
+    output_dir: Path | None
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,18 @@ def _required_string(section: dict[str, Any], section_name: str, key: str) -> st
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"'{section_name}.{key}' must be a non-empty string")
     return value.strip()
+
+
+def _optional_path(section: dict[str, Any], section_name: str, key: str, base_path: Path) -> Path | None:
+    value = section.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"'{section_name}.{key}' must be a non-empty path or null")
+    path = Path(value.strip()).expanduser()
+    if not path.is_absolute():
+        path = base_path / path
+    return path.resolve()
 
 
 def load_helma_config(manager: Any) -> HelmaConfig:
@@ -98,30 +114,43 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
         raise ValueError("'expt.limit' must be a non-negative integer")
 
-    configured_resume_run = expt.get("resume_run")
-    if configured_resume_run is None:
-        resume_run = None
-    elif not isinstance(configured_resume_run, str) or not configured_resume_run.strip():
-        raise ValueError("'expt.resume_run' must be a non-empty path or null")
-    else:
-        resume_run = Path(configured_resume_run).expanduser()
-        if not resume_run.is_absolute():
-            resume_run = manager.path.parent / resume_run
-        resume_run = resume_run.resolve()
-        if len(normalized_benchmarks) != 1:
-            raise ValueError("'expt.resume_run' can only be used with one configured benchmark")
+    resume_run = _optional_path(expt, "expt", "resume_run", manager.path.parent)
+    if resume_run is not None and len(normalized_benchmarks) != 1:
+        raise ValueError("'expt.resume_run' can only be used with one configured benchmark")
+    benchmark_data_dir = _optional_path(expt, "expt", "benchmark_data_dir", manager.path.parent)
+    output_dir = _optional_path(expt, "expt", "output_dir", manager.path.parent)
+    if output_dir is None:
+        output_dir = (manager.path.parent / runner.DEFAULT_OUTPUT_DIR).resolve()
 
     return ExperimentConfig(
         benchmarks=normalized_benchmarks,
         methods=normalized_methods,
         limit=limit,
         resume_run=resume_run,
+        benchmark_data_dir=benchmark_data_dir,
+        output_dir=output_dir,
     )
+
+
+def environment_values(experiment: ExperimentConfig) -> dict[str, str]:
+    values = {}
+    if experiment.benchmark_data_dir is not None:
+        values["BENCHMARK_DATA_DIR"] = str(experiment.benchmark_data_dir)
+    return values
+
+
+def configure_environment(experiment: ExperimentConfig) -> None:
+    os.environ.update(environment_values(experiment))
+
+
+def shell_environment_exports(experiment: ExperimentConfig) -> tuple[str, ...]:
+    return tuple(f"export {key}={shlex.quote(value)}" for key, value in environment_values(experiment).items())
 
 
 async def run_experiments(config_path: str | Path) -> None:
     manager = get_config_manager()(config_path)
     experiment = load_experiment_config(manager)
+    configure_environment(experiment)
     methods = ",".join(experiment.methods)
 
     server = spinup_server(manager, timeout=float(manager.config.engine_ready_timeout))
@@ -141,6 +170,7 @@ async def run_experiments(config_path: str | Path) -> None:
                     methods,
                     "--limit",
                     str(experiment.limit),
+                    *(["--output-dir", str(experiment.output_dir)] if experiment.output_dir else []),
                     *(["--resume-run", str(experiment.resume_run)] if experiment.resume_run else []),
                 ]
             )
@@ -163,6 +193,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print tab-separated benchmark, methods, and limit rows for local execution.",
     )
+    output_mode.add_argument(
+        "--print-env",
+        action="store_true",
+        help="Print shell exports for environment values configured in YAML.",
+    )
     return parser
 
 
@@ -178,8 +213,13 @@ def main(argv: list[str] | None = None) -> None:
             experiment = load_experiment_config(manager)
             methods = ",".join(experiment.methods)
             for benchmark in experiment.benchmarks:
+                output_dir = str(experiment.output_dir) if experiment.output_dir else "-"
                 resume_run = str(experiment.resume_run) if experiment.resume_run else "-"
-                print(f"{benchmark}\t{methods}\t{experiment.limit}\t{resume_run}")
+                print(f"{benchmark}\t{methods}\t{experiment.limit}\t{output_dir}\t{resume_run}")
+            return
+        if args.print_env:
+            manager = get_config_manager()(args.config)
+            print("\n".join(shell_environment_exports(load_experiment_config(manager))))
             return
         asyncio.run(run_experiments(args.config))
     except (RuntimeError, ValueError) as exc:

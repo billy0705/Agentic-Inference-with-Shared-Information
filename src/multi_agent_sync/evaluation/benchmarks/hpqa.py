@@ -9,7 +9,7 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-from multi_agent_sync.evaluation.dataset_files import load_or_download_rows
+from multi_agent_sync.evaluation.dataset_files import benchmark_data_path, load_or_download_rows
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt
 
@@ -17,7 +17,7 @@ from multi_agent_sync.prompts import render_prompt
 DATASET_NAME = "hotpotqa/hotpot_qa"
 SUBSET_NAME = "distractor"
 DEFAULT_OUTPUT_CSV = "hotpotqa_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/hotpotqa/hotpotqa_distractor.jsonl")
+DEFAULT_LOCAL_DATA_FILE = benchmark_data_path("hotpotqa/hotpotqa_distractor.jsonl")
 ANSWER_STRIP_RE = re.compile(r"\b(a|an|the)\b", flags=re.IGNORECASE)
 NON_WORD_RE = re.compile(r"[^\w\s]")
 

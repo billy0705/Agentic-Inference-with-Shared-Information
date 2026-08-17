@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
+from multi_agent_sync.evaluation.dataset_files import benchmark_data_path
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt
 
@@ -15,7 +16,7 @@ from multi_agent_sync.prompts import render_prompt
 TASK_PREFIX = "For each of the following (in-progress) chess games, please complete the notation for the last shown move by filling in the destination square:"
 OUTPUT_REGEX = "[a-h][1-8]"
 DEFAULT_OUTPUT_CSV = "chess_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/chess/synthetic_short_task.json")
+DEFAULT_LOCAL_DATA_FILE = benchmark_data_path("chess/synthetic_short_task.json")
 DEFAULT_DOWNLOAD_URL = (
     "https://raw.githubusercontent.com/google/BIG-bench/main/"
     "bigbench/benchmark_tasks/chess_state_tracking/synthetic_short/task.json"

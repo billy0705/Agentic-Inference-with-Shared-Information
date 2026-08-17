@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from multi_agent_sync.evaluation.dataset_files import load_or_download_rows
+from multi_agent_sync.evaluation.dataset_files import benchmark_data_path, load_or_download_rows
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt
 
@@ -16,7 +16,7 @@ from multi_agent_sync.prompts import render_prompt
 DATASET_NAME = "Idavidrein/gpqa"
 SUBSET_NAME = "gpqa_diamond"
 DEFAULT_OUTPUT_CSV = "gpqa_diamond_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/gpqa/gpqa_diamond.csv")
+DEFAULT_LOCAL_DATA_FILE = benchmark_data_path("gpqa/gpqa_diamond.csv")
 
 
 def build_benchmark() -> BenchmarkSpec:

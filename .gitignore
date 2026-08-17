@@ -17,3 +17,6 @@ vendor/
 logs/
 figures*
 vllm-server.log
+server.yaml
+*.out
+hub/
