@@ -4,6 +4,8 @@ vllm:
   port: 8000
   log_path: vllm-server.log
   engine_ready_timeout: 1800
+  max_model_len: 21000
+  gpu_memory_utilization: 0.95
 
 helma:
   job_name: gpt-oss
@@ -20,6 +22,10 @@ expt:
     - multiagent_dynamic_streaming
   limit: 1
   repeats: 1
+  max_steps: 3
+  single_agent_min_steps: 3
+  single_agent_max_steps: 7
+  debate_rounds: 2
   benchmark_data_dir: data
   output_dir: output
   resume_run: null

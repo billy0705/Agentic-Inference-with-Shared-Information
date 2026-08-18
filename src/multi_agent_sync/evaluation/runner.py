@@ -286,7 +286,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
     }
     if method == "multiagent_debate":
         settings["debate_agents"] = DEBATE_AGENT_COUNT
-        settings["debate_rounds"] = DEBATE_ROUNDS
+        settings["debate_rounds"] = getattr(args, "debate_rounds", DEBATE_ROUNDS)
     if method == "majority_vote":
         settings["majority_vote_agents"] = MAJORITY_VOTE_AGENT_COUNT
     return settings

@@ -7,13 +7,23 @@ from multi_agent_sync import generate
 
 
 class ConfigManagerStub:
-    def __init__(self, expt=None, helma=None):
-        self.sections = {"expt": expt or {}, "helma": helma or {}}
+    def __init__(self, expt=None, helma=None, vllm=None):
+        self.sections = {"expt": expt or {}, "helma": helma or {}, "vllm": vllm or {}}
         self.config = SimpleNamespace(engine_ready_timeout=1800)
         self.path = Path("/project/server.yaml")
 
     def section(self, name):
         return self.sections[name]
+
+
+def test_server_ready_timeout_reads_vllm_section_with_default():
+    assert generate.server_ready_timeout(ConfigManagerStub()) == 1800.0
+    assert generate.server_ready_timeout(ConfigManagerStub(vllm={"engine_ready_timeout": 42})) == 42.0
+
+
+def test_server_ready_timeout_rejects_invalid_value():
+    with pytest.raises(ValueError, match="vllm.engine_ready_timeout"):
+        generate.server_ready_timeout(ConfigManagerStub(vllm={"engine_ready_timeout": 0}))
 
 
 def test_load_helma_config_builds_slurm_arguments():
@@ -67,6 +77,10 @@ def test_load_experiment_config_validates_and_deduplicates_lists():
     assert config.methods == ("multiagent_dynamic_streaming", "plain_llm")
     assert config.limit == 2
     assert config.repeats == 1
+    assert config.max_steps is None
+    assert config.single_agent_min_steps is None
+    assert config.single_agent_max_steps is None
+    assert config.debate_rounds is None
     assert config.resume_run is None
     assert config.benchmark_data_dir is None
     assert config.output_dir == Path("/project/output")
@@ -137,6 +151,16 @@ def test_load_experiment_config_resolves_resume_run_relative_to_yaml():
         ({"benchmark": ["gsm8k"], "methods": ["unknown"]}, "Unknown method"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "limit": -1}, "expt.limit"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "repeats": 0}, "expt.repeats"),
+        ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "max_steps": 0}, "expt.max_steps"),
+        (
+            {
+                "benchmark": ["gsm8k"],
+                "methods": ["plain_llm"],
+                "single_agent_min_steps": 6,
+                "single_agent_max_steps": 5,
+            },
+            "single_agent_min_steps",
+        ),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "benchmark_data_dir": ""}, "expt.benchmark_data_dir"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "output_dir": ""}, "expt.output_dir"),
         (
@@ -159,6 +183,10 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
             "methods": ["multiagent_dynamic_streaming", "plain_llm"],
             "limit": 1,
             "repeats": 2,
+            "max_steps": 5,
+            "single_agent_min_steps": 5,
+            "single_agent_max_steps": 5,
+            "debate_rounds": 5,
         }
     )
 
@@ -171,7 +199,20 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
         return Server()
 
     async def fake_run_evaluation(args):
-        events.append(("run", args.benchmark, args.methods, args.limit, args.output_dir, args.resume_run))
+        events.append(
+            (
+                "run",
+                args.benchmark,
+                args.methods,
+                args.limit,
+                args.max_steps,
+                args.single_agent_min_steps,
+                args.single_agent_max_steps,
+                args.debate_rounds,
+                args.output_dir,
+                args.resume_run,
+            )
+        )
         return []
 
     monkeypatch.setattr(generate, "get_config_manager", lambda: lambda path: manager)
@@ -182,12 +223,34 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
 
     assert events == [
         ("start", manager, 1800.0),
-        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, "/project/output", None),
-        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, "/project/output", None),
-        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, "/project/output", None),
-        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, "/project/output", None),
+        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, 5, 5, 5, 5, "/project/output", None),
+        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, 5, 5, 5, 5, "/project/output", None),
+        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, 5, 5, 5, 5, "/project/output", None),
+        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, 5, 5, 5, 5, "/project/output", None),
         ("stop",),
     ]
+
+
+def test_print_evaluation_matrix_includes_optional_runtime_args(monkeypatch, capsys):
+    manager = ConfigManagerStub(
+        {
+            "benchmark": ["gsm8k"],
+            "methods": ["plain_llm"],
+            "limit": 1,
+            "max_steps": 5,
+            "single_agent_min_steps": 5,
+            "single_agent_max_steps": 5,
+            "debate_rounds": 5,
+        }
+    )
+
+    monkeypatch.setattr(generate, "get_config_manager", lambda: lambda path: manager)
+
+    generate.main(["server.yaml", "--print-evaluation-matrix"])
+
+    assert capsys.readouterr().out == (
+        "gsm8k\tplain_llm\t1\t/project/output\t-\t5\t5\t5\t5\n"
+    )
 
 
 @pytest.mark.asyncio

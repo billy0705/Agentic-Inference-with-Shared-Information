@@ -35,7 +35,9 @@ async def run_multiagent_debate(prompt: str, llm: Any, args: argparse.Namespace)
     }
     rounds: list[dict[str, Any]] = []
 
-    for round_index in range(DEBATE_ROUNDS):
+    debate_rounds = int(getattr(args, "debate_rounds", DEBATE_ROUNDS) or DEBATE_ROUNDS)
+
+    for round_index in range(debate_rounds):
         round_trace: dict[str, Any] = {"round": round_index + 1, "agent_responses": []}
         for agent_index, agent_context in enumerate(agent_contexts):
             if round_index != 0:
@@ -95,7 +97,7 @@ async def run_multiagent_debate(prompt: str, llm: Any, args: argparse.Namespace)
         "prompt": prompt,
         "prompt_style": prompt_style,
         "agents": DEBATE_AGENT_COUNT,
-        "rounds": DEBATE_ROUNDS,
+        "rounds": debate_rounds,
         "agent_outputs": agent_outputs,
         "agent_traces": agent_traces,
         "agent_contexts": agent_contexts,
