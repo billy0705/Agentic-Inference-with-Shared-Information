@@ -15,6 +15,7 @@ DEBATE_ROUNDS = 3
 async def run_multiagent_debate(prompt: str, llm: Any, args: argparse.Namespace) -> tuple[str, int, dict[str, Any]]:
     benchmark_name = str(getattr(args, "benchmark", "") or "")
     prompt_style = debate_prompt_style(benchmark_name)
+    debate_rounds = resolve_debate_rounds(args)
     agent_contexts = [
         [{"role": "user", "content": build_debate_initial_prompt(prompt, prompt_style)}]
         for _ in range(DEBATE_AGENT_COUNT)
@@ -34,8 +35,6 @@ async def run_multiagent_debate(prompt: str, llm: Any, args: argparse.Namespace)
         for agent_index, agent_name in enumerate(agent_names)
     }
     rounds: list[dict[str, Any]] = []
-
-    debate_rounds = int(getattr(args, "debate_rounds", DEBATE_ROUNDS) or DEBATE_ROUNDS)
 
     for round_index in range(debate_rounds):
         round_trace: dict[str, Any] = {"round": round_index + 1, "agent_responses": []}
@@ -107,3 +106,11 @@ async def run_multiagent_debate(prompt: str, llm: Any, args: argparse.Namespace)
         "majority_answer": majority_answer,
         "raw_output": raw_output,
     }
+
+
+def resolve_debate_rounds(args: argparse.Namespace) -> int:
+    try:
+        rounds = int(getattr(args, "debate_rounds", DEBATE_ROUNDS))
+    except (TypeError, ValueError):
+        return DEBATE_ROUNDS
+    return max(rounds, 1)

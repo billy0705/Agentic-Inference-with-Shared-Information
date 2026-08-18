@@ -240,6 +240,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum inference steps for single_agent and majority_vote single-agent voters.",
     )
     parser.add_argument(
+        "--debate-rounds",
+        type=int,
+        default=3,
+        help="Number of rounds for multiagent_debate. Defaults to 3.",
+    )
+    parser.add_argument(
         "--total-runtime-timeout",
         type=float,
         default=1800.0,

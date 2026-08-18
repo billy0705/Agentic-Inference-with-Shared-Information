@@ -137,6 +137,14 @@ def test_evaluation_parser_sets_dynamic_orchestration_round_default():
     assert args.max_orchestrator_rounds == 3
 
 
+def test_evaluation_parser_sets_debate_round_defaults_and_override():
+    default_args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
+    custom_args = evaluation.build_parser().parse_args(["--benchmark", "gpqa", "--debate-rounds", "5"])
+
+    assert default_args.debate_rounds == 3
+    assert custom_args.debate_rounds == 5
+
+
 def test_evaluation_parser_accepts_resume_run():
     args = evaluation.build_parser().parse_args(["--benchmark", "chess", "--resume-run", "output/chess/model/run-id"])
 
@@ -1238,6 +1246,7 @@ async def test_multiagent_debate_uses_three_agents_two_rounds_and_selects_final_
     )
     args = argparse.Namespace(
         benchmark="mmlu_pro",
+        debate_rounds=2,
         answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
     )
 
@@ -1266,6 +1275,29 @@ async def test_multiagent_debate_uses_three_agents_two_rounds_and_selects_final_
 
 
 @pytest.mark.asyncio
+async def test_multiagent_debate_respects_configured_debate_rounds():
+    llm = UsageLLM(
+        [
+            UsageResponse(f"Agent {agent} round {round_index} says Final Answer: A")
+            for round_index in range(1, 5)
+            for agent in range(1, 4)
+        ]
+    )
+    args = argparse.Namespace(
+        benchmark="mmlu_pro",
+        debate_rounds=4,
+        answer_extractor=lambda text: text.rsplit("Final Answer:", 1)[-1].strip()[:1] if "Final Answer:" in text else None,
+    )
+
+    result = await runner.run_method("multiagent_debate", "Question with options.", llm, args)
+
+    assert len(llm.prompts) == 12
+    assert result.trace["rounds"] == 4
+    assert [step["step"] for step in result.trace["agent_traces"]["DebateAgent1"]["steps"]] == [1, 2, 3, 4]
+    assert result.trace["agent_outputs"]["DebateAgent3"] == "Agent 3 round 4 says Final Answer: A"
+
+
+@pytest.mark.asyncio
 async def test_multiagent_debate_math_prompt_matches_upstream_shape():
     llm = UsageLLM(
         [
@@ -1279,6 +1311,7 @@ async def test_multiagent_debate_math_prompt_matches_upstream_shape():
     )
     args = argparse.Namespace(
         benchmark="gsm8k",
+        debate_rounds=2,
         answer_extractor=gsm8k.extract_answer,
     )
 
