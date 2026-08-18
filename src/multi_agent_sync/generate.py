@@ -19,6 +19,7 @@ class ExperimentConfig:
     benchmarks: tuple[str, ...]
     methods: tuple[str, ...]
     limit: int
+    repeats: int
     resume_run: Path | None
     benchmark_data_dir: Path | None
     output_dir: Path | None
@@ -114,6 +115,10 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
         raise ValueError("'expt.limit' must be a non-negative integer")
 
+    repeats = expt.get("repeats", 1)
+    if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats <= 0:
+        raise ValueError("'expt.repeats' must be a positive integer")
+
     resume_run = _optional_path(expt, "expt", "resume_run", manager.path.parent)
     if resume_run is not None and len(normalized_benchmarks) != 1:
         raise ValueError("'expt.resume_run' can only be used with one configured benchmark")
@@ -126,6 +131,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         benchmarks=normalized_benchmarks,
         methods=normalized_methods,
         limit=limit,
+        repeats=repeats,
         resume_run=resume_run,
         benchmark_data_dir=benchmark_data_dir,
         output_dir=output_dir,
@@ -156,25 +162,26 @@ async def run_experiments(config_path: str | Path) -> None:
     server = spinup_server(manager, timeout=float(manager.config.engine_ready_timeout))
     try:
         for index, benchmark in enumerate(experiment.benchmarks, start=1):
-            print(
-                f"Running benchmark {index}/{len(experiment.benchmarks)}: {benchmark} "
-                f"with {methods}",
-                file=sys.stderr,
-                flush=True,
-            )
-            args = evaluation.build_parser().parse_args(
-                [
-                    "--benchmark",
-                    benchmark,
-                    "--methods",
-                    methods,
-                    "--limit",
-                    str(experiment.limit),
-                    *(["--output-dir", str(experiment.output_dir)] if experiment.output_dir else []),
-                    *(["--resume-run", str(experiment.resume_run)] if experiment.resume_run else []),
-                ]
-            )
-            await evaluation.run_evaluation(args)
+            for repeat in range(1, experiment.repeats + 1):
+                print(
+                    f"Running benchmark {index}/{len(experiment.benchmarks)} "
+                    f"repeat {repeat}/{experiment.repeats}: {benchmark} with {methods}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                args = evaluation.build_parser().parse_args(
+                    [
+                        "--benchmark",
+                        benchmark,
+                        "--methods",
+                        methods,
+                        "--limit",
+                        str(experiment.limit),
+                        *(["--output-dir", str(experiment.output_dir)] if experiment.output_dir else []),
+                        *(["--resume-run", str(experiment.resume_run)] if experiment.resume_run else []),
+                    ]
+                )
+                await evaluation.run_evaluation(args)
     finally:
         server.stop()
 
@@ -213,9 +220,10 @@ def main(argv: list[str] | None = None) -> None:
             experiment = load_experiment_config(manager)
             methods = ",".join(experiment.methods)
             for benchmark in experiment.benchmarks:
-                output_dir = str(experiment.output_dir) if experiment.output_dir else "-"
-                resume_run = str(experiment.resume_run) if experiment.resume_run else "-"
-                print(f"{benchmark}\t{methods}\t{experiment.limit}\t{output_dir}\t{resume_run}")
+                for _ in range(experiment.repeats):
+                    output_dir = str(experiment.output_dir) if experiment.output_dir else "-"
+                    resume_run = str(experiment.resume_run) if experiment.resume_run else "-"
+                    print(f"{benchmark}\t{methods}\t{experiment.limit}\t{output_dir}\t{resume_run}")
             return
         if args.print_env:
             manager = get_config_manager()(args.config)

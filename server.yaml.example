@@ -19,6 +19,7 @@ expt:
   methods:
     - multiagent_dynamic_streaming
   limit: 1
+  repeats: 1
   benchmark_data_dir: data
   output_dir: output
   resume_run: null
