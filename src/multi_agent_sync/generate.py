@@ -24,6 +24,7 @@ class ExperimentConfig:
     single_agent_min_steps: int | None
     single_agent_max_steps: int | None
     debate_rounds: int | None
+    max_tokens: int | None
     resume_run: Path | None
     benchmark_data_dir: Path | None
     output_dir: Path | None
@@ -136,6 +137,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
     single_agent_min_steps = _optional_positive_int(expt, "expt", "single_agent_min_steps")
     single_agent_max_steps = _optional_positive_int(expt, "expt", "single_agent_max_steps")
     debate_rounds = _optional_positive_int(expt, "expt", "debate_rounds")
+    max_tokens = _optional_positive_int(expt, "expt", "max_tokens")
     if (
         single_agent_min_steps is not None
         and single_agent_max_steps is not None
@@ -160,6 +162,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         single_agent_min_steps=single_agent_min_steps,
         single_agent_max_steps=single_agent_max_steps,
         debate_rounds=debate_rounds,
+        max_tokens=max_tokens,
         resume_run=resume_run,
         benchmark_data_dir=benchmark_data_dir,
         output_dir=output_dir,
@@ -229,6 +232,11 @@ async def run_experiments(config_path: str | Path) -> None:
                             if experiment.debate_rounds is not None
                             else []
                         ),
+                        *(
+                            ["--max-tokens", str(experiment.max_tokens)]
+                            if experiment.max_tokens is not None
+                            else []
+                        ),
                         *(["--output-dir", str(experiment.output_dir)] if experiment.output_dir else []),
                         *(["--resume-run", str(experiment.resume_run)] if experiment.resume_run else []),
                     ]
@@ -283,9 +291,10 @@ def main(argv: list[str] | None = None) -> None:
                         str(experiment.single_agent_max_steps) if experiment.single_agent_max_steps is not None else "-"
                     )
                     debate_rounds = str(experiment.debate_rounds) if experiment.debate_rounds is not None else "-"
+                    max_tokens = str(experiment.max_tokens) if experiment.max_tokens is not None else "-"
                     print(
                         f"{benchmark}\t{methods}\t{experiment.limit}\t{output_dir}\t{resume_run}\t"
-                        f"{max_steps}\t{single_agent_min_steps}\t{single_agent_max_steps}\t{debate_rounds}"
+                        f"{max_steps}\t{single_agent_min_steps}\t{single_agent_max_steps}\t{debate_rounds}\t{max_tokens}"
                     )
             return
         if args.print_env:

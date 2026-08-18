@@ -696,7 +696,7 @@ def test_json_trace_saving_is_enabled_by_default():
 
 
 @pytest.mark.asyncio
-async def test_run_evaluation_sets_max_tokens_to_16384(monkeypatch, tmp_path):
+async def test_run_evaluation_uses_configured_max_tokens(monkeypatch, tmp_path):
     captured_llm_kwargs = {}
 
     def fake_get_llm(model=None, openai=True, max_tokens=None):
@@ -740,12 +740,21 @@ async def test_run_evaluation_sets_max_tokens_to_16384(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "openai/gpt-oss-120b")
 
     args = evaluation.build_parser().parse_args(
-        ["--benchmark", "fake", "--methods", "plain_llm", "--output", str(tmp_path / "results.csv")]
+        [
+            "--benchmark",
+            "fake",
+            "--methods",
+            "plain_llm",
+            "--output",
+            str(tmp_path / "results.csv"),
+            "--max-tokens",
+            "12000",
+        ]
     )
 
     await evaluation.run_evaluation(args)
 
-    assert captured_llm_kwargs == {"model": "openai/gpt-oss-120b", "openai": True, "max_tokens": 16384}
+    assert captured_llm_kwargs == {"model": "openai/gpt-oss-120b", "openai": True, "max_tokens": 12000}
 
 
 @pytest.mark.asyncio

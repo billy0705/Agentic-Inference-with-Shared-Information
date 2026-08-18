@@ -252,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Maximum runtime per multiagent subagent, in seconds. Defaults to {DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS:g}.",
     )
     parser.add_argument("--synthesis-timeout", type=float, default=60.0, help="Maximum summarizer runtime, in seconds.")
+    parser.add_argument("--max-tokens", type=int, default=EVALUATION_MAX_TOKENS, help="Maximum completion tokens per LLM response.")
     parser.add_argument("--seed", type=int, default=RANDOM_SEED, help="Random seed for answer shuffling.")
     add_spinup_server_arguments(parser)
     return parser
@@ -275,7 +276,7 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
     rng = random.Random(args.seed)
     resolved_model = runner.resolve_model_name(args)
     setattr(args, "resolved_model", resolved_model)
-    llm = get_llm(resolved_model, openai=not getattr(args, "local_model", False), max_tokens=EVALUATION_MAX_TOKENS)
+    llm = get_llm(resolved_model, openai=not getattr(args, "local_model", False), max_tokens=args.max_tokens)
     resume_root = Path(args.resume_run) if getattr(args, "resume_run", None) else None
     run_id = resume_root.name if resume_root is not None else runner.create_run_id()
     output_path = resolve_resume_output_path(resume_root, benchmark, args, run_id)

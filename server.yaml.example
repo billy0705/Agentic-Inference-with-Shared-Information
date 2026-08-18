@@ -26,6 +26,7 @@ expt:
   single_agent_min_steps: 3
   single_agent_max_steps: 7
   debate_rounds: 2
+  max_tokens: 16384
   benchmark_data_dir: data
   output_dir: output
   resume_run: null
