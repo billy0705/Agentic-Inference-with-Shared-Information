@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from multi_agent_sync.evaluation.dataset_files import load_or_download_rows
+from multi_agent_sync.evaluation.dataset_files import benchmark_data_path, load_or_download_rows
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt
 
@@ -16,7 +16,7 @@ from multi_agent_sync.prompts import render_prompt
 DATASET_NAME = "TIGER-Lab/MMLU-Pro"
 SPLIT_NAME = "test"
 DEFAULT_OUTPUT_CSV = "mmlu_pro_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/mmlu_pro/mmlu_pro_test.jsonl")
+DEFAULT_LOCAL_DATA_FILE = benchmark_data_path("mmlu_pro/mmlu_pro_test.jsonl")
 LABELS = list("ABCDEFGHIJ")
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from multi_agent_sync.evaluation.benchmarks import ma_proofbench
-from multi_agent_sync.evaluation.dataset_files import save_rows
+from multi_agent_sync.evaluation.dataset_files import benchmark_data_path, save_rows
 from multi_agent_sync.evaluation.lean_feedback import LeanVerifierTool
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec, BenchmarkWorkflowConfig
 from multi_agent_sync.prompts import render_prompt
@@ -38,7 +38,7 @@ RAW_FILENAMES = {
     "zh-hard": "OlymMATH-ZH-HARD.jsonl",
     "lean": "OlymMATH-LEAN.jsonl",
 }
-DEFAULT_LOCAL_DATA_DIR = Path("data/OlymMATH")
+DEFAULT_LOCAL_DATA_DIR = benchmark_data_path("OlymMATH")
 SUCCESS_GOLD = "lean_verifies"
 SUCCESS_PRED = "verified"
 FAILED_PRED = "failed"

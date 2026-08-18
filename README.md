@@ -41,6 +41,23 @@ uv run python -m pytest --version
 
 That command will create the environment from `pyproject.toml` / `uv.lock` before running.
 
+### vLLM Workflows
+
+- **Manual server:** run `uv sync`, start the server separately, then use
+  `uv run evaluation ...` as usual. No `vllm-server` repository access is needed.
+- **Managed server:** users with SSH access to the private launcher run:
+
+```bash
+uv sync --extra vllm-server
+./generate.sh server.yaml
+```
+
+`server.yaml` contains `vllm`, `helma`, and `expt` settings. `generate.sh` runs
+normal evaluations locally and submits itself with `sbatch` on Helma. Plain
+`uv sync` excludes the private launcher; `--all-extras` requires SSH access.
+Set `expt.resume_run` to an existing run directory to pass `--resume-run` for a
+single benchmark; omit it or use `null` to start fresh.
+
 ## Environment Variables
 
 ### OpenAI-compatible provider
@@ -75,6 +92,11 @@ export HF_TOKEN=<your-token>
 ```
 
 `HF_TOKEN` is required for gated GPQA access unless you provide a local `--data-file`.
+Set `BENCHMARK_DATA_DIR` to store downloaded benchmark caches outside the repo-relative `data/` directory, for example:
+
+```bash
+export BENCHMARK_DATA_DIR=/path/to/benchmark-data
+```
 
 ### Lean / Kimina
 
@@ -98,6 +120,21 @@ Equivalent console script:
 
 ```bash
 uv run multi-agent-sync "Build a prototype chess website"
+```
+
+Provide a server config to start vLLM automatically, run the task, and stop
+vLLM afterward:
+
+```bash
+uv run multi-agent-sync \
+  --server-config server.yaml \
+  "Build a prototype chess website"
+```
+
+If the config is named `server.yaml` in the current directory, the shorthand is:
+
+```bash
+uv run multi-agent-sync --spinup-server "Build a prototype chess website"
 ```
 
 Use a specific OpenAI-compatible model:
@@ -140,6 +177,8 @@ Useful CLI flags:
 - `--runs-dir <path>`: where CLI run artifacts are written
 - `--no-color`: disable colored terminal output
 - `--docker-workspace`: enable Docker bash workspace tools
+- `--server-config <path>`: start vLLM from this launcher YAML and stop it afterward
+- `--spinup-server`: start vLLM from `./server.yaml`
 
 ## Run Evaluations
 
@@ -180,6 +219,16 @@ Run a small GPQA evaluation:
 uv run evaluation \
   --benchmark gpqa \
   --methods multiagent_streaming,multiagent_no_streaming,plain_llm \
+  --limit 10
+```
+
+Start and manage vLLM for one evaluation:
+
+```bash
+uv run evaluation \
+  --server-config server.yaml \
+  --benchmark gpqa \
+  --methods plain_llm \
   --limit 10
 ```
 

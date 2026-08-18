@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from multi_agent_sync.evaluation.dataset_files import save_rows
+from multi_agent_sync.evaluation.dataset_files import benchmark_data_path, save_rows
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec, BenchmarkWorkflowConfig
 from multi_agent_sync.prompts import render_prompt
 
@@ -17,7 +17,7 @@ from multi_agent_sync.prompts import render_prompt
 DATASET_NAME = "SWE-bench/SWE-bench_Verified"
 SPLIT_NAME = "test"
 DEFAULT_OUTPUT_CSV = "swe_bench_verified_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/swe_bench_verified/test.jsonl")
+DEFAULT_LOCAL_DATA_FILE = benchmark_data_path("swe_bench_verified/test.jsonl")
 SUCCESS_GOLD = "patch_required"
 PATCH_PRODUCED = "patch_produced"
 NO_PATCH = "no_patch"

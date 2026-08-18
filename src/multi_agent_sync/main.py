@@ -10,6 +10,12 @@ from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
 from multi_agent_sync.artifacts import build_token_usage_by_step, format_token_usage_by_step, save_run_artifacts
 from multi_agent_sync.graph.workflow import run_workflow
 from multi_agent_sync.llm import get_llm
+from multi_agent_sync.vllm_server import (
+    add_spinup_server_arguments,
+    resolve_server_config,
+    should_spinup_server,
+    spinup_server,
+)
 from multi_agent_sync.workspace.docker import DockerWorkspace
 
 
@@ -71,17 +77,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=12000,
         help="Maximum stdout/stderr characters retained per Docker bash command.",
     )
+    add_spinup_server_arguments(parser)
     return parser
 
 
 async def async_main(args: argparse.Namespace) -> None:
-    if args.model:
-        os.environ["OPENAI_MODEL"] = args.model
-
-    task = " ".join(args.task)
-    llm = get_llm(args.model, openai=True)
+    vllm_server = None
     docker_workspace = None
     try:
+        if should_spinup_server(args):
+            vllm_server = spinup_server(resolve_server_config(args), timeout=args.server_startup_timeout)
+            args.model = os.environ["OPENAI_MODEL"]
+
+        if args.model:
+            os.environ["OPENAI_MODEL"] = args.model
+
+        task = " ".join(args.task)
+        llm = get_llm(args.model, openai=True)
         if args.docker_workspace:
             docker_workspace = await DockerWorkspace.create(
                 image=args.workspace_image,
@@ -113,6 +125,8 @@ async def async_main(args: argparse.Namespace) -> None:
     finally:
         if docker_workspace is not None:
             await docker_workspace.cleanup()
+        if vllm_server is not None:
+            vllm_server.stop()
 
 
 def main() -> None:

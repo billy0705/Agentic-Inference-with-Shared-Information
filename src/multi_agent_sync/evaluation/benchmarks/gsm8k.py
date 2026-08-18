@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from multi_agent_sync.evaluation.dataset_files import load_or_download_rows
+from multi_agent_sync.evaluation.dataset_files import benchmark_data_path, load_or_download_rows
 from multi_agent_sync.evaluation.types import BenchmarkSpec
 from multi_agent_sync.prompts import render_prompt
 
@@ -18,7 +18,7 @@ DATASET_NAME = "openai/gsm8k"
 SUBSET_NAME = "main"
 SPLIT_NAME = "test"
 DEFAULT_OUTPUT_CSV = "gsm8k_results.csv"
-DEFAULT_LOCAL_DATA_FILE = Path("data/gsm8k/gsm8k_test.jsonl")
+DEFAULT_LOCAL_DATA_FILE = benchmark_data_path("gsm8k/gsm8k_test.jsonl")
 NUMBER_PATTERN = r"(?:[-+]?\s*[$€£]?\s*(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+))"
 
 
