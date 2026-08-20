@@ -54,6 +54,7 @@ async def run_dynamic_orchestration_workflow(
     docker_workspace: Any | None = None,
     feedback_tool: Any | None = None,
     final_guard_tool: Any | None = None,
+    think_mode: bool = True,
 ) -> dict[str, Any]:
     model = llm or get_llm()
     streamer = InMemoryEventStreamer()
@@ -90,6 +91,7 @@ async def run_dynamic_orchestration_workflow(
             agent_last_summaries=agent_last_summaries,
             candidate_aggregation=candidate_aggregation,
             force_final=round_index == max_rounds and bool(rounds),
+            think_mode=think_mode,
         )
         decision, raw_response, token_usage, timed_out = await request_orchestration_decision(
             model,
@@ -140,6 +142,7 @@ async def run_dynamic_orchestration_workflow(
             docker_workspace=docker_workspace,
             feedback_tool=feedback_tool,
             final_guard_tool=final_guard_tool,
+            think_mode=think_mode,
         )
         round_assignments = round_state["assignments"]
         round_outputs = round_state["agent_outputs"]
@@ -217,6 +220,7 @@ async def run_dynamic_orchestration_workflow(
         "selected_agents": [agent for round_trace in rounds for agent in round_trace.get("selected_agents", [])],
         "orchestrator_rounds": rounds,
         "dynamic_orchestration_trace": trace,
+        "think_mode": think_mode,
         "final_answer": final_answer,
     }
 
@@ -230,9 +234,11 @@ def build_dynamic_orchestration_prompt(
     agent_last_summaries: dict[str, str],
     candidate_aggregation: dict[str, Any],
     force_final: bool,
+    think_mode: bool = True,
 ) -> str:
     return render_prompt(
         "orchestrator/dynamic_orchestration_step.j2",
+        think_mode=think_mode,
         task=task,
         round_index=round_index,
         max_rounds=max_rounds,
@@ -353,6 +359,7 @@ async def run_dynamic_agent_round(
     docker_workspace: Any | None,
     feedback_tool: Any | None,
     final_guard_tool: Any | None,
+    think_mode: bool = True,
 ) -> dict[str, Any]:
     trace_logger = TraceLogger()
     plan = {
@@ -386,6 +393,7 @@ async def run_dynamic_agent_round(
             "assignment": {**assignment, "orchestration_round": round_index},
             "trace_logger": trace_logger,
             "max_steps": int(assignment.get("max_steps", max_steps_per_agent)),
+            "think_mode": think_mode,
             "enable_message_streaming": enable_agent_message_streaming,
             "workspace_access": assignment.get("workspace_access", "none"),
         }

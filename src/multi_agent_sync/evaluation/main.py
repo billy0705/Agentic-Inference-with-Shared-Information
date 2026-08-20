@@ -227,6 +227,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow multiagent subagents to stop before --max-steps when they return FINAL. Disabled by default.",
     )
     parser.add_argument(
+        "--think-mode",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prefix orchestrator, agent step, and summarizer prompts with <|think|>. Enabled by default.",
+    )
+    parser.add_argument(
         "--single-agent-min-steps",
         type=int,
         default=3,

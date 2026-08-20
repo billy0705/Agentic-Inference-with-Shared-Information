@@ -212,6 +212,16 @@ class SummarizerTraceLLM(FakeLLM):
         return await super().ainvoke(prompt)
 
 
+class PromptCaptureLLM(SummarizerTraceLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        self.prompts.append(prompt)
+        return await super().ainvoke(prompt)
+
+
 class SummarizerLastSummaryLLM:
     def __init__(self) -> None:
         self.agent_prompt_counts: dict[str, int] = {}
@@ -753,6 +763,7 @@ async def test_agent_traces_include_prompt_response_parsed_output_and_published_
     assert solver_trace["assignment"]["agent_name"] == "SolverAgent"
     assert step["agent_name"] == "SolverAgent"
     assert step["step"] == 1
+    assert step["prompt"].startswith("<|think|>\n")
     assert "[GLOBAL STATIC PREFIX]\nCalculate 2 + 2." in step["prompt"]
     assert "Agent name:\nSolverAgent" in step["prompt"]
     assert "[STEP DYNAMIC SUFFIX]" in step["prompt"]
@@ -777,6 +788,7 @@ async def test_summarize_outputs_summarizer_prompt_and_response_are_traced():
 
     assert state["final_answer"] == "Final Answer: summarized-agent-output"
     assert len(llm.summarizer_prompts) == 1
+    assert llm.summarizer_prompts[0].startswith("<|think|>\n")
     assert "You are the Summarizer" in llm.summarizer_prompts[0]
     assert "Do not solve the task again." in llm.summarizer_prompts[0]
     assert "choose and summarize the best-supported answer from the agents' last summaries" in llm.summarizer_prompts[0]
@@ -788,6 +800,31 @@ async def test_summarize_outputs_summarizer_prompt_and_response_are_traced():
     assert state["synthesizer_trace"]["raw_response"] == "Final Answer: summarized-agent-output"
     assert state["synthesizer_trace"]["final_answer"] == "Final Answer: summarized-agent-output"
     assert state["synthesizer_trace"]["timed_out"] is False
+
+
+@pytest.mark.asyncio
+async def test_workflow_can_disable_think_mode_for_runtime_prompts():
+    llm = PromptCaptureLLM()
+
+    state = await run_workflow(
+        task="Calculate 2 + 2.",
+        llm=llm,
+        max_steps_per_agent=1,
+        total_runtime_timeout=5,
+        stream_to_console=False,
+        synthesizer_mode="summarize_outputs",
+        think_mode=False,
+    )
+
+    solver_prompt = state["agent_traces"]["SolverAgent"]["steps"][0]["prompt"]
+    summarizer_prompt = state["synthesizer_trace"]["prompt"]
+
+    assert state["think_mode"] is False
+    assert "You are the model-based orchestrator" in llm.prompts[0]
+    assert not llm.prompts[0].startswith("<|think|>")
+    assert not solver_prompt.startswith("<|think|>")
+    assert not summarizer_prompt.startswith("<|think|>")
+    assert not any(prompt.startswith("<|think|>") for prompt in llm.summarizer_prompts)
 
 
 @pytest.mark.asyncio

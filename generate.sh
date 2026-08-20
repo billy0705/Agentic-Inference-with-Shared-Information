@@ -35,7 +35,7 @@ if command -v sbatch >/dev/null 2>&1 && [[ "${RUN_LOCAL:-0}" != "1" ]]; then
 fi
 
 evaluation_matrix="$(uv run python -m multi_agent_sync.generate "$CONFIG_PATH" --print-evaluation-matrix)"
-while IFS=$'\t' read -r benchmark methods limit output_dir resume_run max_steps single_agent_min_steps single_agent_max_steps debate_rounds max_tokens; do
+while IFS=$'\t' read -r benchmark methods limit output_dir resume_run max_steps think_mode single_agent_min_steps single_agent_max_steps debate_rounds max_tokens; do
   evaluation_args=(
     --benchmark "$benchmark"
     --methods "$methods"
@@ -44,6 +44,11 @@ while IFS=$'\t' read -r benchmark methods limit output_dir resume_run max_steps 
   )
   if [[ "${max_steps:-}" != "-" && -n "${max_steps:-}" ]]; then
     evaluation_args+=(--max-steps "$max_steps")
+  fi
+  if [[ "${think_mode:-}" == "true" ]]; then
+    evaluation_args+=(--think-mode)
+  elif [[ "${think_mode:-}" == "false" ]]; then
+    evaluation_args+=(--no-think-mode)
   fi
   if [[ "${single_agent_min_steps:-}" != "-" && -n "${single_agent_min_steps:-}" ]]; then
     evaluation_args+=(--single-agent-min-steps "$single_agent_min_steps")

@@ -24,6 +24,7 @@ expt:
   limit: 1
   repeats: 1
   max_steps: 3
+  think_mode: true
   single_agent_min_steps: 3
   single_agent_max_steps: 7
   debate_rounds: 2

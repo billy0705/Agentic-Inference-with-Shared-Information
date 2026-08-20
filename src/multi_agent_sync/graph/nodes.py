@@ -39,6 +39,7 @@ async def orchestrator_node(state: GraphState) -> GraphState:
         subagent_mode=subagent_mode,
         min_dynamic_subagents=state.get("min_dynamic_subagents", DEFAULT_MIN_DYNAMIC_SUBAGENTS),
         max_dynamic_subagents=state.get("max_dynamic_subagents", DEFAULT_MAX_DYNAMIC_SUBAGENTS),
+        think_mode=bool(state.get("think_mode", True)),
     )
     if state.get("enable_workspace_tools") and (
         orchestrator_plan.get("mode") == "direct" or not orchestrator_plan.get("selected_agents")
@@ -212,6 +213,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             "max_steps": assignment.get("max_steps", max_steps),
             "max_runtime_seconds": agent_runtime_timeout,
             "allow_agent_early_stop": allow_agent_early_stop,
+            "think_mode": bool(state.get("think_mode", True)),
             "enable_message_streaming": enable_agent_message_streaming,
             "workspace_access": assignment.get("workspace_access", "none"),
         }
@@ -320,6 +322,7 @@ async def synthesizer_node(state: GraphState) -> GraphState:
     template_name = "graph/synthesizer_summarize_outputs.j2" if synthesizer_mode == "summarize_outputs" else "graph/synthesizer.j2"
     prompt = render_prompt(
         template_name,
+        think_mode=bool(state.get("think_mode", True)),
         task=state["task"],
         output_lines=output_lines,
         candidate_lines=candidate_lines,

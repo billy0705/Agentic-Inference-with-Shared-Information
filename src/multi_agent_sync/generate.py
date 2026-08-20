@@ -21,6 +21,7 @@ class ExperimentConfig:
     limit: int
     repeats: int
     max_steps: int | None
+    think_mode: bool | None
     single_agent_min_steps: int | None
     single_agent_max_steps: int | None
     debate_rounds: int | None
@@ -89,6 +90,15 @@ def _optional_positive_int(section: dict[str, Any], section_name: str, key: str)
     return value
 
 
+def _optional_bool(section: dict[str, Any], section_name: str, key: str) -> bool | None:
+    value = section.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError(f"'{section_name}.{key}' must be a boolean")
+    return value
+
+
 def load_helma_config(manager: Any) -> HelmaConfig:
     helma = manager.section("helma")
     nodes = helma.get("nodes")
@@ -134,6 +144,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         raise ValueError("'expt.repeats' must be a positive integer")
 
     max_steps = _optional_positive_int(expt, "expt", "max_steps")
+    think_mode = _optional_bool(expt, "expt", "think_mode")
     single_agent_min_steps = _optional_positive_int(expt, "expt", "single_agent_min_steps")
     single_agent_max_steps = _optional_positive_int(expt, "expt", "single_agent_max_steps")
     debate_rounds = _optional_positive_int(expt, "expt", "debate_rounds")
@@ -159,6 +170,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         limit=limit,
         repeats=repeats,
         max_steps=max_steps,
+        think_mode=think_mode,
         single_agent_min_steps=single_agent_min_steps,
         single_agent_max_steps=single_agent_max_steps,
         debate_rounds=debate_rounds,
@@ -217,6 +229,8 @@ async def run_experiments(config_path: str | Path) -> None:
                         "--limit",
                         str(experiment.limit),
                         *(["--max-steps", str(experiment.max_steps)] if experiment.max_steps is not None else []),
+                        *(["--think-mode"] if experiment.think_mode is True else []),
+                        *(["--no-think-mode"] if experiment.think_mode is False else []),
                         *(
                             ["--single-agent-min-steps", str(experiment.single_agent_min_steps)]
                             if experiment.single_agent_min_steps is not None
@@ -284,6 +298,7 @@ def main(argv: list[str] | None = None) -> None:
                     output_dir = str(experiment.output_dir) if experiment.output_dir else "-"
                     resume_run = str(experiment.resume_run) if experiment.resume_run else "-"
                     max_steps = str(experiment.max_steps) if experiment.max_steps is not None else "-"
+                    think_mode = str(experiment.think_mode).lower() if experiment.think_mode is not None else "-"
                     single_agent_min_steps = (
                         str(experiment.single_agent_min_steps) if experiment.single_agent_min_steps is not None else "-"
                     )
@@ -294,7 +309,8 @@ def main(argv: list[str] | None = None) -> None:
                     max_tokens = str(experiment.max_tokens) if experiment.max_tokens is not None else "-"
                     print(
                         f"{benchmark}\t{methods}\t{experiment.limit}\t{output_dir}\t{resume_run}\t"
-                        f"{max_steps}\t{single_agent_min_steps}\t{single_agent_max_steps}\t{debate_rounds}\t{max_tokens}"
+                        f"{max_steps}\t{think_mode}\t"
+                        f"{single_agent_min_steps}\t{single_agent_max_steps}\t{debate_rounds}\t{max_tokens}"
                     )
             return
         if args.print_env:

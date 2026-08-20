@@ -124,6 +124,7 @@ async def test_agent_prompt_is_rendered_from_template():
 
     prompt = await agent.build_prompt(step_index=1, relevant_events=[])
 
+    assert prompt.startswith("<|think|>\n")
     expected_sections = [
         "[GLOBAL STATIC PREFIX]",
         "[AGENT STATIC PREFIX]",
@@ -151,6 +152,23 @@ async def test_agent_prompt_is_rendered_from_template():
     assert "CONFIDENCE:" not in prompt
     assert "confidence" not in prompt.lower()
     assert "Respond with concise summaries only." not in inspect.getsource(ResearchAgent.build_prompt)
+
+
+@pytest.mark.asyncio
+async def test_agent_prompt_can_disable_think_mode():
+    agent = ResearchAgent(
+        run_id="run-prompts",
+        task="Build a chess website",
+        assigned_subtask="Research synchronization",
+        llm=None,
+        event_streamer=InMemoryEventStreamer(),
+        think_mode=False,
+    )
+
+    prompt = await agent.build_prompt(step_index=1, relevant_events=[])
+
+    assert not prompt.startswith("<|think|>")
+    assert prompt.startswith("[GLOBAL STATIC PREFIX]")
 
 
 def test_tool_agent_prompt_allows_sharing_candidate_and_short_reason():
@@ -259,6 +277,7 @@ def test_orchestrator_prompt_is_rendered_from_template():
         },
     )
 
+    assert prompt.startswith("<|think|>\n")
     assert "You are the model-based orchestrator for a local LangGraph multi-agent system." in prompt
     assert "Build a chess app" in prompt
     assert '"mode": "multi_agent"' in prompt
@@ -271,7 +290,8 @@ def test_orchestrator_prompt_is_rendered_from_template():
 def test_dynamic_orchestrator_prompt_allows_direct_and_requires_detailed_subagents():
     prompt = orchestrator.build_dynamic_orchestrator_prompt("Analyze this benchmark result.")
 
-    assert len(prompt) < 3200
+    assert prompt.startswith("<|think|>\n")
+    assert len(prompt) < 3250
     assert "You are the dynamic subagent orchestrator" in prompt
     assert "Default to multi_agent mode." in prompt
     assert "You may choose direct mode only when you are truthfully 100% certain" in prompt
@@ -286,6 +306,13 @@ def test_dynamic_orchestrator_prompt_allows_direct_and_requires_detailed_subagen
     assert '"role": "specific expertise and responsibility for this subagent"' in prompt
     assert '"description": "unique evidence, constraints, checks, or perspective' in prompt
     assert "Analyze this benchmark result." in prompt
+
+
+def test_orchestrator_prompt_can_disable_think_mode():
+    prompt = orchestrator.build_orchestrator_prompt("Build a chess app", {"ResearchAgent": object()}, think_mode=False)
+
+    assert not prompt.startswith("<|think|>")
+    assert prompt.startswith("You are the model-based orchestrator")
 
 
 def test_dynamic_orchestrator_prompt_uses_configured_agent_range():

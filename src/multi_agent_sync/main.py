@@ -31,6 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow agents to stop before --max-steps when they return FINAL. Disabled by default.",
     )
     parser.add_argument(
+        "--think-mode",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prefix orchestrator, agent step, and summarizer prompts with <|think|>. Enabled by default.",
+    )
+    parser.add_argument(
         "--subagent-mode",
         choices=("fixed", "dynamic"),
         default="fixed",
@@ -110,6 +116,7 @@ async def async_main(args: argparse.Namespace) -> None:
             total_runtime_timeout=args.total_runtime_timeout,
             agent_runtime_timeout=args.agent_runtime_timeout,
             allow_agent_early_stop=args.allow_agent_early_stop,
+            think_mode=args.think_mode,
             stream_to_console=True,
             no_color=args.no_color,
             enable_workspace_tools=args.docker_workspace,

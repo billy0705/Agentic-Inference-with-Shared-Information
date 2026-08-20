@@ -67,6 +67,7 @@ class BaseAgent:
     final_guard_tool: Any | None = None
     workspace_access: str = "none"
     allow_agent_early_stop: bool = False
+    think_mode: bool = True
     tool_observations: list[dict[str, Any]] = field(default_factory=list)
     final_guard_retry_steps: int = 2
     reactive_steps_enabled: bool = True
@@ -303,6 +304,7 @@ class BaseAgent:
             return render_prompt(
                 "agents/tool_step.j2",
                 agent_name=self.name,
+                think_mode=self.think_mode,
                 task=self.task,
                 role=self.role,
                 description=self.description,
@@ -324,6 +326,7 @@ class BaseAgent:
         return render_prompt(
             "agents/step.j2",
             agent_name=self.name,
+            think_mode=self.think_mode,
             task=self.task,
             role=self.role,
             description=self.description,
@@ -556,6 +559,7 @@ class BaseAgent:
             "task": self.assigned_subtask,
             "max_steps": self.max_steps,
             "allow_agent_early_stop": self.allow_agent_early_stop,
+            "think_mode": self.think_mode,
         }
 
     def _log_step_trace(

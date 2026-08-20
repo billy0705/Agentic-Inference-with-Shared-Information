@@ -73,6 +73,7 @@ async def create_model_based_plan(
     subagent_mode: SubagentMode = "fixed",
     min_dynamic_subagents: int = DEFAULT_MIN_DYNAMIC_SUBAGENTS,
     max_dynamic_subagents: int = DEFAULT_MAX_DYNAMIC_SUBAGENTS,
+    think_mode: bool = True,
 ) -> OrchestratorPlan:
     min_dynamic_subagents, max_dynamic_subagents = resolve_dynamic_subagent_limits(
         min_dynamic_subagents,
@@ -83,9 +84,10 @@ async def create_model_based_plan(
             task,
             min_dynamic_subagents=min_dynamic_subagents,
             max_dynamic_subagents=max_dynamic_subagents,
+            think_mode=think_mode,
         )
         if subagent_mode == "dynamic"
-        else build_orchestrator_prompt(task, available_agents)
+        else build_orchestrator_prompt(task, available_agents, think_mode=think_mode)
     )
     try:
         response = await llm.ainvoke(prompt)
@@ -118,6 +120,7 @@ async def create_orchestrator_plan(
     subagent_mode: SubagentMode = "fixed",
     min_dynamic_subagents: int = DEFAULT_MIN_DYNAMIC_SUBAGENTS,
     max_dynamic_subagents: int = DEFAULT_MAX_DYNAMIC_SUBAGENTS,
+    think_mode: bool = True,
 ) -> OrchestratorPlan:
     return await create_model_based_plan(
         task,
@@ -126,10 +129,11 @@ async def create_orchestrator_plan(
         subagent_mode=subagent_mode,
         min_dynamic_subagents=min_dynamic_subagents,
         max_dynamic_subagents=max_dynamic_subagents,
+        think_mode=think_mode,
     )
 
 
-def build_orchestrator_prompt(task: str, available_agents: Mapping[str, Any]) -> str:
+def build_orchestrator_prompt(task: str, available_agents: Mapping[str, Any], *, think_mode: bool = True) -> str:
     agent_lines = "\n".join(
         f"{index}. {name}\n    {AGENT_DESCRIPTIONS.get(name, 'Registered worker agent.')}"
         for index, name in enumerate(available_agents, start=1)
@@ -137,6 +141,7 @@ def build_orchestrator_prompt(task: str, available_agents: Mapping[str, Any]) ->
     allowed_names = " | ".join(available_agents)
     return render_prompt(
         "orchestrator/model_plan.j2",
+        think_mode=think_mode,
         task=task,
         agent_lines=agent_lines,
         allowed_names=allowed_names,
@@ -147,6 +152,7 @@ def build_dynamic_orchestrator_prompt(
     task: str,
     min_dynamic_subagents: int = DEFAULT_MIN_DYNAMIC_SUBAGENTS,
     max_dynamic_subagents: int = DEFAULT_MAX_DYNAMIC_SUBAGENTS,
+    think_mode: bool = True,
 ) -> str:
     min_dynamic_subagents, max_dynamic_subagents = resolve_dynamic_subagent_limits(
         min_dynamic_subagents,
@@ -154,6 +160,7 @@ def build_dynamic_orchestrator_prompt(
     )
     return render_prompt(
         "orchestrator/dynamic_model_plan.j2",
+        think_mode=think_mode,
         task=task,
         min_dynamic_subagents=min_dynamic_subagents,
         max_dynamic_subagents=max_dynamic_subagents,

@@ -30,6 +30,7 @@ async def test_async_main_passes_total_runtime_timeout_to_workflow(monkeypatch, 
     assert captured_kwargs["task"] == "Calculate 2+2"
     assert captured_kwargs["total_runtime_timeout"] == 600.0
     assert captured_kwargs["agent_runtime_timeout"] == 700.0
+    assert captured_kwargs["think_mode"] is True
     assert captured_llm_kwargs["openai"] is True
 
 
@@ -74,6 +75,25 @@ async def test_async_main_passes_agent_early_stop_flag_to_workflow(monkeypatch, 
     await cli.async_main(args)
 
     assert captured_kwargs["allow_agent_early_stop"] is True
+
+
+@pytest.mark.asyncio
+async def test_async_main_passes_disabled_think_mode_to_workflow(monkeypatch, tmp_path):
+    captured_kwargs = {}
+
+    async def fake_run_workflow(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"final_answer": "Done."}
+
+    monkeypatch.setattr(cli, "get_llm", lambda model=None, openai=True: "fake-llm")
+    monkeypatch.setattr(cli, "run_workflow", fake_run_workflow)
+    monkeypatch.setattr(cli, "save_run_artifacts", lambda state, root_dir: tmp_path / "run")
+
+    args = cli.build_parser().parse_args(["--no-think-mode", "Calculate", "2+2"])
+
+    await cli.async_main(args)
+
+    assert captured_kwargs["think_mode"] is False
 
 
 @pytest.mark.asyncio

@@ -47,6 +47,7 @@ async def run_multiagent(
             agent_runtime_timeout=getattr(args, "agent_runtime_timeout", DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS),
             synthesis_timeout=args.synthesis_timeout,
             allow_agent_early_stop=getattr(args, "allow_agent_early_stop", False),
+            think_mode=getattr(args, "think_mode", True),
             enable_agent_message_streaming=enable_agent_message_streaming,
             stream_to_console=False,
             no_color=True,
@@ -129,6 +130,7 @@ async def run_dynamic_orchestration(
             docker_workspace=docker_workspace,
             feedback_tool=feedback_tool,
             final_guard_tool=final_guard_tool,
+            think_mode=getattr(args, "think_mode", True),
         )
         raw_output = state["final_answer"]
         trace = extract_workflow_trace(state)
@@ -170,6 +172,7 @@ def extract_workflow_trace(state: dict[str, Any]) -> dict[str, Any]:
         "selected_agents",
         "assignments",
         "allow_agent_early_stop",
+        "think_mode",
         "agent_runtime_timeout",
         "orchestrator_plan",
         "event_log",
