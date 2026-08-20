@@ -37,6 +37,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use fixed registered agents or dynamic Orchestrator-defined subagents.",
     )
     parser.add_argument(
+        "--min-dynamic-subagents",
+        type=int,
+        default=3,
+        help="Minimum dynamic subagents to create. Defaults to 3.",
+    )
+    parser.add_argument(
+        "--max-dynamic-subagents",
+        type=int,
+        default=3,
+        help="Maximum dynamic subagents to create. Defaults to 3.",
+    )
+    parser.add_argument(
         "--total-runtime-timeout",
         type=float,
         default=1800.0,
@@ -107,6 +119,8 @@ async def async_main(args: argparse.Namespace) -> None:
             llm=llm,
             subagent_mode=args.subagent_mode,
             max_steps_per_agent=args.max_steps,
+            min_dynamic_subagents=args.min_dynamic_subagents,
+            max_dynamic_subagents=args.max_dynamic_subagents,
             total_runtime_timeout=args.total_runtime_timeout,
             agent_runtime_timeout=args.agent_runtime_timeout,
             allow_agent_early_stop=args.allow_agent_early_stop,

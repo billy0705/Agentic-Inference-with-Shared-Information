@@ -78,6 +78,8 @@ def test_load_experiment_config_validates_and_deduplicates_lists():
     assert config.limit == 2
     assert config.repeats == 1
     assert config.max_steps is None
+    assert config.min_dynamic_subagents is None
+    assert config.max_dynamic_subagents is None
     assert config.single_agent_min_steps is None
     assert config.single_agent_max_steps is None
     assert config.debate_rounds is None
@@ -153,6 +155,15 @@ def test_load_experiment_config_resolves_resume_run_relative_to_yaml():
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "limit": -1}, "expt.limit"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "repeats": 0}, "expt.repeats"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "max_steps": 0}, "expt.max_steps"),
+        (
+            {
+                "benchmark": ["gsm8k"],
+                "methods": ["plain_llm"],
+                "min_dynamic_subagents": 4,
+                "max_dynamic_subagents": 3,
+            },
+            "min_dynamic_subagents",
+        ),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "max_tokens": 0}, "expt.max_tokens"),
         (
             {
@@ -186,6 +197,8 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
             "limit": 1,
             "repeats": 2,
             "max_steps": 5,
+            "min_dynamic_subagents": 3,
+            "max_dynamic_subagents": 3,
             "single_agent_min_steps": 5,
             "single_agent_max_steps": 5,
             "debate_rounds": 5,
@@ -209,6 +222,8 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
                 args.methods,
                 args.limit,
                 args.max_steps,
+                args.min_dynamic_subagents,
+                args.max_dynamic_subagents,
                 args.single_agent_min_steps,
                 args.single_agent_max_steps,
                 args.debate_rounds,
@@ -227,10 +242,10 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
 
     assert events == [
         ("start", manager, 1800.0),
-        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, 5, 5, 5, 5, 12000, "/project/output", None),
-        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, 5, 5, 5, 5, 12000, "/project/output", None),
-        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, 5, 5, 5, 5, 12000, "/project/output", None),
-        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, 5, 5, 5, 5, 12000, "/project/output", None),
+        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, 5, 3, 3, 5, 5, 5, 12000, "/project/output", None),
+        ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, 5, 3, 3, 5, 5, 5, 12000, "/project/output", None),
+        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, 5, 3, 3, 5, 5, 5, 12000, "/project/output", None),
+        ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, 5, 3, 3, 5, 5, 5, 12000, "/project/output", None),
         ("stop",),
     ]
 
@@ -242,6 +257,8 @@ def test_print_evaluation_matrix_includes_optional_runtime_args(monkeypatch, cap
             "methods": ["plain_llm"],
             "limit": 1,
             "max_steps": 5,
+            "min_dynamic_subagents": 3,
+            "max_dynamic_subagents": 3,
             "single_agent_min_steps": 5,
             "single_agent_max_steps": 5,
             "debate_rounds": 5,
@@ -254,7 +271,7 @@ def test_print_evaluation_matrix_includes_optional_runtime_args(monkeypatch, cap
     generate.main(["server.yaml", "--print-evaluation-matrix"])
 
     assert capsys.readouterr().out == (
-        "gsm8k\tplain_llm\t1\t/project/output\t-\t5\t5\t5\t5\t12000\n"
+        "gsm8k\tplain_llm\t1\t/project/output\t-\t5\t3\t3\t5\t5\t5\t12000\n"
     )
 
 

@@ -43,6 +43,8 @@ async def run_multiagent(
             llm=llm,
             subagent_mode=subagent_mode,
             max_steps_per_agent=args.max_steps,
+            min_dynamic_subagents=getattr(args, "min_dynamic_subagents", 3),
+            max_dynamic_subagents=getattr(args, "max_dynamic_subagents", 3),
             total_runtime_timeout=args.total_runtime_timeout,
             agent_runtime_timeout=getattr(args, "agent_runtime_timeout", DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS),
             synthesis_timeout=args.synthesis_timeout,

@@ -131,6 +131,18 @@ def test_evaluation_parser_sets_single_agent_step_defaults():
     assert args.single_agent_max_steps == 7
 
 
+def test_evaluation_parser_sets_dynamic_subagent_defaults_and_override():
+    default_args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
+    custom_args = evaluation.build_parser().parse_args(
+        ["--benchmark", "gpqa", "--min-dynamic-subagents", "4", "--max-dynamic-subagents", "4"]
+    )
+
+    assert default_args.min_dynamic_subagents == 3
+    assert default_args.max_dynamic_subagents == 3
+    assert custom_args.min_dynamic_subagents == 4
+    assert custom_args.max_dynamic_subagents == 4
+
+
 def test_evaluation_parser_sets_dynamic_orchestration_round_default():
     args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
 
@@ -379,6 +391,8 @@ def test_run_config_records_kimina_docker_settings(tmp_path, monkeypatch):
     assert config["git_commit_id"] == "abc123def456"
     assert config["settings"]["allow_agent_early_stop"] is False
     assert config["settings"]["agent_runtime_timeout"] == 600.0
+    assert config["settings"]["min_dynamic_subagents"] == 3
+    assert config["settings"]["max_dynamic_subagents"] == 3
     assert config["settings"]["kimina_docker"] is True
     assert config["settings"]["kimina_docker_image"] == "custom/kimina:latest"
     assert config["settings"]["kimina_docker_container"] == "kimina-test"
@@ -2672,6 +2686,8 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
     assert captured_kwargs["benchmark"] == "gpqa"
     assert captured_kwargs["allow_agent_early_stop"] is False
     assert captured_kwargs["agent_runtime_timeout"] == 600.0
+    assert captured_kwargs["min_dynamic_subagents"] == 3
+    assert captured_kwargs["max_dynamic_subagents"] == 3
     assert captured_kwargs["enable_agent_message_streaming"] is expected_streaming
     expected_synthesizer_mode = "summarize_outputs" if method == "multiagent_dynamic_streaming" else "generic"
     assert captured_kwargs["synthesizer_mode"] == expected_synthesizer_mode
@@ -2719,7 +2735,17 @@ async def test_run_method_passes_agent_early_stop_flag_to_workflow(monkeypatch):
 
     monkeypatch.setattr(multiagent_sync, "run_workflow", fake_run_workflow)
     args = evaluation.build_parser().parse_args(
-        ["--benchmark", "gpqa", "--allow-agent-early-stop", "--agent-runtime-timeout", "900"]
+        [
+            "--benchmark",
+            "gpqa",
+            "--allow-agent-early-stop",
+            "--agent-runtime-timeout",
+            "900",
+            "--min-dynamic-subagents",
+            "4",
+            "--max-dynamic-subagents",
+            "4",
+        ]
     )
 
     result = await runner.run_method("multiagent_dynamic_streaming", "Question?", UsageLLM([]), args)
@@ -2727,6 +2753,8 @@ async def test_run_method_passes_agent_early_stop_flag_to_workflow(monkeypatch):
     assert result.raw_output == "multiagent_dynamic_streaming answer"
     assert captured_kwargs["allow_agent_early_stop"] is True
     assert captured_kwargs["agent_runtime_timeout"] == 900.0
+    assert captured_kwargs["min_dynamic_subagents"] == 4
+    assert captured_kwargs["max_dynamic_subagents"] == 4
 
 
 def test_write_results_csv_includes_timing_and_token_columns(tmp_path):
