@@ -135,6 +135,18 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "text.match(/\\(([A-Za-z][A-Za-z0-9_.-]{0,11})\\)/)" in html
     assert "analysisDecisionShift" in html
     assert "analysisConsensusTrend" in html
+    assert "Shared findings impact" in html
+    assert "renderSharedFindingImpactChart" in html
+    assert "analyzeSharedFindings" in html
+    assert "classifySharedFinding" in html
+    assert "Shared findings details" in html
+    assert "What agents shared" in html
+    assert "Answer changes after receiving shared findings" in html
+    assert "Changed after shared" in html
+    assert "Changed to correct" in html
+    assert "Changed ending wrong" in html
+    assert "wrong -> correct" in html
+    assert "correct -> wrong" in html
     assert "wrong subagent consensus" in html
     assert "wrong tie-break / final selection" in html
     assert "buildFailureExplanation" in html
