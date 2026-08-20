@@ -131,6 +131,8 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "agents changed after shared info" in html
     assert "final agents all agree" in html
     assert "analysisRoundRows" in html
+    assert "parenthesized" in html
+    assert "text.match(/\\(([A-Za-z][A-Za-z0-9_.-]{0,11})\\)/)" in html
     assert "analysisDecisionShift" in html
     assert "analysisConsensusTrend" in html
     assert "wrong subagent consensus" in html
