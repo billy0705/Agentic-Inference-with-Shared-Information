@@ -214,7 +214,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum stdout/stderr characters retained per Docker workspace command.",
     )
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent for multiagent runs.")
-    parser.add_argument("--debate-rounds", type=int, default=2, help="Number of rounds for multiagent_debate.")
     parser.add_argument(
         "--max-orchestrator-rounds",
         type=int,
