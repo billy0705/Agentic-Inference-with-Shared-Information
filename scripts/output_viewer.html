@@ -84,6 +84,7 @@
     .analysis-row-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
     .analysis-jump { border: 1px solid var(--accent); color: var(--accent); background: white; border-radius: 6px; padding: 5px 8px; font-size: 12px; font-weight: 800; }
     .analysis-chart { display: grid; gap: 8px; margin: 10px 0; }
+    .shared-finding-text { max-width: 520px; }
     .chart-row { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(160px, 3fr) 44px; gap: 10px; align-items: center; font-size: 13px; }
     .chart-track { height: 14px; border-radius: 999px; background: var(--code); border: 1px solid var(--line); overflow: hidden; }
     .chart-fill { height: 100%; background: var(--accent); }
@@ -1476,6 +1477,7 @@
         </div>
         ${renderErrorDistributionChart(rows)}
         ${renderConsensusTrendChart(rows)}
+        ${renderSharedFindingImpactChart(rows, targetMethod)}
         ${buckets.map((bucket) => renderAnalysisBucket(bucket, rows.filter((row) => row.bucket === bucket.key))).join('')}
       `;
     }
@@ -1662,6 +1664,9 @@
         const consensus = analysisConsensusTrend(roundRows);
         const issue = classifyAnalysisIssue(target, baselineExamples);
         const failureExplanation = buildFailureExplanation(target, baselineExamples, roundRows, issue);
+        const sharedFindingAnalysis = targetMethod === 'multiagent_dynamic_streaming'
+          ? analyzeSharedFindings(target)
+          : null;
         return {
           index: row.index,
           target_method: targetMethod,
@@ -1674,6 +1679,7 @@
           round_rows: roundRows,
           decision_shift: decisionShift,
           consensus,
+          shared_finding_analysis: sharedFindingAnalysis,
         };
       }).filter(Boolean);
     }
@@ -1827,6 +1833,98 @@
       `;
     }
 
+    function renderSharedFindingImpactChart(rows, targetMethod) {
+      if (targetMethod !== 'multiagent_dynamic_streaming') return '';
+      const stats = sharedFindingImpactSummary(rows);
+      if (!stats.published_total && !stats.receiving_opportunities) return '';
+      const categoryRows = [...stats.categories.entries()]
+        .map(([category, row]) => ({ category, ...row }))
+        .sort((left, right) => right.published - left.published || right.changed - left.changed || left.category.localeCompare(right.category));
+      return `
+        <section class="analysis-bucket">
+          <div class="toolbar">
+            <div>
+              <h3>Shared findings impact</h3>
+              <div class="subtle">Only for multiagent_dynamic_streaming. Categories are rule-based from shared finding text; changes are counted when an agent receives shared findings and changes its answer on the next recorded step.</div>
+            </div>
+            <span class="pill">${esc(stats.published_total)} shared findings</span>
+          </div>
+          <div class="analysis-summary">
+            <div class="stat"><span class="subtle">Receiving opportunities</span><strong>${esc(stats.receiving_opportunities)}</strong></div>
+            <div class="stat"><span class="subtle">Changed after shared</span><strong>${esc(stats.changed_total)} / ${esc(stats.receiving_opportunities)}</strong></div>
+            <div class="stat"><span class="subtle">Changed to correct</span><strong>${esc(stats.changed_to_correct)}</strong></div>
+            <div class="stat"><span class="subtle">Changed ending wrong</span><strong>${esc(stats.changed_ending_wrong)}</strong></div>
+          </div>
+          <table class="round-table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Shared</th>
+                <th>Received steps</th>
+                <th>Changed</th>
+                <th>Change rate</th>
+                <th>To correct</th>
+                <th>Ending wrong</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${categoryRows.map((row) => `
+                <tr>
+                  <td><strong>${esc(row.category)}</strong></td>
+                  <td>${esc(row.published)}</td>
+                  <td>${esc(row.received)}</td>
+                  <td>${esc(row.changed)}</td>
+                  <td>${esc(percent(row.received ? row.changed / row.received : 0))}</td>
+                  <td><span class="good">${esc(row.to_correct)}</span></td>
+                  <td><span class="bad">${esc(row.ending_wrong)}</span></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </section>
+      `;
+    }
+
+    function sharedFindingImpactSummary(rows) {
+      const categories = new Map();
+      const ensureCategory = (category) => {
+        if (!categories.has(category)) {
+          categories.set(category, { published: 0, received: 0, changed: 0, to_correct: 0, ending_wrong: 0 });
+        }
+        return categories.get(category);
+      };
+      const stats = {
+        published_total: 0,
+        receiving_opportunities: 0,
+        changed_total: 0,
+        changed_to_correct: 0,
+        changed_ending_wrong: 0,
+        categories,
+      };
+      for (const row of rows) {
+        const analysis = row.shared_finding_analysis;
+        if (!analysis) continue;
+        stats.published_total += analysis.published_findings.length;
+        stats.receiving_opportunities += analysis.receiving_opportunities;
+        stats.changed_total += analysis.answer_changes.length;
+        stats.changed_to_correct += analysis.answer_changes.filter((change) => change.outcome_key === 'wrong_to_correct').length;
+        stats.changed_ending_wrong += analysis.answer_changes.filter((change) => change.outcome_key === 'correct_to_wrong' || change.outcome_key === 'wrong_to_wrong').length;
+        for (const finding of analysis.published_findings) ensureCategory(finding.category).published += 1;
+        for (const opportunity of analysis.receiving_steps) {
+          for (const category of opportunity.categories) ensureCategory(category).received += 1;
+        }
+        for (const change of analysis.answer_changes) {
+          for (const category of change.categories) {
+            const bucket = ensureCategory(category);
+            bucket.changed += 1;
+            if (change.outcome_key === 'wrong_to_correct') bucket.to_correct += 1;
+            if (change.outcome_key === 'correct_to_wrong' || change.outcome_key === 'wrong_to_wrong') bucket.ending_wrong += 1;
+          }
+        }
+      }
+      return stats;
+    }
+
     function analysisRoundMetricOptions() {
       return [
         { key: 'correct_majority', label: 'Correct majority' },
@@ -1915,6 +2013,7 @@
           </div>
           ${renderDecisionShift(row)}
           ${renderFailureExplanation(row)}
+          ${renderSharedFindingDetails(row)}
           ${renderBaselineExampleDetails(row.baseline_examples)}
           ${renderRoundAnalysisTable(row.round_rows)}
           ${candidates.length ? `<details><summary>Agent candidates</summary><pre>${esc(pretty(candidates.map(compactAnalysisCandidate)))}</pre></details>` : ''}
@@ -1954,6 +2053,85 @@
           ` : '<div class="subtle">No wrong subagent rationale was available in the trace.</div>'}
         </details>
       `;
+    }
+
+    function renderSharedFindingDetails(row) {
+      const analysis = row.shared_finding_analysis;
+      if (!analysis) return '';
+      const openAttr = isCorrectExample(row.example) ? '' : ' open';
+      const findings = analysis.published_findings;
+      const changes = analysis.answer_changes;
+      return `
+        <details class="mini-panel"${openAttr}>
+          <summary>Shared findings details</summary>
+          <div class="analysis-row-meta">
+            <span class="pill">shared findings: ${esc(findings.length)}</span>
+            <span class="pill">received steps: ${esc(analysis.receiving_opportunities)}</span>
+            <span class="pill">changed after shared: ${esc(changes.length)}</span>
+            <span class="pill">changed to correct: ${esc(changes.filter((change) => change.outcome_key === 'wrong_to_correct').length)}</span>
+            <span class="pill">changed ending wrong: ${esc(changes.filter((change) => change.outcome_key === 'correct_to_wrong' || change.outcome_key === 'wrong_to_wrong').length)}</span>
+          </div>
+          ${findings.length ? `
+            <h4>What agents shared</h4>
+            <table class="round-table">
+              <thead>
+                <tr>
+                  <th>Step</th>
+                  <th>Agent</th>
+                  <th>Category</th>
+                  <th>Choice</th>
+                  <th>Shared finding</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${findings.map((finding) => `
+                  <tr>
+                    <td>${esc(finding.step)}</td>
+                    <td>${esc(finding.agent)}</td>
+                    <td>${esc(finding.category)}</td>
+                    <td>${esc(finding.choice || 'n/a')}</td>
+                    <td class="shared-finding-text">${esc(truncateInline(finding.text, 360))}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : '<div class="subtle">No SHARE_FINDING text was recorded for this example.</div>'}
+          ${changes.length ? `
+            <h4>Answer changes after receiving shared findings</h4>
+            <table class="round-table">
+              <thead>
+                <tr>
+                  <th>Step</th>
+                  <th>Agent</th>
+                  <th>Change</th>
+                  <th>Outcome</th>
+                  <th>Received categories</th>
+                  <th>Received from</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${changes.map((change) => `
+                  <tr>
+                    <td>${esc(change.step)}</td>
+                    <td>${esc(change.agent)}</td>
+                    <td>${esc(change.from)} -> ${esc(change.to)}</td>
+                    <td><span class="${change.outcome_key === 'wrong_to_correct' ? 'good' : 'bad'}">${esc(change.outcome)}</span></td>
+                    <td>${esc(change.categories.join(', ') || 'n/a')}</td>
+                    <td class="shared-finding-text">${esc(formatIncomingFindings(change.incoming))}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : '<div class="subtle">No answer changes were detected immediately after receiving shared findings.</div>'}
+        </details>
+      `;
+    }
+
+    function formatIncomingFindings(incoming) {
+      return (incoming || []).slice(0, 3).map((event) => {
+        const source = event.source || 'unknown';
+        return `${source}: ${truncateInline(event.text, 160)}`;
+      }).join(' | ') || 'n/a';
     }
 
     function renderBaselineExampleDetails(baselineExamples) {
@@ -2107,6 +2285,113 @@
         role: candidate.role,
         reason: candidate.reason_excerpt,
       };
+    }
+
+    function analyzeSharedFindings(example) {
+      const acceptedAnswers = acceptedAnswersForExample(example);
+      const publishedFindings = [];
+      const receivingSteps = [];
+      const answerChanges = [];
+      for (const agent of example.agents || []) {
+        let previousChoice = '';
+        let previousCorrect = null;
+        const steps = [...(agent.steps || [])].sort((left, right) => compareExampleIndex(left.step ?? 0, right.step ?? 0));
+        for (const step of steps) {
+          const stepNumber = step.step ?? '';
+          const currentChoice = candidateFromStep(step);
+          const currentCorrect = currentChoice ? answerMatches(currentChoice, example.gold, acceptedAnswers) : null;
+          const shareText = sharedFindingTextFromStep(step);
+          if (shareText) {
+            publishedFindings.push({
+              agent: agent.name,
+              step: stepNumber,
+              text: shareText,
+              category: classifySharedFinding(shareText, firstSharedEventType(step.published_events)),
+              choice: currentChoice,
+            });
+          }
+          const incoming = sharedIncomingFindings(step);
+          if (incoming.length && previousChoice && currentChoice) {
+            const categories = unique(incoming.map((event) => event.category));
+            receivingSteps.push({
+              agent: agent.name,
+              step: stepNumber,
+              categories,
+              incoming,
+              from: previousChoice,
+              to: currentChoice,
+            });
+            if (comparableAnswer(previousChoice) !== comparableAnswer(currentChoice)) {
+              const outcome = sharedFindingChangeOutcome(previousCorrect, currentCorrect);
+              answerChanges.push({
+                agent: agent.name,
+                step: stepNumber,
+                from: previousChoice,
+                to: currentChoice,
+                categories,
+                incoming,
+                outcome: outcome.label,
+                outcome_key: outcome.key,
+              });
+            }
+          }
+          if (currentChoice) {
+            previousChoice = currentChoice;
+            previousCorrect = currentCorrect;
+          }
+        }
+      }
+      return {
+        published_findings: publishedFindings,
+        receiving_steps: receivingSteps,
+        receiving_opportunities: receivingSteps.length,
+        answer_changes: answerChanges,
+      };
+    }
+
+    function sharedFindingTextFromStep(step) {
+      const parsed = step.parsed_output && typeof step.parsed_output === 'object' ? step.parsed_output : {};
+      const parsedFinding = String(parsed.share_finding || '').trim();
+      if (parsedFinding) return parsedFinding;
+      const event = (step.published_events || []).find(isSharedFindingEvent);
+      return String(event?.content || '').trim();
+    }
+
+    function firstSharedEventType(events) {
+      const event = (events || []).find(isSharedFindingEvent);
+      return event?.event_type || '';
+    }
+
+    function sharedIncomingFindings(step) {
+      return (step.inbox_events || []).filter(isSharedFindingEvent).map((event) => {
+        const text = String(event.content || '').trim();
+        return {
+          source: event.source || 'unknown',
+          event_type: event.event_type || '',
+          text,
+          category: classifySharedFinding(text, event.event_type),
+        };
+      }).filter((event) => event.text);
+    }
+
+    function classifySharedFinding(text, eventType = '') {
+      const lower = String(text || '').toLowerCase();
+      if (!lower.trim() || lower.trim() === 'none' || lower.trim() === 'n/a') return 'no useful finding';
+      if (eventType === 'critique') return 'correction / critique';
+      if (/\b(eliminate|eliminates|ruled out|rule out|not option|not the answer|incorrect option|exclude)\b/i.test(lower)) return 'option elimination';
+      if (/\b(however|but|challenge|contradict|incorrect|wrong|verify|check|critique|refute|pitfall)\b/i.test(lower)) return 'correction / critique';
+      if (/\b(option|candidate|answer_choice|final answer|corresponds to|matches)\s*[:#-]?\s*[abcd]\b/i.test(lower) || /\b[abcd]\s+is\s+(the\s+)?(correct|best|most likely)/i.test(lower)) return 'answer recommendation';
+      if (/\b(uncertain|ambiguous|may|might|likely|possible|depends|assumption)\b/i.test(lower)) return 'uncertainty / caveat';
+      if (/[=+\-*/^<>~]|\\frac|\\times|\b(calculate|calculated|ratio|count|therefore|because|due to|implies|derived)\b/i.test(lower)) return 'evidence / calculation';
+      return 'evidence / observation';
+    }
+
+    function sharedFindingChangeOutcome(previousCorrect, currentCorrect) {
+      if (previousCorrect === false && currentCorrect === true) return { key: 'wrong_to_correct', label: 'wrong -> correct' };
+      if (previousCorrect === true && currentCorrect === false) return { key: 'correct_to_wrong', label: 'correct -> wrong' };
+      if (previousCorrect === false && currentCorrect === false) return { key: 'wrong_to_wrong', label: 'wrong -> wrong' };
+      if (previousCorrect === true && currentCorrect === true) return { key: 'correct_to_correct', label: 'correct -> correct' };
+      return { key: 'changed_unknown', label: 'changed' };
     }
 
     function analysisRoundRows(example) {

@@ -10,7 +10,7 @@ wheels/
 .venv
 runs/
 data/
-output/
+output*
 docs/
 vendor/
 .DS_Store
