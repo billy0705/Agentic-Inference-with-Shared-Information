@@ -298,7 +298,7 @@ def test_dynamic_orchestrator_prompt_allows_direct_and_requires_detailed_subagen
     assert "The reason must explain truthfully why direct or multi_agent was selected." in prompt
     assert "Never claim 100% certainty for a normal benchmark question unless the answer is explicitly given in the prompt." in prompt
     assert "Diverse subagents" in prompt
-    assert "If multi_agent, create 2 to 4 subagents." in prompt
+    assert "If multi_agent, create 3 subagents." in prompt
     assert "Do not create overlapping roles" in prompt
     assert "evidence, check, or perspective" in prompt
     assert '"direct_certainty": "100_percent"' in prompt

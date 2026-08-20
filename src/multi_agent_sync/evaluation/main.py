@@ -233,6 +233,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Prefix orchestrator, agent step, and summarizer prompts with <|think|>. Enabled by default.",
     )
     parser.add_argument(
+        "--min-dynamic-subagents",
+        type=int,
+        default=3,
+        help="Minimum dynamic subagents to create. Defaults to 3.",
+    )
+    parser.add_argument(
+        "--max-dynamic-subagents",
+        type=int,
+        default=3,
+        help="Maximum dynamic subagents to create. Defaults to 3.",
+    )
+    parser.add_argument(
         "--single-agent-min-steps",
         type=int,
         default=3,

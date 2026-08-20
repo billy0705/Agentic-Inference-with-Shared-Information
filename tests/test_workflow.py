@@ -59,6 +59,15 @@ class DynamicFakeLLM:
                       "subtask": "Critique the implementation plan.",
                       "expected_output": "Critiques and risks.",
                       "critical_debate": true
+                    },
+                    {
+                      "name": "Verification Agent",
+                      "role": "Verifies implementation coverage.",
+                      "description": "Checks tests, edge cases, and consistency with the task.",
+                      "rules": ["Publish verification findings."],
+                      "subtask": "Verify the implementation plan.",
+                      "expected_output": "Verification findings and remaining gaps.",
+                      "critical_debate": false
                     }
                   ],
                   "collaboration_protocol": {
@@ -87,9 +96,19 @@ class DynamicFakeLLM:
                 "CONFIDENCE:\n0.8\n"
                 "LOCAL_NOTES:\nPlanner complete."
             )
+        if "Agent name:\nVerificationAgent" in prompt:
+            assert "Checks tests, edge cases, and consistency with the task." in prompt
+            assert "Publish verification findings." in prompt
+            return FakeResponse(
+                "SUMMARY:\nVerification plan created.\n"
+                "SHARE_FINDING:\nRuntime should include verification coverage.\n"
+                "CONFIDENCE:\n0.8\n"
+                "LOCAL_NOTES:\nVerification complete."
+            )
         if "Summarizer" in prompt:
             assert "ImplementationPlanner" in prompt
             assert "CriticalDebateAgent" in prompt
+            assert "VerificationAgent" in prompt
             return FakeResponse("Summarized dynamic-agent answer.")
         return FakeResponse("Unexpected prompt")
 
@@ -639,7 +658,7 @@ async def test_dynamic_workflow_constructs_free_named_agents_and_synthesizes_out
     )
 
     assert state["subagent_mode"] == "dynamic"
-    assert set(state["agent_outputs"]) == {"ImplementationPlanner", "CriticalDebateAgent"}
+    assert set(state["agent_outputs"]) == {"ImplementationPlanner", "CriticalDebateAgent", "VerificationAgent"}
     assert state["selected_agents"][0]["description"] == "Identifies files, tests, and integration points."
     assert state["selected_agents"][1]["critical_debate"] is True
     assert any(event.event_type == "critique" and event.source == "CriticalDebateAgent" for event in state["event_log"])

@@ -50,8 +50,8 @@ AGENT_DESCRIPTIONS = {
 
 DEFAULT_EVENT_TYPES = ["finding", "critique", "warning"]
 MAX_SELECTED_AGENTS = 4
-DEFAULT_MIN_DYNAMIC_SUBAGENTS = 2
-DEFAULT_MAX_DYNAMIC_SUBAGENTS = MAX_SELECTED_AGENTS
+DEFAULT_MIN_DYNAMIC_SUBAGENTS = 3
+DEFAULT_MAX_DYNAMIC_SUBAGENTS = 3
 
 CODE_KEYWORDS = ("code", "programming", "bug", "error", "pytest", "function", "api", "implementation", "repository")
 RESEARCH_KEYWORDS = ("research", "comparison", "compare", "literature", "recent work", "background", "evidence")

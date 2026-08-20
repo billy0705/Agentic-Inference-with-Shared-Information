@@ -111,7 +111,7 @@ async def test_dynamic_direct_without_truthful_100_percent_certainty_falls_back_
     assert plan["mode"] == "multi_agent"
     assert plan["subagent_mode"] == "dynamic"
     assert "100% certain" in plan["reason"]
-    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent"]
+    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent", "EvidenceReviewAgent"]
 
 
 @pytest.mark.asyncio
@@ -175,7 +175,7 @@ async def test_dynamic_direct_for_state_validity_sequence_task_falls_back_to_mul
     assert plan["mode"] == "multi_agent"
     assert plan["subagent_mode"] == "dynamic"
     assert "state tracking" in plan["reason"]
-    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent"]
+    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent", "EvidenceReviewAgent"]
 
 
 @pytest.mark.asyncio
@@ -430,6 +430,15 @@ async def test_dynamic_mode_accepts_orchestrator_named_agents_with_rules():
               "subtask": "Debate and critique the plan.",
               "expected_output": "Critiques and corrections.",
               "critical_debate": true
+            },
+            {
+              "name": "Verification Agent",
+              "role": "Verifies implementation coverage.",
+              "description": "Checks tests, edge cases, and consistency with the task.",
+              "rules": ["Publish verification findings.", "Call out missing coverage."],
+              "subtask": "Verify the implementation plan.",
+              "expected_output": "Verification findings and remaining gaps.",
+              "critical_debate": false
             }
           ],
           "collaboration_protocol": {
@@ -450,7 +459,7 @@ async def test_dynamic_mode_accepts_orchestrator_named_agents_with_rules():
 
     assert plan["mode"] == "multi_agent"
     assert plan["subagent_mode"] == "dynamic"
-    assert agent_names(plan) == ["ImplementationPlanner", "CriticalDebateAgent"]
+    assert agent_names(plan) == ["ImplementationPlanner", "CriticalDebateAgent", "VerificationAgent"]
     assert plan["selected_agents"][0]["role"] == "Plans concrete implementation work."
     assert plan["selected_agents"][0]["description"] == "Focuses on files, tests, runtime flow, and compatibility."
     assert plan["selected_agents"][0]["rules"] == ["Share actionable findings.", "Keep fixed mode compatible."]
@@ -485,6 +494,16 @@ def test_dynamic_plan_preserves_workspace_access_in_assignments():
                     "critical_debate": True,
                     "workspace_access": "none",
                 },
+                {
+                    "name": "Regression Tester",
+                    "role": "Checks regression coverage.",
+                    "description": "Finds missing tests and edge cases.",
+                    "rules": ["Publish verification findings."],
+                    "subtask": "Verify the proposed change against likely regressions.",
+                    "expected_output": "Regression risks and test coverage notes.",
+                    "critical_debate": False,
+                    "workspace_access": "none",
+                },
             ],
             "collaboration_protocol": default_collaboration_protocol(),
         },
@@ -499,6 +518,8 @@ def test_dynamic_plan_preserves_workspace_access_in_assignments():
     assert assignments[0]["workspace_access"] == "write"
     assert assignments[1]["agent_name"] == "CriticalReviewer"
     assert assignments[1]["workspace_access"] == "none"
+    assert assignments[2]["agent_name"] == "RegressionTester"
+    assert assignments[2]["workspace_access"] == "none"
 
 
 @pytest.mark.asyncio
@@ -539,8 +560,8 @@ async def test_dynamic_mode_invalid_multi_agent_plan_falls_back_to_worker_and_cr
 
     assert plan["mode"] == "multi_agent"
     assert plan["subagent_mode"] == "dynamic"
-    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent"]
-    assert len(plan["selected_agents"]) >= 2
+    assert agent_names(plan) == ["TaskWorker", "CriticalDebateAgent", "EvidenceReviewAgent"]
+    assert len(plan["selected_agents"]) >= 3
     assert any(agent["critical_debate"] for agent in plan["selected_agents"])
 
 

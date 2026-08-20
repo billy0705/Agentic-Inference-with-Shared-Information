@@ -51,11 +51,24 @@ async def test_async_main_passes_dynamic_subagent_mode_to_workflow(monkeypatch, 
     monkeypatch.setattr(cli, "run_workflow", fake_run_workflow)
     monkeypatch.setattr(cli, "save_run_artifacts", lambda state, root_dir: tmp_path / "run")
 
-    args = cli.build_parser().parse_args(["--subagent-mode", "dynamic", "Calculate", "2+2"])
+    args = cli.build_parser().parse_args(
+        [
+            "--subagent-mode",
+            "dynamic",
+            "--min-dynamic-subagents",
+            "3",
+            "--max-dynamic-subagents",
+            "3",
+            "Calculate",
+            "2+2",
+        ]
+    )
 
     await cli.async_main(args)
 
     assert captured_kwargs["subagent_mode"] == "dynamic"
+    assert captured_kwargs["min_dynamic_subagents"] == 3
+    assert captured_kwargs["max_dynamic_subagents"] == 3
 
 
 @pytest.mark.asyncio

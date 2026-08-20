@@ -22,6 +22,8 @@ class ExperimentConfig:
     repeats: int
     max_steps: int | None
     think_mode: bool | None
+    min_dynamic_subagents: int | None
+    max_dynamic_subagents: int | None
     single_agent_min_steps: int | None
     single_agent_max_steps: int | None
     debate_rounds: int | None
@@ -145,10 +147,19 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
 
     max_steps = _optional_positive_int(expt, "expt", "max_steps")
     think_mode = _optional_bool(expt, "expt", "think_mode")
+    min_dynamic_subagents = _optional_positive_int(expt, "expt", "min_dynamic_subagents")
+    max_dynamic_subagents = _optional_positive_int(expt, "expt", "max_dynamic_subagents")
     single_agent_min_steps = _optional_positive_int(expt, "expt", "single_agent_min_steps")
     single_agent_max_steps = _optional_positive_int(expt, "expt", "single_agent_max_steps")
     debate_rounds = _optional_positive_int(expt, "expt", "debate_rounds")
     max_tokens = _optional_positive_int(expt, "expt", "max_tokens")
+    if (
+        min_dynamic_subagents is not None
+        and max_dynamic_subagents is not None
+        and min_dynamic_subagents > max_dynamic_subagents
+    ):
+        raise ValueError("'expt.min_dynamic_subagents' must be less than or equal to 'expt.max_dynamic_subagents'")
+
     if (
         single_agent_min_steps is not None
         and single_agent_max_steps is not None
@@ -171,6 +182,8 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         repeats=repeats,
         max_steps=max_steps,
         think_mode=think_mode,
+        min_dynamic_subagents=min_dynamic_subagents,
+        max_dynamic_subagents=max_dynamic_subagents,
         single_agent_min_steps=single_agent_min_steps,
         single_agent_max_steps=single_agent_max_steps,
         debate_rounds=debate_rounds,
@@ -231,6 +244,16 @@ async def run_experiments(config_path: str | Path) -> None:
                         *(["--max-steps", str(experiment.max_steps)] if experiment.max_steps is not None else []),
                         *(["--think-mode"] if experiment.think_mode is True else []),
                         *(["--no-think-mode"] if experiment.think_mode is False else []),
+                        *(
+                            ["--min-dynamic-subagents", str(experiment.min_dynamic_subagents)]
+                            if experiment.min_dynamic_subagents is not None
+                            else []
+                        ),
+                        *(
+                            ["--max-dynamic-subagents", str(experiment.max_dynamic_subagents)]
+                            if experiment.max_dynamic_subagents is not None
+                            else []
+                        ),
                         *(
                             ["--single-agent-min-steps", str(experiment.single_agent_min_steps)]
                             if experiment.single_agent_min_steps is not None
@@ -299,6 +322,16 @@ def main(argv: list[str] | None = None) -> None:
                     resume_run = str(experiment.resume_run) if experiment.resume_run else "-"
                     max_steps = str(experiment.max_steps) if experiment.max_steps is not None else "-"
                     think_mode = str(experiment.think_mode).lower() if experiment.think_mode is not None else "-"
+                    min_dynamic_subagents = (
+                        str(experiment.min_dynamic_subagents)
+                        if experiment.min_dynamic_subagents is not None
+                        else "-"
+                    )
+                    max_dynamic_subagents = (
+                        str(experiment.max_dynamic_subagents)
+                        if experiment.max_dynamic_subagents is not None
+                        else "-"
+                    )
                     single_agent_min_steps = (
                         str(experiment.single_agent_min_steps) if experiment.single_agent_min_steps is not None else "-"
                     )
@@ -309,7 +342,8 @@ def main(argv: list[str] | None = None) -> None:
                     max_tokens = str(experiment.max_tokens) if experiment.max_tokens is not None else "-"
                     print(
                         f"{benchmark}\t{methods}\t{experiment.limit}\t{output_dir}\t{resume_run}\t"
-                        f"{max_steps}\t{think_mode}\t"
+                        f"{max_steps}\t{min_dynamic_subagents}\t{max_dynamic_subagents}\t"
+                        f"{think_mode}\t"
                         f"{single_agent_min_steps}\t{single_agent_max_steps}\t{debate_rounds}\t{max_tokens}"
                     )
             return
