@@ -4,6 +4,7 @@ vllm:
   port: 8000
   log_path: vllm-server.log
   engine_ready_timeout: 1800
+  tensor_parallel_size: 4
   max_model_len: 21000
   gpu_memory_utilization: 0.95
 
