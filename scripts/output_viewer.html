@@ -181,7 +181,9 @@
     const MAX_ANALYSIS_ROUNDS = 3;
     const state = {
       files: [],
+      skippedFiles: [],
       folderHandle: null,
+      loadingExampleKey: '',
       data: { runs: [], benchmarks: [] },
       benchmark: 'all',
       model: 'all',
@@ -220,6 +222,7 @@
       const defaultButton = $('loadDefaultButton');
       defaultButton.disabled = true;
       defaultButton.textContent = 'Default unavailable on file://';
+      $('rescanButton').disabled = true;
       $('sourceStatus').textContent = 'Browser blocks automatic default loading for file:// pages. Click Open output folder and select the output folder.';
     }
 
@@ -309,20 +312,44 @@
     }
 
     async function openOutputFolder() {
+      if (isFileProtocol()) {
+        state.folderHandle = null;
+        $('folderInput').click();
+        return;
+      }
       if ('showDirectoryPicker' in window) {
         try {
           state.folderHandle = await window.showDirectoryPicker({ mode: 'read' });
+          const permission = await ensureDirectoryReadPermission(state.folderHandle);
+          if (!permission) {
+            $('sourceStatus').textContent = 'Folder permission was not granted. Try Open output folder again or use the browser file picker fallback.';
+            return;
+          }
           await loadFromDirectoryHandle(state.folderHandle);
           return;
         } catch (error) {
           if (error && error.name === 'AbortError') return;
+          $('sourceStatus').textContent = `Could not open folder with directory picker (${error?.name || 'Error'}). Trying browser file picker fallback.`;
         }
       }
       $('folderInput').click();
     }
 
+    async function ensureDirectoryReadPermission(handle) {
+      if (!handle || typeof handle.queryPermission !== 'function') return true;
+      try {
+        const options = { mode: 'read' };
+        if (await handle.queryPermission(options) === 'granted') return true;
+        if (typeof handle.requestPermission !== 'function') return false;
+        return await handle.requestPermission(options) === 'granted';
+      } catch {
+        return true;
+      }
+    }
+
     async function loadFromDirectoryHandle(handle) {
       const files = [];
+      state.skippedFiles = [];
       await collectDirectoryEntries(handle, '', files);
       state.files = files;
       $('rescanButton').disabled = false;
@@ -335,14 +362,19 @@
         if (entry.kind === 'directory') {
           await collectDirectoryEntries(entry, path, files);
         } else if (entry.kind === 'file') {
-          const file = await entry.getFile();
-          files.push({ path, file });
+          try {
+            const file = await entry.getFile();
+            files.push({ path, file });
+          } catch (error) {
+            state.skippedFiles.push({ path, reason: error?.name || 'NotReadableError' });
+          }
         }
       }
     }
 
     async function loadFromFileInput(fileList) {
       state.folderHandle = null;
+      state.skippedFiles = [];
       state.files = [...fileList].map((file) => ({ path: file.webkitRelativePath || file.name, file }));
       $('rescanButton').disabled = true;
       await rebuildData(`Loaded ${state.files.length} files from folder picker.`);
@@ -352,6 +384,10 @@
       if (state.folderHandle) {
         await loadFromDirectoryHandle(state.folderHandle);
       } else if (state.files.length) {
+        if (isFileProtocol()) {
+          $('sourceStatus').textContent = 'Rescan is unavailable on file:// pages. Click Open output folder and select the folder again.';
+          return;
+        }
         await loadDefaultOutputFolder();
       }
     }
@@ -373,7 +409,8 @@
       state.analysisMethod = 'multiagent_dynamic_streaming';
       state.analysisBaselineMethods = [];
       state.analysisRoundMetric = 'correct_majority';
-      $('sourceStatus').textContent = `${statusText} ${state.data.runs.length} runs found.`;
+      state.loadingExampleKey = '';
+      $('sourceStatus').textContent = `${statusText} ${state.data.runs.length} runs found${formatSkippedFilesStatus()}.`;
       render();
     }
 
@@ -382,12 +419,28 @@
         .map((record) => ({ ...record, path: cleanPath(record.path) }))
         .filter((record) => isRelevantOutputFile(record.path));
       const filesByPath = new Map();
-      await Promise.all(candidates.map(async (record) => {
-        filesByPath.set(record.path, { path: record.path, text: await record.file.text() });
-      }));
+      const fileRecordsByPath = new Map();
+      const metadataCandidates = [];
+      candidates.forEach((record) => {
+        fileRecordsByPath.set(record.path, record);
+        if (!isExampleTracePath(record.path)) metadataCandidates.push(record);
+      });
+
+      for (let index = 0; index < metadataCandidates.length; index += 1) {
+        const record = metadataCandidates[index];
+        try {
+          filesByPath.set(record.path, { path: record.path, text: await readRecordText(record) });
+        } catch (error) {
+          state.skippedFiles.push({ path: record.path, reason: error?.name || 'ReadError' });
+        }
+        if (index % 25 === 0) {
+          $('sourceStatus').textContent = `Reading metadata files... ${index + 1}/${metadataCandidates.length}`;
+          await yieldToBrowser();
+        }
+      }
 
       const summaryPaths = [...filesByPath.keys()].filter((path) => path.endsWith('/summary.json') || path === 'summary.json').sort();
-      const runs = summaryPaths.map((summaryPath) => buildRun(summaryPath, filesByPath)).filter(Boolean);
+      const runs = summaryPaths.map((summaryPath) => buildRun(summaryPath, filesByPath, fileRecordsByPath)).filter(Boolean);
       runs.sort((left, right) => String(right.run_id).localeCompare(String(left.run_id)));
 
       const benchmarkMap = new Map();
@@ -400,12 +453,31 @@
       return { generated_at: new Date().toISOString(), runs, benchmarks: [...benchmarkMap.values()].sort((a, b) => a.id.localeCompare(b.id)) };
     }
 
+    async function readRecordText(record) {
+      return record?.file && typeof record.file.text === 'function' ? record.file.text() : '';
+    }
+
+    async function yieldToBrowser() {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    function formatSkippedFilesStatus() {
+      const count = state.skippedFiles.length;
+      if (!count) return '';
+      const examples = state.skippedFiles.slice(0, 3).map((item) => item.path).join(', ');
+      return `; skipped ${count} unreadable file${count === 1 ? '' : 's'}${examples ? ` (${examples}${count > 3 ? ', ...' : ''})` : ''}`;
+    }
+
     function isRelevantOutputFile(path) {
       return path.endsWith('/summary.json') ||
         path.endsWith('/run_config.json') ||
         path.includes('/examples/') && path.endsWith('.json') ||
         path.endsWith('_results.csv') ||
         path.endsWith('/correctness.csv');
+    }
+
+    function isExampleTracePath(path) {
+      return path.includes('/examples/') && path.endsWith('.json');
     }
 
     function parseJson(text) {
@@ -454,14 +526,14 @@
       return values;
     }
 
-    function buildRun(summaryPath, filesByPath) {
+    function buildRun(summaryPath, filesByPath, fileRecordsByPath) {
       const runDir = summaryPath.replace(/\/?summary\.json$/, '').replace(/\/$/, '');
       const summary = parseJson(filesByPath.get(summaryPath)?.text || '{}');
       const runConfig = parseJson(filesByPath.get(`${runDir}/run_config.json`)?.text || '{}');
       const identity = inferRunIdentity(runDir, summary, runConfig);
       const lookup = buildResultLookup(summary);
-      const examplePaths = [...filesByPath.keys()].filter((path) => path.startsWith(`${runDir}/examples/`) && path.endsWith('.json')).sort();
-      const examples = examplePaths.map((path) => normalizeExample(path, parseJson(filesByPath.get(path).text), lookup)).filter(Boolean);
+      const exampleRecordPaths = [...fileRecordsByPath.keys()].filter((path) => path.startsWith(`${runDir}/examples/`) && path.endsWith('.json')).sort();
+      const examples = buildLazyExamples(runDir, summary, lookup, exampleRecordPaths, fileRecordsByPath);
       const csvPath = [...filesByPath.keys()].find((path) => path.startsWith(`${runDir}/`) && path.endsWith('_results.csv'));
       const correctnessPath = [...filesByPath.keys()].find((path) => path === `${runDir}/correctness.csv`);
       return {
@@ -477,6 +549,132 @@
         correctness_rows: correctnessPath ? parseCsv(filesByPath.get(correctnessPath).text) : [],
         examples,
       };
+    }
+
+    function buildLazyExamples(runDir, summary, lookup, examplePaths, fileRecordsByPath) {
+      const examplesByKey = new Map();
+      const resultRows = Array.isArray(summary.results) ? summary.results : [];
+      resultRows.forEach((row) => {
+        if (!row || typeof row !== 'object') return;
+        const method = String(row.method ?? '');
+        const index = row.index ?? '';
+        if (!method || index === '') return;
+        const path = resolveExamplePath(runDir, row, examplePaths, fileRecordsByPath);
+        const key = `${method}:${index}`;
+        examplesByKey.set(key, makeLazyExample(path, row, fileRecordsByPath.get(path)));
+      });
+      examplePaths.forEach((path) => {
+        const parsed = parseExamplePath(path);
+        if (!parsed) return;
+        const key = `${parsed.method}:${parsed.index}`;
+        if (examplesByKey.has(key)) return;
+        examplesByKey.set(key, makeLazyExample(path, lookup.get(key) || { method: parsed.method, index: parsed.index }, fileRecordsByPath.get(path)));
+      });
+      return [...examplesByKey.values()].sort((left, right) => {
+        const byIndex = compareExampleIndex(left.index, right.index);
+        return byIndex || String(left.method).localeCompare(String(right.method));
+      });
+    }
+
+    function resolveExamplePath(runDir, row, examplePaths, fileRecordsByPath) {
+      const rawPath = cleanPath(String(row.json_trace_path || ''));
+      if (rawPath && fileRecordsByPath.has(rawPath)) return rawPath;
+      const rawName = rawPath.split('/').pop();
+      if (rawName) {
+        const sameRunPath = `${runDir}/examples/${rawName}`;
+        if (fileRecordsByPath.has(sameRunPath)) return sameRunPath;
+      }
+      const index = row.index ?? '';
+      const method = String(row.method ?? '');
+      const numericIndex = Number(index);
+      const padded = Number.isFinite(numericIndex) ? String(numericIndex).padStart(4, '0') : String(index);
+      const candidates = [
+        `${runDir}/examples/${padded}_${method}.json`,
+        `${runDir}/examples/${index}_${method}.json`,
+      ];
+      return candidates.find((path) => fileRecordsByPath.has(path)) ||
+        examplePaths.find((path) => path.endsWith(`_${method}.json`) && parseExamplePath(path)?.index === String(index)) ||
+        rawPath;
+    }
+
+    function parseExamplePath(path) {
+      const filename = path.split('/').pop() || '';
+      const match = filename.match(/^(\d+)_(.+)\.json$/);
+      if (!match) return null;
+      return { index: String(Number(match[1])), method: match[2] };
+    }
+
+    function makeLazyExample(path, row, fileRecord) {
+      const result = compactResult(row);
+      return {
+        path,
+        index: row.index ?? '',
+        method: row.method ?? '',
+        route_mode: '',
+        benchmark: row.benchmark || '',
+        correct: row.correct,
+        pred: row.pred,
+        gold: row.gold,
+        score_metadata: normalizeScoreMetadata(row.score_metadata),
+        error: truncateText(row.error || ''),
+        prompt: '',
+        raw_output: truncateText(row.raw_output || ''),
+        result,
+        analysis_target_method: row.method ?? '',
+        candidate_aggregation: null,
+        summarizer_raw_response: '',
+        summarizer_final_answer: '',
+        final_answer: '',
+        selected_agents: [],
+        agents: [],
+        summarizer: null,
+        synthesizer_trace_present: false,
+        synthesizer_trace_mode: '',
+        synthesizer_trace_token_usage: normalizeTokenUsage(null),
+        events: [],
+        receipts: [],
+        workflow: [],
+        orchestrator_plan: {},
+        orchestrator: normalizeOrchestrator({}),
+        dynamic_orchestration: null,
+        raw_trace_excerpt: 'Trace not loaded yet.',
+        lazy_trace_path: path,
+        file_record: fileRecord || null,
+        trace_loaded: false,
+        trace_error: '',
+      };
+    }
+
+    function scheduleExampleTraceLoad(example) {
+      if (!example || example.trace_loaded || example.trace_error) return;
+      const key = example.lazy_trace_path || example.path;
+      if (!key || state.loadingExampleKey === key) return;
+      state.loadingExampleKey = key;
+      window.setTimeout(async () => {
+        await loadExampleTrace(example);
+        if (state.loadingExampleKey === key) state.loadingExampleKey = '';
+        render();
+      }, 0);
+    }
+
+    async function loadExampleTrace(example) {
+      if (!example.file_record) {
+        example.trace_error = 'Trace file was not found in the selected folder.';
+        return;
+      }
+      try {
+        const text = await readRecordText(example.file_record);
+        const lookup = new Map([[`${example.method}:${example.index}`, example.result || {}]]);
+        const loaded = normalizeExample(example.path, parseJson(text), lookup);
+        Object.assign(example, loaded, {
+          lazy_trace_path: example.lazy_trace_path,
+          file_record: example.file_record,
+          trace_loaded: true,
+          trace_error: '',
+        });
+      } catch (error) {
+        example.trace_error = error?.name || error?.message || 'ReadError';
+      }
     }
 
     function inferRunIdentity(runDir, summary, runConfig) {
@@ -2913,6 +3111,21 @@
     function renderTab(example) {
       if (!example) {
         $('tabContent').innerHTML = '<div class="empty">This run has no JSON trace examples.</div>';
+        return;
+      }
+      if (!example.trace_loaded) {
+        if (example.trace_error) {
+          $('tabContent').innerHTML = `
+            <div class="empty">Could not load this trace: ${esc(example.trace_error)}</div>
+            <details open><summary>Summary row</summary><pre>${esc(pretty(example.result || {}))}</pre></details>
+          `;
+          return;
+        }
+        scheduleExampleTraceLoad(example);
+        $('tabContent').innerHTML = `
+          <div class="empty">Loading trace ${esc(example.path || '')}...</div>
+          <details open><summary>Summary row</summary><pre>${esc(pretty(example.result || {}))}</pre></details>
+        `;
         return;
       }
       const renderers = { Overview: renderOverview, Orchestrator: renderOrchestrator, Prompt: renderPrompt, Output: renderOutput, Agents: renderAgents, Summarizer: renderSummarizer, Events: renderEvents, Tools: renderTools, Raw: renderRaw };

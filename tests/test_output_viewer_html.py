@@ -19,6 +19,10 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "Browser blocks automatic default loading for file:// pages" in html
     assert "if (!isFileProtocol()) loadDefaultOutputFolder();" in html
     assert "parseOutputFiles" in html
+    assert "buildLazyExamples" in html
+    assert "scheduleExampleTraceLoad" in html
+    assert "Reading metadata files" in html
+    assert "Promise.all(candidates" not in html
     assert "method_trace" in html
     assert "agent_traces" in html
     assert "event_receipts" in html
