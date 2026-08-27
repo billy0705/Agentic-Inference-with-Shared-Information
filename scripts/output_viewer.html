@@ -199,6 +199,8 @@
       analysisMethod: 'multiagent_dynamic_streaming',
       analysisBaselineMethods: [],
       analysisRoundMetric: 'correct_majority',
+      analysisTraceLoadingKey: '',
+      analysisTraceLoadProgress: null,
       page: 'accuracy',
       tab: 'Overview',
       search: '',
@@ -410,6 +412,8 @@
       state.analysisBaselineMethods = [];
       state.analysisRoundMetric = 'correct_majority';
       state.loadingExampleKey = '';
+      state.analysisTraceLoadingKey = '';
+      state.analysisTraceLoadProgress = null;
       $('sourceStatus').textContent = `${statusText} ${state.data.runs.length} runs found${formatSkippedFilesStatus()}.`;
       render();
     }
@@ -675,6 +679,42 @@
       } catch (error) {
         example.trace_error = error?.name || error?.message || 'ReadError';
       }
+    }
+
+    function unloadedAnalysisTraceExamples(run, targetMethod) {
+      if (!run || targetMethod !== 'multiagent_dynamic_streaming') return [];
+      return (run.examples || []).filter((example) =>
+        example.method === targetMethod &&
+        !example.trace_loaded &&
+        !example.trace_error &&
+        example.file_record
+      );
+    }
+
+    function analysisTraceLoadKey(run, targetMethod) {
+      return `${run?.path || run?.run_id || 'unknown'}:${targetMethod}`;
+    }
+
+    function scheduleAnalysisTraceLoad(run, targetMethod) {
+      const unloaded = unloadedAnalysisTraceExamples(run, targetMethod);
+      if (!unloaded.length) return;
+      const key = analysisTraceLoadKey(run, targetMethod);
+      if (state.analysisTraceLoadingKey === key) return;
+      state.analysisTraceLoadingKey = key;
+      state.analysisTraceLoadProgress = { key, loaded: 0, total: unloaded.length };
+      window.setTimeout(async () => {
+        for (let index = 0; index < unloaded.length; index += 1) {
+          await loadExampleTrace(unloaded[index]);
+          if (state.analysisTraceLoadingKey !== key) return;
+          state.analysisTraceLoadProgress = { key, loaded: index + 1, total: unloaded.length };
+          if (index % 10 === 0) await yieldToBrowser();
+        }
+        if (state.analysisTraceLoadingKey === key) {
+          state.analysisTraceLoadingKey = '';
+          state.analysisTraceLoadProgress = null;
+          render();
+        }
+      }, 0);
     }
 
     function inferRunIdentity(runDir, summary, runConfig) {
@@ -1655,6 +1695,9 @@
       const baselineOptions = analysisBaselineOptions(context, targetMethod);
       const baselineMethods = selectedAnalysisBaselineMethods(baselineOptions);
       const baselineSources = analysisBaselineSources(context.compatible_runs, context.run, baselineMethods);
+      if (state.page === 'analysis' && targetMethod === 'multiagent_dynamic_streaming') {
+        scheduleAnalysisTraceLoad(context.run, targetMethod);
+      }
       const rows = runAnalysisRows(context.run, targetMethod, baselineSources);
       const summary = analysisSummary(rows);
       const buckets = analysisBuckets();
@@ -1675,6 +1718,7 @@
         </div>
         ${renderErrorDistributionChart(rows)}
         ${renderConsensusTrendChart(rows)}
+        ${renderAnalysisTraceLoadingNotice(context.run, targetMethod)}
         ${renderSharedFindingImpactChart(rows, targetMethod)}
         ${buckets.map((bucket) => renderAnalysisBucket(bucket, rows.filter((row) => row.bucket === bucket.key))).join('')}
       `;
@@ -2050,8 +2094,10 @@
           <div class="analysis-summary">
             <div class="stat"><span class="subtle">Receiving opportunities</span><strong>${esc(stats.receiving_opportunities)}</strong></div>
             <div class="stat"><span class="subtle">Changed after shared</span><strong>${esc(stats.changed_total)} / ${esc(stats.receiving_opportunities)}</strong></div>
-            <div class="stat"><span class="subtle">Changed to correct</span><strong>${esc(stats.changed_to_correct)}</strong></div>
-            <div class="stat"><span class="subtle">Changed ending wrong</span><strong>${esc(stats.changed_ending_wrong)}</strong></div>
+            <div class="stat"><span class="subtle">wrong -> correct</span><strong>${esc(stats.changed_wrong_to_correct)}</strong></div>
+            <div class="stat"><span class="subtle">correct -> wrong</span><strong>${esc(stats.changed_correct_to_wrong)}</strong></div>
+            <div class="stat"><span class="subtle">wrong -> wrong</span><strong>${esc(stats.changed_wrong_to_wrong)}</strong></div>
+            <div class="stat"><span class="subtle">correct -> correct</span><strong>${esc(stats.changed_correct_to_correct)}</strong></div>
           </div>
           <table class="round-table">
             <thead>
@@ -2061,8 +2107,10 @@
                 <th>Received steps</th>
                 <th>Changed</th>
                 <th>Change rate</th>
-                <th>To correct</th>
-                <th>Ending wrong</th>
+                <th>wrong -> correct</th>
+                <th>correct -> wrong</th>
+                <th>wrong -> wrong</th>
+                <th>correct -> correct</th>
               </tr>
             </thead>
             <tbody>
@@ -2073,8 +2121,10 @@
                   <td>${esc(row.received)}</td>
                   <td>${esc(row.changed)}</td>
                   <td>${esc(percent(row.received ? row.changed / row.received : 0))}</td>
-                  <td><span class="good">${esc(row.to_correct)}</span></td>
-                  <td><span class="bad">${esc(row.ending_wrong)}</span></td>
+                  <td><span class="good">${esc(row.wrong_to_correct)}</span></td>
+                  <td><span class="bad">${esc(row.correct_to_wrong)}</span></td>
+                  <td><span class="warn">${esc(row.wrong_to_wrong)}</span></td>
+                  <td><span class="good">${esc(row.correct_to_correct)}</span></td>
                 </tr>
               `).join('')}
             </tbody>
@@ -2083,11 +2133,40 @@
       `;
     }
 
+    function renderAnalysisTraceLoadingNotice(run, targetMethod) {
+      if (targetMethod !== 'multiagent_dynamic_streaming') return '';
+      const methodExamples = (run?.examples || []).filter((example) => example.method === targetMethod);
+      const unloadedCount = unloadedAnalysisTraceExamples(run, targetMethod).length;
+      if (!unloadedCount) return '';
+      const key = analysisTraceLoadKey(run, targetMethod);
+      const progress = state.analysisTraceLoadProgress?.key === key ? state.analysisTraceLoadProgress : null;
+      const loadedCount = progress ? progress.loaded : Math.max(0, methodExamples.length - unloadedCount);
+      return `
+        <section class="analysis-bucket">
+          <div class="toolbar">
+            <div>
+              <h3>Loading shared finding traces</h3>
+              <div class="subtle">Shared findings impact needs the full dynamic-streaming trace for each example. The panel will update after those traces finish loading.</div>
+            </div>
+            <span class="pill">${esc(loadedCount)} / ${esc(methodExamples.length)} loaded</span>
+          </div>
+        </section>
+      `;
+    }
+
     function sharedFindingImpactSummary(rows) {
       const categories = new Map();
       const ensureCategory = (category) => {
         if (!categories.has(category)) {
-          categories.set(category, { published: 0, received: 0, changed: 0, to_correct: 0, ending_wrong: 0 });
+          categories.set(category, {
+            published: 0,
+            received: 0,
+            changed: 0,
+            wrong_to_correct: 0,
+            correct_to_wrong: 0,
+            wrong_to_wrong: 0,
+            correct_to_correct: 0,
+          });
         }
         return categories.get(category);
       };
@@ -2095,8 +2174,10 @@
         published_total: 0,
         receiving_opportunities: 0,
         changed_total: 0,
-        changed_to_correct: 0,
-        changed_ending_wrong: 0,
+        changed_wrong_to_correct: 0,
+        changed_correct_to_wrong: 0,
+        changed_wrong_to_wrong: 0,
+        changed_correct_to_correct: 0,
         categories,
       };
       for (const row of rows) {
@@ -2105,8 +2186,10 @@
         stats.published_total += analysis.published_findings.length;
         stats.receiving_opportunities += analysis.receiving_opportunities;
         stats.changed_total += analysis.answer_changes.length;
-        stats.changed_to_correct += analysis.answer_changes.filter((change) => change.outcome_key === 'wrong_to_correct').length;
-        stats.changed_ending_wrong += analysis.answer_changes.filter((change) => change.outcome_key === 'correct_to_wrong' || change.outcome_key === 'wrong_to_wrong').length;
+        stats.changed_wrong_to_correct += countSharedFindingOutcome(analysis.answer_changes, 'wrong_to_correct');
+        stats.changed_correct_to_wrong += countSharedFindingOutcome(analysis.answer_changes, 'correct_to_wrong');
+        stats.changed_wrong_to_wrong += countSharedFindingOutcome(analysis.answer_changes, 'wrong_to_wrong');
+        stats.changed_correct_to_correct += countSharedFindingOutcome(analysis.answer_changes, 'correct_to_correct');
         for (const finding of analysis.published_findings) ensureCategory(finding.category).published += 1;
         for (const opportunity of analysis.receiving_steps) {
           for (const category of opportunity.categories) ensureCategory(category).received += 1;
@@ -2115,12 +2198,18 @@
           for (const category of change.categories) {
             const bucket = ensureCategory(category);
             bucket.changed += 1;
-            if (change.outcome_key === 'wrong_to_correct') bucket.to_correct += 1;
-            if (change.outcome_key === 'correct_to_wrong' || change.outcome_key === 'wrong_to_wrong') bucket.ending_wrong += 1;
+            if (change.outcome_key === 'wrong_to_correct') bucket.wrong_to_correct += 1;
+            if (change.outcome_key === 'correct_to_wrong') bucket.correct_to_wrong += 1;
+            if (change.outcome_key === 'wrong_to_wrong') bucket.wrong_to_wrong += 1;
+            if (change.outcome_key === 'correct_to_correct') bucket.correct_to_correct += 1;
           }
         }
       }
       return stats;
+    }
+
+    function countSharedFindingOutcome(changes, outcomeKey) {
+      return (changes || []).filter((change) => change.outcome_key === outcomeKey).length;
     }
 
     function analysisRoundMetricOptions() {
@@ -2266,8 +2355,10 @@
             <span class="pill">shared findings: ${esc(findings.length)}</span>
             <span class="pill">received steps: ${esc(analysis.receiving_opportunities)}</span>
             <span class="pill">changed after shared: ${esc(changes.length)}</span>
-            <span class="pill">changed to correct: ${esc(changes.filter((change) => change.outcome_key === 'wrong_to_correct').length)}</span>
-            <span class="pill">changed ending wrong: ${esc(changes.filter((change) => change.outcome_key === 'correct_to_wrong' || change.outcome_key === 'wrong_to_wrong').length)}</span>
+            <span class="pill">wrong -> correct: ${esc(countSharedFindingOutcome(changes, 'wrong_to_correct'))}</span>
+            <span class="pill">correct -> wrong: ${esc(countSharedFindingOutcome(changes, 'correct_to_wrong'))}</span>
+            <span class="pill">wrong -> wrong: ${esc(countSharedFindingOutcome(changes, 'wrong_to_wrong'))}</span>
+            <span class="pill">correct -> correct: ${esc(countSharedFindingOutcome(changes, 'correct_to_correct'))}</span>
           </div>
           ${findings.length ? `
             <h4>What agents shared</h4>
@@ -2313,7 +2404,7 @@
                     <td>${esc(change.step)}</td>
                     <td>${esc(change.agent)}</td>
                     <td>${esc(change.from)} -> ${esc(change.to)}</td>
-                    <td><span class="${change.outcome_key === 'wrong_to_correct' ? 'good' : 'bad'}">${esc(change.outcome)}</span></td>
+                    <td><span class="${esc(sharedFindingOutcomeClass(change.outcome_key))}">${esc(change.outcome)}</span></td>
                     <td>${esc(change.categories.join(', ') || 'n/a')}</td>
                     <td class="shared-finding-text">${esc(formatIncomingFindings(change.incoming))}</td>
                   </tr>
@@ -2323,6 +2414,13 @@
           ` : '<div class="subtle">No answer changes were detected immediately after receiving shared findings.</div>'}
         </details>
       `;
+    }
+
+    function sharedFindingOutcomeClass(outcomeKey) {
+      if (outcomeKey === 'wrong_to_correct' || outcomeKey === 'correct_to_correct') return 'good';
+      if (outcomeKey === 'correct_to_wrong') return 'bad';
+      if (outcomeKey === 'wrong_to_wrong') return 'warn';
+      return '';
     }
 
     function formatIncomingFindings(incoming) {
