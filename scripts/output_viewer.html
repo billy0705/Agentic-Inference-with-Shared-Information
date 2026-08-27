@@ -196,6 +196,7 @@
       accuracyModels: {},
       analysisBenchmark: '',
       analysisModels: {},
+      analysisRuns: {},
       analysisMethod: 'multiagent_dynamic_streaming',
       analysisBaselineMethods: [],
       analysisRoundMetric: 'correct_majority',
@@ -408,6 +409,7 @@
       state.accuracyModels = {};
       state.analysisBenchmark = '';
       state.analysisModels = {};
+      state.analysisRuns = {};
       state.analysisMethod = 'multiagent_dynamic_streaming';
       state.analysisBaselineMethods = [];
       state.analysisRoundMetric = 'correct_majority';
@@ -1705,7 +1707,7 @@
         <div class="toolbar">
           <div>
             <h2>Run Analysis</h2>
-            <div class="subtle">${esc(context.run.benchmark_display_name)} · current ${esc(context.run.run_id)} · selected baselines from previous compatible runs</div>
+            <div class="subtle">${esc(context.run.benchmark_display_name)} · current ${esc(context.run.run_id)} · selected baselines from other compatible runs</div>
           </div>
           <span class="pill">compatible runs: ${esc(context.compatible_runs.length)}</span>
         </div>
@@ -1731,10 +1733,11 @@
       const benchmarkRuns = runs.filter((run) => run.benchmark === benchmark);
       const models = latestModelsForBenchmark(benchmarkRuns);
       const selectedModel = selectedAnalysisModel(benchmark, models);
-      const run = latestRunForModel(benchmarkRuns, selectedModel);
+      const modelRuns = analysisRunsForModel(benchmarkRuns, selectedModel);
+      const run = selectedAnalysisRun(benchmark, selectedModel, modelRuns);
       const compatibleRuns = run ? compatibleAccuracyRuns(benchmarkRuns, selectedModel, run) : [];
       const previousRun = run ? compatibleRuns.find((candidate) => candidate.path !== run.path) || null : null;
-      return { benchmarks, benchmark, benchmark_runs: benchmarkRuns, models, selected_model: selectedModel, run, compatible_runs: compatibleRuns, previous_run: previousRun };
+      return { benchmarks, benchmark, benchmark_runs: benchmarkRuns, models, selected_model: selectedModel, model_runs: modelRuns, run, compatible_runs: compatibleRuns, previous_run: previousRun };
     }
 
     function latestBenchmarksForAnalysis(runs) {
@@ -1766,9 +1769,31 @@
       return fallback;
     }
 
+    function analysisRunsForModel(runs, model) {
+      return runs
+        .filter((run) => accuracyModelName(run) === model)
+        .sort((left, right) => compareRunRecency(right, left));
+    }
+
+    function analysisRunSelectionKey(benchmark, model) {
+      return `${benchmark}\n${model}`;
+    }
+
+    function selectedAnalysisRun(benchmark, model, modelRuns) {
+      const key = analysisRunSelectionKey(benchmark, model);
+      const selected = state.analysisRuns[key];
+      if (selected) {
+        const run = modelRuns.find((candidate) => candidate.path === selected);
+        if (run) return run;
+      }
+      const fallback = modelRuns[0] || null;
+      if (fallback) state.analysisRuns[key] = fallback.path;
+      return fallback;
+    }
+
     function analysisBaselineOptions(context, targetMethod) {
-      const previousRuns = (context.compatible_runs || []).filter((run) => run.path !== context.run?.path);
-      return unique(previousRuns.flatMap((run) => runMethods(run))).filter((method) => method !== targetMethod);
+      const otherRuns = (context.compatible_runs || []).filter((run) => run.path !== context.run?.path);
+      return unique(otherRuns.flatMap((run) => runMethods(run))).filter((method) => method !== targetMethod);
     }
 
     function selectedAnalysisBaselineMethods(options) {
@@ -1781,9 +1806,9 @@
 
     function analysisBaselineSources(compatibleRuns, currentRun, baselineMethods) {
       const sources = new Map();
-      const previousRuns = (compatibleRuns || []).filter((run) => run.path !== currentRun?.path);
+      const otherRuns = (compatibleRuns || []).filter((run) => run.path !== currentRun?.path);
       for (const method of baselineMethods) {
-        const sourceRun = previousRuns.find((run) => runMethods(run).includes(method));
+        const sourceRun = otherRuns.find((run) => runMethods(run).includes(method));
         if (sourceRun) sources.set(method, sourceRun);
       }
       return sources;
@@ -1805,6 +1830,12 @@
             </select>
           </div>
           <div class="field">
+            <label for="analysisRunSelect">Run</label>
+            <select id="analysisRunSelect" onchange="setAnalysisRun(this.value)">
+              ${(context.model_runs || []).map((run) => `<option value="${esc(run.path)}" ${run.path === context.run?.path ? 'selected' : ''}>${esc(analysisRunLabel(run))}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
             <label for="analysisMethodSelect">Analysis method</label>
             <select id="analysisMethodSelect" onchange="setAnalysisMethod(this.value)">
               ${methods.map((method) => `<option value="${esc(method)}" ${method === targetMethod ? 'selected' : ''}>${esc(method)}</option>`).join('')}
@@ -1822,8 +1853,14 @@
       `;
     }
 
+    function analysisRunLabel(run) {
+      const methods = runMethods(run);
+      const total = run.results?.length || run.examples?.length || 0;
+      return `${run.run_id} · ${methods.length} methods · ${total} rows`;
+    }
+
     function renderAnalysisBaselineControls(options, selectedMethods) {
-      if (!options.length) return '<div class="empty">No previous baseline methods are available for this benchmark/model.</div>';
+      if (!options.length) return '<div class="empty">No other compatible baseline methods are available for this benchmark/model/run.</div>';
       return `
         <div class="checkbox-group">
           ${options.map((method) => `
@@ -1857,6 +1894,8 @@
 
     function setAnalysisMethod(method) {
       state.analysisMethod = method;
+      state.analysisTraceLoadingKey = '';
+      state.analysisTraceLoadProgress = null;
       state.page = 'analysis';
       render();
     }
@@ -1874,6 +1913,8 @@
       state.analysisBenchmark = benchmark;
       state.analysisMethod = 'multiagent_dynamic_streaming';
       state.analysisBaselineMethods = [];
+      state.analysisTraceLoadingKey = '';
+      state.analysisTraceLoadProgress = null;
       state.page = 'analysis';
       render();
     }
@@ -1882,6 +1923,20 @@
       if (state.analysisBenchmark) state.analysisModels[state.analysisBenchmark] = model;
       state.analysisMethod = 'multiagent_dynamic_streaming';
       state.analysisBaselineMethods = [];
+      state.analysisTraceLoadingKey = '';
+      state.analysisTraceLoadProgress = null;
+      state.page = 'analysis';
+      render();
+    }
+
+    function setAnalysisRun(path) {
+      const context = analysisSelectionContext();
+      if (context.benchmark && context.selected_model) {
+        state.analysisRuns[analysisRunSelectionKey(context.benchmark, context.selected_model)] = path;
+      }
+      state.analysisBaselineMethods = [];
+      state.analysisTraceLoadingKey = '';
+      state.analysisTraceLoadProgress = null;
       state.page = 'analysis';
       render();
     }

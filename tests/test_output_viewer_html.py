@@ -89,13 +89,18 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "formatAcceptedAnswers" in html
     assert "selectedAnalysisBenchmark" in html
     assert "selectedAnalysisModel" in html
+    assert "selectedAnalysisRun" in html
+    assert "analysisRunSelect" in html
+    assert "analysisRunLabel" in html
     assert "setAnalysisBenchmark" in html
     assert "setAnalysisModel" in html
+    assert "setAnalysisRun" in html
     assert "BASELINE_METHOD_DEFAULTS" in html
     assert "single_agent" in html
     assert "majority_vote" in html
     assert "multiagent_debate" in html
     assert "Baseline methods" in html
+    assert "other compatible runs" in html
     assert "Baseline correct, current wrong" in html
     assert "Selected baselines correct" not in html
     assert "setAnalysisBaselineMethod" in html
