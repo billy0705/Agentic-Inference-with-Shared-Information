@@ -52,6 +52,18 @@ uv sync --extra vllm-server
 ./generate.sh server.yaml
 ```
 
+To force the managed server and configured evaluations to run locally instead
+of being submitted to Helma, set `RUN_LOCAL=1`:
+
+```bash
+RUN_LOCAL=1 ./generate.sh server.yaml
+```
+
+This starts vLLM using the `vllm` section, runs the evaluation matrix from the
+`expt` section, and stops vLLM afterward. The `helma` section is not used for
+local execution. Ensure that paths such as `vllm.sif_path`,
+`expt.benchmark_data_dir`, and `expt.output_dir` are valid on the local machine.
+
 `server.yaml` contains `vllm`, `helma`, and `expt` settings. `generate.sh` runs
 normal evaluations locally and submits itself with `sbatch` on Helma. Plain
 `uv sync` excludes the private launcher; `--all-extras` requires SSH access.
