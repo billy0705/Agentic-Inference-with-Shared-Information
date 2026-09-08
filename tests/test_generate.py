@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -77,6 +78,7 @@ def test_load_experiment_config_validates_and_deduplicates_lists():
     assert config.methods == ("multiagent_dynamic_streaming", "plain_llm")
     assert config.limit == 2
     assert config.repeats == 1
+    assert config.resume_repeats is False
     assert config.max_steps is None
     assert config.think_mode is None
     assert config.min_dynamic_subagents is None
@@ -155,6 +157,7 @@ def test_load_experiment_config_resolves_resume_run_relative_to_yaml():
         ({"benchmark": ["gsm8k"], "methods": ["unknown"]}, "Unknown method"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "limit": -1}, "expt.limit"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "repeats": 0}, "expt.repeats"),
+        ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "resume_repeats": "yes"}, "expt.resume_repeats"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "max_steps": 0}, "expt.max_steps"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "think_mode": "false"}, "expt.think_mode"),
         (
@@ -182,11 +185,51 @@ def test_load_experiment_config_resolves_resume_run_relative_to_yaml():
             {"benchmark": ["gsm8k", "gpqa"], "methods": ["plain_llm"], "resume_run": "output/run"},
             "one configured benchmark",
         ),
+        (
+            {
+                "benchmark": ["gsm8k"],
+                "methods": ["plain_llm"],
+                "resume_repeats": True,
+                "resume_run": "output/run",
+            },
+            "resume_repeats",
+        ),
     ],
 )
 def test_load_experiment_config_rejects_invalid_values(expt, message):
     with pytest.raises(ValueError, match=message):
         generate.load_experiment_config(ConfigManagerStub(expt))
+
+
+def write_matching_repeat_config(
+    output_dir: Path,
+    *,
+    benchmark: str,
+    model_dir: str,
+    run_id: str,
+    experiment: generate.ExperimentConfig,
+) -> Path:
+    methods = ",".join(experiment.methods)
+    args = generate.build_evaluation_args(experiment, benchmark, methods, resume_run=None)
+    setattr(args, "resolved_model", "model-a")
+    settings = {
+        key: generate.runner.resolve_model_name(args) if key == "resolved_model" else getattr(args, key, None)
+        for key in generate.REPEAT_MATCH_SETTINGS
+    }
+    run_dir = output_dir / benchmark / model_dir / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_config.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "benchmark": benchmark,
+                "methods": list(experiment.methods),
+                "settings": settings,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return run_dir
 
 
 @pytest.mark.asyncio
@@ -250,6 +293,65 @@ async def test_run_experiments_starts_one_server_for_all_benchmarks(monkeypatch)
         ("run", "gsm8k", "multiagent_dynamic_streaming,plain_llm", 1, 5, 3, 3, False, 5, 5, 5, 12000, "/project/output", None),
         ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, 5, 3, 3, False, 5, 5, 5, 12000, "/project/output", None),
         ("run", "gpqa", "multiagent_dynamic_streaming,plain_llm", 1, 5, 3, 3, False, 5, 5, 5, 12000, "/project/output", None),
+        ("stop",),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_experiments_resume_repeats_resumes_matching_runs_then_starts_missing(monkeypatch, tmp_path):
+    manager = ConfigManagerStub(
+        {
+            "benchmark": ["gsm8k"],
+            "methods": ["plain_llm"],
+            "limit": 1,
+            "repeats": 3,
+            "resume_repeats": True,
+            "output_dir": str(tmp_path),
+        }
+    )
+    experiment = generate.load_experiment_config(manager)
+    first_run = write_matching_repeat_config(
+        tmp_path,
+        benchmark="gsm8k",
+        model_dir="model-a",
+        run_id="20260101T000000Z_11111111",
+        experiment=experiment,
+    )
+    second_run = write_matching_repeat_config(
+        tmp_path,
+        benchmark="gsm8k",
+        model_dir="model-a",
+        run_id="20260101T010000Z_22222222",
+        experiment=experiment,
+    )
+    write_matching_repeat_config(
+        tmp_path,
+        benchmark="gpqa",
+        model_dir="model-a",
+        run_id="20260101T020000Z_33333333",
+        experiment=experiment,
+    )
+    events = []
+
+    class Server:
+        def stop(self):
+            events.append(("stop",))
+
+    async def fake_run_evaluation(args):
+        events.append(("run", args.benchmark, args.resume_run))
+        return []
+
+    monkeypatch.setattr(generate, "get_config_manager", lambda: lambda path: manager)
+    monkeypatch.setattr(generate, "spinup_server", lambda received_manager, timeout: Server())
+    monkeypatch.setattr(generate.runner, "resolve_model_name", lambda args: "model-a")
+    monkeypatch.setattr(generate.evaluation, "run_evaluation", fake_run_evaluation)
+
+    await generate.run_experiments("server.yaml")
+
+    assert events == [
+        ("run", "gsm8k", str(first_run)),
+        ("run", "gsm8k", str(second_run)),
+        ("run", "gsm8k", None),
         ("stop",),
     ]
 

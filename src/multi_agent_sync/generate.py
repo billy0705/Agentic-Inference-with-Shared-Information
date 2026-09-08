@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import shlex
 import sys
@@ -20,6 +21,7 @@ class ExperimentConfig:
     methods: tuple[str, ...]
     limit: int
     repeats: int
+    resume_repeats: bool
     max_steps: int | None
     think_mode: bool | None
     min_dynamic_subagents: int | None
@@ -145,6 +147,10 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
     if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats <= 0:
         raise ValueError("'expt.repeats' must be a positive integer")
 
+    resume_repeats = expt.get("resume_repeats", False)
+    if not isinstance(resume_repeats, bool):
+        raise ValueError("'expt.resume_repeats' must be a boolean")
+
     max_steps = _optional_positive_int(expt, "expt", "max_steps")
     think_mode = _optional_bool(expt, "expt", "think_mode")
     min_dynamic_subagents = _optional_positive_int(expt, "expt", "min_dynamic_subagents")
@@ -170,6 +176,8 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
     resume_run = _optional_path(expt, "expt", "resume_run", manager.path.parent)
     if resume_run is not None and len(normalized_benchmarks) != 1:
         raise ValueError("'expt.resume_run' can only be used with one configured benchmark")
+    if resume_repeats and resume_run is not None:
+        raise ValueError("'expt.resume_repeats' cannot be used with 'expt.resume_run'")
     benchmark_data_dir = _optional_path(expt, "expt", "benchmark_data_dir", manager.path.parent)
     output_dir = _optional_path(expt, "expt", "output_dir", manager.path.parent)
     if output_dir is None:
@@ -180,6 +188,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         methods=normalized_methods,
         limit=limit,
         repeats=repeats,
+        resume_repeats=resume_repeats,
         max_steps=max_steps,
         think_mode=think_mode,
         min_dynamic_subagents=min_dynamic_subagents,
@@ -217,6 +226,175 @@ def server_ready_timeout(manager: Any) -> float:
     return float(timeout)
 
 
+def build_evaluation_args(
+    experiment: ExperimentConfig,
+    benchmark: str,
+    methods: str,
+    *,
+    resume_run: Path | None,
+) -> argparse.Namespace:
+    return evaluation.build_parser().parse_args(
+        [
+            "--benchmark",
+            benchmark,
+            "--methods",
+            methods,
+            "--limit",
+            str(experiment.limit),
+            *(["--max-steps", str(experiment.max_steps)] if experiment.max_steps is not None else []),
+            *(["--think-mode"] if experiment.think_mode is True else []),
+            *(["--no-think-mode"] if experiment.think_mode is False else []),
+            *(
+                ["--min-dynamic-subagents", str(experiment.min_dynamic_subagents)]
+                if experiment.min_dynamic_subagents is not None
+                else []
+            ),
+            *(
+                ["--max-dynamic-subagents", str(experiment.max_dynamic_subagents)]
+                if experiment.max_dynamic_subagents is not None
+                else []
+            ),
+            *(
+                ["--single-agent-min-steps", str(experiment.single_agent_min_steps)]
+                if experiment.single_agent_min_steps is not None
+                else []
+            ),
+            *(
+                ["--single-agent-max-steps", str(experiment.single_agent_max_steps)]
+                if experiment.single_agent_max_steps is not None
+                else []
+            ),
+            *(["--debate-rounds", str(experiment.debate_rounds)] if experiment.debate_rounds is not None else []),
+            *(["--max-tokens", str(experiment.max_tokens)] if experiment.max_tokens is not None else []),
+            *(["--output-dir", str(experiment.output_dir)] if experiment.output_dir else []),
+            *(["--resume-run", str(resume_run)] if resume_run else []),
+        ]
+    )
+
+
+def resolve_args_model(args: argparse.Namespace) -> argparse.Namespace:
+    setattr(args, "resolved_model", runner.resolve_model_name(args))
+    return args
+
+
+REPEAT_MATCH_SETTINGS = (
+    "model",
+    "resolved_model",
+    "local_model",
+    "limit",
+    "attempts",
+    "ma_proofbench_level",
+    "olymmath_subset",
+    "lean_timeout",
+    "kimina_host",
+    "kimina_port",
+    "kimina_max_workers",
+    "kimina_docker",
+    "kimina_docker_image",
+    "kimina_docker_container",
+    "kimina_docker_startup_timeout",
+    "kimina_docker_cleanup",
+    "lean_agent_workspace",
+    "swebench_agent_workspace",
+    "swebench_run_harness",
+    "swebench_max_workers",
+    "swebench_run_id",
+    "swebench_namespace",
+    "swebench_instance_ids",
+    "workspace_image",
+    "max_steps",
+    "min_dynamic_subagents",
+    "max_dynamic_subagents",
+    "max_orchestrator_rounds",
+    "debate_rounds",
+    "allow_agent_early_stop",
+    "think_mode",
+    "single_agent_min_steps",
+    "single_agent_max_steps",
+    "total_runtime_timeout",
+    "agent_runtime_timeout",
+    "synthesis_timeout",
+    "seed",
+    "data_file",
+    "save_json_traces",
+)
+
+
+def repeat_run_config_matches(
+    run_config: dict[str, Any],
+    *,
+    benchmark: str,
+    methods: tuple[str, ...],
+    args: argparse.Namespace,
+) -> bool:
+    if run_config.get("benchmark") != benchmark:
+        return False
+    if run_config.get("methods") != list(methods):
+        return False
+    settings = run_config.get("settings")
+    if not isinstance(settings, dict):
+        return False
+
+    expected_settings = {
+        key: runner.resolve_model_name(args) if key == "resolved_model" else getattr(args, key, None)
+        for key in REPEAT_MATCH_SETTINGS
+    }
+    return all(settings.get(key) == expected for key, expected in expected_settings.items())
+
+
+def find_matching_repeat_runs(
+    experiment: ExperimentConfig,
+    *,
+    benchmark: str,
+    args: argparse.Namespace,
+) -> list[Path]:
+    if experiment.output_dir is None:
+        return []
+    model_dir = Path(args.output_dir) / runner.safe_filename(benchmark) / runner.resolve_model_output_name(args)
+    if not model_dir.exists():
+        return []
+
+    run_dirs = []
+    for config_path in sorted(model_dir.glob("*/run_config.json")):
+        try:
+            run_config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Skipping repeat candidate with unreadable run_config: {config_path} ({exc})", file=sys.stderr)
+            continue
+        if repeat_run_config_matches(run_config, benchmark=benchmark, methods=experiment.methods, args=args):
+            run_dirs.append(config_path.parent)
+
+    if len(run_dirs) > experiment.repeats:
+        skipped = len(run_dirs) - experiment.repeats
+        print(
+            f"Found {len(run_dirs)} matching repeat runs for {benchmark}; "
+            f"using the most recent {experiment.repeats} and ignoring {skipped}.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return run_dirs[-experiment.repeats :]
+    return run_dirs
+
+
+async def run_evaluation_once(
+    experiment: ExperimentConfig,
+    *,
+    benchmark: str,
+    methods: str,
+    repeat_label: str,
+    resume_run: Path | None,
+) -> None:
+    print(
+        f"Running {benchmark} {repeat_label} with {methods}",
+        file=sys.stderr,
+        flush=True,
+    )
+    args = build_evaluation_args(experiment, benchmark, methods, resume_run=resume_run)
+    if resume_run is not None:
+        setattr(args, "resume_run", str(resume_run))
+    await evaluation.run_evaluation(args)
+
+
 async def run_experiments(config_path: str | Path) -> None:
     manager = get_config_manager()(config_path)
     experiment = load_experiment_config(manager)
@@ -226,59 +404,50 @@ async def run_experiments(config_path: str | Path) -> None:
     server = spinup_server(manager, timeout=server_ready_timeout(manager))
     try:
         for index, benchmark in enumerate(experiment.benchmarks, start=1):
+            if experiment.resume_repeats:
+                base_args = resolve_args_model(
+                    build_evaluation_args(experiment, benchmark, methods, resume_run=None)
+                )
+                repeat_run_dirs = find_matching_repeat_runs(
+                    experiment,
+                    benchmark=benchmark,
+                    args=base_args,
+                )
+                for repeat, resume_run in enumerate(repeat_run_dirs, start=1):
+                    await run_evaluation_once(
+                        experiment,
+                        benchmark=benchmark,
+                        methods=methods,
+                        repeat_label=(
+                            f"benchmark {index}/{len(experiment.benchmarks)} "
+                            f"resume repeat {repeat}/{experiment.repeats}"
+                        ),
+                        resume_run=resume_run,
+                    )
+                for repeat in range(len(repeat_run_dirs) + 1, experiment.repeats + 1):
+                    await run_evaluation_once(
+                        experiment,
+                        benchmark=benchmark,
+                        methods=methods,
+                        repeat_label=(
+                            f"benchmark {index}/{len(experiment.benchmarks)} "
+                            f"fresh repeat {repeat}/{experiment.repeats}"
+                        ),
+                        resume_run=None,
+                    )
+                continue
+
             for repeat in range(1, experiment.repeats + 1):
-                print(
-                    f"Running benchmark {index}/{len(experiment.benchmarks)} "
-                    f"repeat {repeat}/{experiment.repeats}: {benchmark} with {methods}",
-                    file=sys.stderr,
-                    flush=True,
+                await run_evaluation_once(
+                    experiment,
+                    benchmark=benchmark,
+                    methods=methods,
+                    repeat_label=(
+                        f"benchmark {index}/{len(experiment.benchmarks)} "
+                        f"repeat {repeat}/{experiment.repeats}"
+                    ),
+                    resume_run=experiment.resume_run,
                 )
-                args = evaluation.build_parser().parse_args(
-                    [
-                        "--benchmark",
-                        benchmark,
-                        "--methods",
-                        methods,
-                        "--limit",
-                        str(experiment.limit),
-                        *(["--max-steps", str(experiment.max_steps)] if experiment.max_steps is not None else []),
-                        *(["--think-mode"] if experiment.think_mode is True else []),
-                        *(["--no-think-mode"] if experiment.think_mode is False else []),
-                        *(
-                            ["--min-dynamic-subagents", str(experiment.min_dynamic_subagents)]
-                            if experiment.min_dynamic_subagents is not None
-                            else []
-                        ),
-                        *(
-                            ["--max-dynamic-subagents", str(experiment.max_dynamic_subagents)]
-                            if experiment.max_dynamic_subagents is not None
-                            else []
-                        ),
-                        *(
-                            ["--single-agent-min-steps", str(experiment.single_agent_min_steps)]
-                            if experiment.single_agent_min_steps is not None
-                            else []
-                        ),
-                        *(
-                            ["--single-agent-max-steps", str(experiment.single_agent_max_steps)]
-                            if experiment.single_agent_max_steps is not None
-                            else []
-                        ),
-                        *(
-                            ["--debate-rounds", str(experiment.debate_rounds)]
-                            if experiment.debate_rounds is not None
-                            else []
-                        ),
-                        *(
-                            ["--max-tokens", str(experiment.max_tokens)]
-                            if experiment.max_tokens is not None
-                            else []
-                        ),
-                        *(["--output-dir", str(experiment.output_dir)] if experiment.output_dir else []),
-                        *(["--resume-run", str(experiment.resume_run)] if experiment.resume_run else []),
-                    ]
-                )
-                await evaluation.run_evaluation(args)
     finally:
         server.stop()
 

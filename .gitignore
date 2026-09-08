@@ -20,3 +20,7 @@ vllm-server.log
 server.yaml
 *.out
 hub/
+.vscode
+datasets/
+*.yaml
+benchmark-data/
