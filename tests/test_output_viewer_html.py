@@ -89,13 +89,18 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "formatAcceptedAnswers" in html
     assert "selectedAnalysisBenchmark" in html
     assert "selectedAnalysisModel" in html
+    assert "selectedAnalysisRun" in html
+    assert "analysisRunSelect" in html
+    assert "analysisRunLabel" in html
     assert "setAnalysisBenchmark" in html
     assert "setAnalysisModel" in html
+    assert "setAnalysisRun" in html
     assert "BASELINE_METHOD_DEFAULTS" in html
     assert "single_agent" in html
     assert "majority_vote" in html
     assert "multiagent_debate" in html
     assert "Baseline methods" in html
+    assert "other compatible runs" in html
     assert "Baseline correct, current wrong" in html
     assert "Selected baselines correct" not in html
     assert "setAnalysisBaselineMethod" in html
@@ -141,16 +146,22 @@ def test_static_output_viewer_has_local_folder_reader_and_trace_parser():
     assert "analysisConsensusTrend" in html
     assert "Shared findings impact" in html
     assert "renderSharedFindingImpactChart" in html
+    assert "renderAnalysisTraceLoadingNotice" in html
+    assert "scheduleAnalysisTraceLoad" in html
+    assert "unloadedAnalysisTraceExamples" in html
+    assert "Loading shared finding traces" in html
     assert "analyzeSharedFindings" in html
     assert "classifySharedFinding" in html
     assert "Shared findings details" in html
     assert "What agents shared" in html
     assert "Answer changes after receiving shared findings" in html
     assert "Changed after shared" in html
-    assert "Changed to correct" in html
-    assert "Changed ending wrong" in html
     assert "wrong -> correct" in html
     assert "correct -> wrong" in html
+    assert "wrong -> wrong" in html
+    assert "correct -> correct" in html
+    assert "Changed ending wrong" not in html
+    assert "changed ending wrong" not in html
     assert "wrong subagent consensus" in html
     assert "wrong tie-break / final selection" in html
     assert "buildFailureExplanation" in html
