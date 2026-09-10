@@ -86,6 +86,7 @@ def test_load_experiment_config_validates_and_deduplicates_lists():
     assert config.single_agent_min_steps is None
     assert config.single_agent_max_steps is None
     assert config.debate_rounds is None
+    assert config.olymmath_subset is None
     assert config.max_tokens is None
     assert config.resume_run is None
     assert config.benchmark_data_dir is None
@@ -148,6 +149,22 @@ def test_load_experiment_config_resolves_resume_run_relative_to_yaml():
     assert config.resume_run == Path("/project/output/gsm8k/model/run-id")
 
 
+def test_build_evaluation_args_passes_configured_olymmath_subset():
+    manager = ConfigManagerStub(
+        {
+            "benchmark": ["olymmath"],
+            "methods": ["plain_llm"],
+            "olymmath_subset": "en-hard",
+        }
+    )
+    config = generate.load_experiment_config(manager)
+
+    args = generate.build_evaluation_args(config, "olymmath", "plain_llm", resume_run=None)
+
+    assert config.olymmath_subset == "en-hard"
+    assert args.olymmath_subset == "en-hard"
+
+
 @pytest.mark.parametrize(
     ("expt", "message"),
     [
@@ -169,6 +186,7 @@ def test_load_experiment_config_resolves_resume_run_relative_to_yaml():
             },
             "min_dynamic_subagents",
         ),
+        ({"benchmark": ["olymmath"], "methods": ["plain_llm"], "olymmath_subset": "hard"}, "expt.olymmath_subset"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "max_tokens": 0}, "expt.max_tokens"),
         (
             {

@@ -29,6 +29,7 @@ class ExperimentConfig:
     single_agent_min_steps: int | None
     single_agent_max_steps: int | None
     debate_rounds: int | None
+    olymmath_subset: str | None
     max_tokens: int | None
     resume_run: Path | None
     benchmark_data_dir: Path | None
@@ -103,6 +104,23 @@ def _optional_bool(section: dict[str, Any], section_name: str, key: str) -> bool
     return value
 
 
+def _optional_choice_string(
+    section: dict[str, Any],
+    section_name: str,
+    key: str,
+    choices: set[str],
+) -> str | None:
+    value = section.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"'{section_name}.{key}' must be one of: {', '.join(sorted(choices))}")
+    normalized = value.strip()
+    if normalized not in choices:
+        raise ValueError(f"'{section_name}.{key}' must be one of: {', '.join(sorted(choices))}")
+    return normalized
+
+
 def load_helma_config(manager: Any) -> HelmaConfig:
     helma = manager.section("helma")
     nodes = helma.get("nodes")
@@ -158,6 +176,12 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
     single_agent_min_steps = _optional_positive_int(expt, "expt", "single_agent_min_steps")
     single_agent_max_steps = _optional_positive_int(expt, "expt", "single_agent_max_steps")
     debate_rounds = _optional_positive_int(expt, "expt", "debate_rounds")
+    olymmath_subset = _optional_choice_string(
+        expt,
+        "expt",
+        "olymmath_subset",
+        {"en-easy", "en-hard", "zh-easy", "zh-hard"},
+    )
     max_tokens = _optional_positive_int(expt, "expt", "max_tokens")
     if (
         min_dynamic_subagents is not None
@@ -196,6 +220,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         single_agent_min_steps=single_agent_min_steps,
         single_agent_max_steps=single_agent_max_steps,
         debate_rounds=debate_rounds,
+        olymmath_subset=olymmath_subset,
         max_tokens=max_tokens,
         resume_run=resume_run,
         benchmark_data_dir=benchmark_data_dir,
@@ -265,6 +290,7 @@ def build_evaluation_args(
                 else []
             ),
             *(["--debate-rounds", str(experiment.debate_rounds)] if experiment.debate_rounds is not None else []),
+            *(["--olymmath-subset", experiment.olymmath_subset] if experiment.olymmath_subset is not None else []),
             *(["--max-tokens", str(experiment.max_tokens)] if experiment.max_tokens is not None else []),
             *(["--output-dir", str(experiment.output_dir)] if experiment.output_dir else []),
             *(["--resume-run", str(resume_run)] if resume_run else []),
