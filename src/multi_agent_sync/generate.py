@@ -362,7 +362,11 @@ def repeat_run_config_matches(
         return False
 
     expected_settings = {
-        key: runner.resolve_model_name(args) if key == "resolved_model" else getattr(args, key, None)
+        key: (
+            runner.resolve_model_name(args)
+            if key == "resolved_model"
+            else getattr(args, key, False if key == "local_model" else None)
+        )
         for key in REPEAT_MATCH_SETTINGS
     }
     return all(settings.get(key) == expected for key, expected in expected_settings.items())

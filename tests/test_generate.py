@@ -231,7 +231,11 @@ def write_matching_repeat_config(
     args = generate.build_evaluation_args(experiment, benchmark, methods, resume_run=None)
     setattr(args, "resolved_model", "model-a")
     settings = {
-        key: generate.runner.resolve_model_name(args) if key == "resolved_model" else getattr(args, key, None)
+        key: (
+            generate.runner.resolve_model_name(args)
+            if key == "resolved_model"
+            else getattr(args, key, False if key == "local_model" else None)
+        )
         for key in generate.REPEAT_MATCH_SETTINGS
     }
     run_dir = output_dir / benchmark / model_dir / run_id
