@@ -282,6 +282,14 @@ class SummarizerLastSummaryLLM:
         )
 
 
+class FullTraceSummarizerLLM(SummarizerLastSummaryLLM):
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if "You are the Summarizer" in prompt:
+            self.summarizer_prompts.append(prompt)
+            return FakeResponse("Final Answer: full-trace-summary")
+        return await super().ainvoke(prompt)
+
+
 class RoleAwareAggregationLLM:
     def __init__(self) -> None:
         self.summarizer_prompts: list[str] = []
@@ -867,6 +875,30 @@ async def test_summarizer_receives_only_each_agents_last_summary():
         "SolverAgent": "Solver step 2 final summary.",
         "VerifierAgent": "Verifier step 2 final summary.",
     }
+
+
+@pytest.mark.asyncio
+async def test_full_trace_summarizer_receives_every_raw_agent_step():
+    llm = FullTraceSummarizerLLM()
+
+    state = await run_workflow(
+        task="Calculate 2 + 2.",
+        llm=llm,
+        max_steps_per_agent=2,
+        total_runtime_timeout=5,
+        stream_to_console=False,
+        synthesizer_mode="summarize_outputs",
+        enable_agent_message_streaming=False,
+        full_trace_sharing=True,
+    )
+
+    prompt = state["synthesizer_trace"]["prompt"]
+    assert "Complete agent traces:" in prompt
+    for agent_name, trace in state["agent_traces"].items():
+        assert f"=== {agent_name} ===" in prompt
+        for step in trace["steps"]:
+            assert step["raw_response"] in prompt
+    assert state["synthesizer_trace"]["full_trace_sharing"] is True
 
 
 @pytest.mark.asyncio

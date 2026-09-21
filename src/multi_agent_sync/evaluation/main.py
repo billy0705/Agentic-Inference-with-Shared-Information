@@ -233,6 +233,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Prefix orchestrator, agent step, and summarizer prompts with <|think|>. Enabled by default.",
     )
     parser.add_argument(
+        "--full-trace-sharing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Ablation: retain each subagent's raw step history for its later steps and give all raw "
+            "step responses to the summarizer; inter-agent exchange remains SHARE_FINDING-only. Disabled by default."
+        ),
+    )
+    parser.add_argument(
         "--min-dynamic-subagents",
         type=int,
         default=3,

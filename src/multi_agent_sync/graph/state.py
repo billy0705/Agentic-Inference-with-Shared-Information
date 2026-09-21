@@ -32,6 +32,7 @@ class GraphState(TypedDict):
     max_dynamic_subagents: NotRequired[int]
     allow_agent_early_stop: NotRequired[bool]
     think_mode: NotRequired[bool]
+    full_trace_sharing: NotRequired[bool]
     agent_runtime_timeout: NotRequired[float]
     total_runtime_timeout: NotRequired[float]
     synthesis_timeout: NotRequired[float]

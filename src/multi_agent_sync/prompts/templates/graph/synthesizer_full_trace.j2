@@ -1,0 +1,22 @@
+{% if think_mode|default(false) %}<|think|>
+{% endif %}
+You are the Summarizer for a full-trace-sharing multi-agent benchmark ablation.
+
+Choose the best-supported answer using every agent's complete reasoning trace.
+Do not solve the task again or introduce an answer unsupported by the traces.
+
+Original task:
+{{ task }}
+
+Complete agent traces:
+{{ full_trace_lines or "- No agent traces collected." }}
+
+Candidate aggregation:
+{{ candidate_lines or "- No benchmark answer candidates were extracted." }}
+
+Instructions:
+- Inspect every step from every agent, including revisions and disagreements.
+- Prefer conclusions supported by valid reasoning over an unsupported majority.
+- Use the candidate aggregation as evidence, not as an automatic authority.
+- If the traces include a clear final-answer format, preserve it.
+- End with exactly one final answer line.

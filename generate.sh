@@ -35,7 +35,7 @@ if command -v sbatch >/dev/null 2>&1 && [[ "${RUN_LOCAL:-0}" != "1" ]]; then
 fi
 
 evaluation_matrix="$(uv run python -m multi_agent_sync.generate "$CONFIG_PATH" --print-evaluation-matrix)"
-while IFS=$'\t' read -r benchmark methods limit output_dir resume_run max_steps min_dynamic_subagents max_dynamic_subagents think_mode single_agent_min_steps single_agent_max_steps debate_rounds max_tokens; do
+while IFS=$'\t' read -r benchmark methods limit output_dir resume_run max_steps min_dynamic_subagents max_dynamic_subagents think_mode full_trace_sharing single_agent_min_steps single_agent_max_steps debate_rounds max_tokens; do
   evaluation_args=(
     --benchmark "$benchmark"
     --methods "$methods"
@@ -49,6 +49,11 @@ while IFS=$'\t' read -r benchmark methods limit output_dir resume_run max_steps 
     evaluation_args+=(--think-mode)
   elif [[ "${think_mode:-}" == "false" ]]; then
     evaluation_args+=(--no-think-mode)
+  fi
+  if [[ "${full_trace_sharing:-}" == "true" ]]; then
+    evaluation_args+=(--full-trace-sharing)
+  elif [[ "${full_trace_sharing:-}" == "false" ]]; then
+    evaluation_args+=(--no-full-trace-sharing)
   fi
   if [[ "${min_dynamic_subagents:-}" != "-" && -n "${min_dynamic_subagents:-}" ]]; then
     evaluation_args+=(--min-dynamic-subagents "$min_dynamic_subagents")

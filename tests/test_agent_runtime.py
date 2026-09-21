@@ -200,6 +200,18 @@ class LocalNotesOnlyLLM:
         )
 
 
+class FullTraceAgentLLM(LocalNotesOnlyLLM):
+    async def ainvoke(self, prompt: str) -> FakeResponse:
+        if not self.prompts:
+            return await super().ainvoke(prompt)
+        self.prompts.append(prompt)
+        return FakeResponse(
+            "FINAL:\nFinal Answer: A\n"
+            "SHARE_FINDING:\nFinal candidate is A.\n"
+            "LOCAL_NOTES:\nANSWER_CHOICE: A\nANSWER_REASON: Candidate A remains the supported final answer."
+        )
+
+
 class AlwaysFinalLLM:
     def __init__(self) -> None:
         self.prompts: list[str] = []
@@ -381,6 +393,36 @@ async def test_agent_prompt_reuses_only_short_local_notes_not_previous_summary()
         "ANSWER_CHOICE: A\nANSWER_REASON: Candidate A best matches the evidence.",
         "ANSWER_CHOICE: A\nANSWER_REASON: Candidate A remains the supported final answer.",
     ]
+
+
+@pytest.mark.asyncio
+async def test_full_trace_agent_reuses_raw_response_but_publishes_only_shared_finding():
+    streamer = InMemoryEventStreamer()
+    trace_logger = TraceLogger()
+    llm = FullTraceAgentLLM()
+    agent = ResearchAgent(
+        run_id="run-full-trace",
+        task="Choose the best option.",
+        assigned_subtask="Pick an answer and revise once.",
+        llm=llm,
+        event_streamer=streamer,
+        trace_logger=trace_logger,
+        max_steps=2,
+        step_delay_seconds=0,
+        full_trace_sharing=True,
+    )
+
+    await agent.run()
+
+    first_raw_response = trace_logger.export()["ResearchAgent"]["steps"][0]["raw_response"]
+    assert "Your complete prior trace:" in llm.prompts[1]
+    assert first_raw_response in llm.prompts[1]
+    finding_events = [
+        event for event in await streamer.get_events(run_id="run-full-trace") if event.event_type == "finding"
+    ]
+    assert finding_events[0].content != first_raw_response
+    assert finding_events[0].content == "Candidate A is currently strongest."
+    assert "sharing_mode" not in finding_events[0].metadata
 
 
 @pytest.mark.asyncio

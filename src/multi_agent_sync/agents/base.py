@@ -68,6 +68,7 @@ class BaseAgent:
     workspace_access: str = "none"
     allow_agent_early_stop: bool = False
     think_mode: bool = True
+    full_trace_sharing: bool = False
     tool_observations: list[dict[str, Any]] = field(default_factory=list)
     final_guard_retry_steps: int = 2
     reactive_steps_enabled: bool = True
@@ -79,6 +80,7 @@ class BaseAgent:
     observed_events: list[AgentEvent] = field(default_factory=list)
     local_notes: list[str] = field(default_factory=list)
     output_summaries: list[str] = field(default_factory=list)
+    raw_response_history: list[str] = field(default_factory=list)
     local_output: str = ""
     is_done: bool = False
     reactive_steps_used: int = 0
@@ -241,6 +243,7 @@ class BaseAgent:
             if self.has_workspace_tool
             else self.parse_step_response(content)
         )
+        self.raw_response_history.append(content)
         ended_at = time.time()
         self._last_step_trace_data = {
             "inbox_events": relevant_events,
@@ -299,10 +302,14 @@ class BaseAgent:
         ]
         notes = "\n".join(f"- {note}" for note in self.local_notes[-8:]) or "- None yet."
         events = "\n".join(event_lines) or "- No shared findings yet."
+        own_full_trace = "\n\n".join(
+            f"[Step {index}]\n{response}"
+            for index, response in enumerate(self.raw_response_history, start=1)
+        ) or "- No previous steps yet."
         expected_output = str((self.assignment or {}).get("expected_output") or "").strip()
         if self.has_workspace_tool:
             return render_prompt(
-                "agents/tool_step.j2",
+                "agents/tool_step_full_trace.j2" if self.full_trace_sharing else "agents/tool_step.j2",
                 agent_name=self.name,
                 think_mode=self.think_mode,
                 task=self.task,
@@ -320,11 +327,12 @@ class BaseAgent:
                 allow_agent_early_stop=self.allow_agent_early_stop,
                 notes=notes,
                 events=events,
+                own_full_trace=own_full_trace,
                 tool_observations=self.format_tool_observations(),
                 feedback_tool_name=getattr(self.feedback_tool, "name", "") if self.feedback_tool is not None else "",
             )
         return render_prompt(
-            "agents/step.j2",
+            "agents/step_full_trace.j2" if self.full_trace_sharing else "agents/step.j2",
             agent_name=self.name,
             think_mode=self.think_mode,
             task=self.task,
@@ -341,6 +349,7 @@ class BaseAgent:
             allow_agent_early_stop=self.allow_agent_early_stop,
             notes=notes,
             events=events,
+            own_full_trace=own_full_trace,
         )
 
     def format_tool_observations(self) -> str:
@@ -560,6 +569,7 @@ class BaseAgent:
             "max_steps": self.max_steps,
             "allow_agent_early_stop": self.allow_agent_early_stop,
             "think_mode": self.think_mode,
+            "full_trace_sharing": self.full_trace_sharing,
         }
 
     def _log_step_trace(

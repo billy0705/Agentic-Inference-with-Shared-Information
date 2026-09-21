@@ -214,6 +214,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             "max_runtime_seconds": agent_runtime_timeout,
             "allow_agent_early_stop": allow_agent_early_stop,
             "think_mode": bool(state.get("think_mode", True)),
+            "full_trace_sharing": bool(state.get("full_trace_sharing", False)),
             "enable_message_streaming": enable_agent_message_streaming,
             "workspace_access": assignment.get("workspace_access", "none"),
         }
@@ -319,12 +320,22 @@ async def synthesizer_node(state: GraphState) -> GraphState:
     output_lines = format_agent_summary_lines(agent_last_summaries)
     candidate_lines = format_candidate_aggregation(candidate_aggregation)
     synthesizer_mode = state.get("synthesizer_mode", "generic")
-    template_name = "graph/synthesizer_summarize_outputs.j2" if synthesizer_mode == "summarize_outputs" else "graph/synthesizer.j2"
+    full_trace_sharing = bool(state.get("full_trace_sharing", False))
+    agent_full_traces = build_agent_full_traces(state) if full_trace_sharing else {}
+    full_trace_lines = format_agent_full_traces(agent_full_traces)
+    template_name = (
+        "graph/synthesizer_full_trace.j2"
+        if full_trace_sharing
+        else "graph/synthesizer_summarize_outputs.j2"
+        if synthesizer_mode == "summarize_outputs"
+        else "graph/synthesizer.j2"
+    )
     prompt = render_prompt(
         template_name,
         think_mode=bool(state.get("think_mode", True)),
         task=state["task"],
         output_lines=output_lines,
+        full_trace_lines=full_trace_lines,
         candidate_lines=candidate_lines,
     )
     raw_response = ""
@@ -371,6 +382,8 @@ async def synthesizer_node(state: GraphState) -> GraphState:
             "timed_out": timed_out,
             "candidate_aggregation": candidate_aggregation,
             "agent_last_summaries": agent_last_summaries,
+            "agent_full_traces": agent_full_traces,
+            "full_trace_sharing": full_trace_sharing,
         }
     return next_state
 
@@ -394,6 +407,32 @@ def build_agent_last_summaries(state: GraphState) -> dict[str, str]:
         if summary:
             summaries[name] = summary
     return summaries
+
+
+def build_agent_full_traces(state: GraphState) -> dict[str, list[str]]:
+    traces = state.get("agent_traces", {})
+    if not isinstance(traces, dict):
+        return {}
+    full_traces: dict[str, list[str]] = {}
+    for name, trace in traces.items():
+        if not isinstance(trace, dict) or not isinstance(trace.get("steps"), list):
+            continue
+        responses = [
+            str(step.get("raw_response") or "").strip()
+            for step in trace["steps"]
+            if isinstance(step, dict) and str(step.get("raw_response") or "").strip()
+        ]
+        if responses:
+            full_traces[str(name)] = responses
+    return full_traces
+
+
+def format_agent_full_traces(agent_full_traces: dict[str, list[str]]) -> str:
+    sections: list[str] = []
+    for name, responses in agent_full_traces.items():
+        steps = "\n\n".join(f"[Step {index}]\n{response}" for index, response in enumerate(responses, start=1))
+        sections.append(f"=== {name} ===\n{steps}")
+    return "\n\n".join(sections)
 
 
 def last_summary_from_trace(trace: Any) -> str:

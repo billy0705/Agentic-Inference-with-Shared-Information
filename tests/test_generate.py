@@ -400,7 +400,7 @@ def test_print_evaluation_matrix_includes_optional_runtime_args(monkeypatch, cap
     generate.main(["server.yaml", "--print-evaluation-matrix"])
 
     assert capsys.readouterr().out == (
-        "gsm8k\tplain_llm\t1\t/project/output\t-\t5\t3\t3\tfalse\t5\t5\t5\t12000\n"
+        "gsm8k\tplain_llm\t1\t/project/output\t-\t5\t3\t3\tfalse\t-\t5\t5\t5\t12000\n"
     )
 
 

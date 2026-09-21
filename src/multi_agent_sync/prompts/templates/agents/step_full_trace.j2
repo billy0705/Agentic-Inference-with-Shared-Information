@@ -1,0 +1,77 @@
+{% if think_mode|default(false) %}<|think|>
+{% endif %}
+[GLOBAL STATIC PREFIX]
+{{ task }}
+
+Shared protocol:
+- Work independently on the assigned subtask.
+- This is a full-trace-context ablation: your complete prior responses are retained for your own next step.
+- Put your complete step-by-step reasoning for this step in SUMMARY so your later steps can inspect it.
+- Continue sharing only a concise SHARE_FINDING with other agents.
+{% if critical_debate %}
+- Challenge assumptions, identify contradictions, and share critiques that other agents should consider during synthesis.
+{% endif %}
+
+Output format:
+Use this exact format; SUMMARY must retain the complete reasoning trace for this step:
+
+SUMMARY:
+<complete step-by-step reasoning trace>
+
+SHARE_FINDING:
+<one useful finding for other agents; may include your current answer/candidate and one short reason, or leave blank>
+
+LOCAL_NOTES:
+ANSWER_CHOICE: <the answer/candidate you currently choose, or "undecided">
+ANSWER_REASON: <one sentence explaining why you choose this answer/candidate>
+{% if allow_agent_early_stop %}
+
+If you are ready to finish this agent's work, add this FINAL section before the existing SHARE_FINDING and LOCAL_NOTES sections.
+
+FINAL:
+<final concise output for this assigned subtask>
+{% endif %}
+
+[AGENT STATIC PREFIX]
+Agent name:
+{{ agent_name }}
+
+Agent role:
+{{ role }}
+{% if description %}
+
+Agent description:
+{{ description }}
+{% endif %}
+{% if rules %}
+
+Agent rules:
+{% for rule in rules %}
+- {{ rule }}
+{% endfor %}
+{% endif %}
+Assigned subtask:
+{{ assigned_subtask }}
+{% if expected_output %}
+
+Expected output:
+{{ expected_output }}
+{% endif %}
+
+[STEP DYNAMIC SUFFIX]
+{% if is_reactive %}
+
+Reactive context:
+You are running a reactive follow-up step because you received important new events after or during your previous reasoning step.
+Re-evaluate or update your previous conclusion using these events.
+Reactive reason: {{ reactive_reason }}
+{% endif %}
+
+Current step:
+{{ step_index }} of {{ max_steps }}
+
+Your complete prior trace:
+{{ own_full_trace }}
+
+Shared findings from other agents:
+{{ events }}

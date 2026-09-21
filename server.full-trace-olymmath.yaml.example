@@ -1,0 +1,36 @@
+vllm:
+  model_name: google/gemma-4-31B-it
+  sif_path: /hnvme/workspace/v101be21-server/vllm.sif
+  port: 8000
+  log_path: vllm-server.log
+  engine_ready_timeout: 1800
+  tensor_parallel_size: 4
+  max_model_len: 64000
+  gpu_memory_utilization: 0.95
+
+helma:
+  job_name: gemma-4-31B-it_olymmath_5_rounds_full_trace
+  nodes: 1
+  gres: "gpu:4"
+  partition: h100
+  output: out_single_node.out
+  time: "23:55:00"
+
+expt:
+  benchmark:
+    - olymmath
+  methods:
+    - multiagent_dynamic_streaming
+  limit: 100
+  olymmath_subset: en-easy
+  repeats: 3
+  resume_repeats: true
+  max_steps: 5
+  think_mode: true
+  full_trace_sharing: true
+  single_agent_min_steps: 5
+  single_agent_max_steps: 5
+  debate_rounds: 5
+  benchmark_data_dir: ./benchmark-data
+  output_dir: ./output/full-trace
+  resume_run: null
