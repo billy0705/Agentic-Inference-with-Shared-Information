@@ -131,6 +131,16 @@ def test_evaluation_parser_sets_single_agent_step_defaults():
     assert args.single_agent_max_steps == 7
 
 
+def test_evaluation_parser_sets_shared_finding_limit_default_and_override():
+    default_args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
+    custom_args = evaluation.build_parser().parse_args(
+        ["--benchmark", "gpqa", "--shared-finding-limit", "10"]
+    )
+
+    assert default_args.shared_finding_limit == 8
+    assert custom_args.shared_finding_limit == 10
+
+
 def test_evaluation_parser_sets_dynamic_subagent_defaults_and_override():
     default_args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
     custom_args = evaluation.build_parser().parse_args(
@@ -2698,6 +2708,7 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
     assert captured_kwargs["agent_runtime_timeout"] == 600.0
     assert captured_kwargs["min_dynamic_subagents"] == 3
     assert captured_kwargs["max_dynamic_subagents"] == 3
+    assert captured_kwargs["shared_finding_limit"] == 8
     assert captured_kwargs["enable_agent_message_streaming"] is expected_streaming
     expected_synthesizer_mode = "summarize_outputs" if method == "multiagent_dynamic_streaming" else "generic"
     assert captured_kwargs["synthesizer_mode"] == expected_synthesizer_mode

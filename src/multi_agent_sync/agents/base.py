@@ -14,6 +14,7 @@ from multi_agent_sync.token_usage import extract_token_usage
 
 MAX_LOCAL_NOTES_CHARS = 500
 DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS = 600.0
+DEFAULT_SHARED_FINDING_LIMIT = 8
 
 
 def compact_local_notes(notes: str) -> str:
@@ -60,6 +61,7 @@ class BaseAgent:
     max_steps: int = 3
     max_runtime_seconds: float = DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
     max_events_per_agent: int = 50
+    shared_finding_limit: int = DEFAULT_SHARED_FINDING_LIMIT
     step_delay_seconds: float = 0.2
     enable_message_streaming: bool = True
     bash_tool: Any | None = None
@@ -215,7 +217,11 @@ class BaseAgent:
         forced_events: list[AgentEvent] | None = None,
     ) -> StepResult:
         started_at = time.time()
-        relevant_events = forced_events if forced_events is not None else await self.get_relevant_events(limit=8)
+        relevant_events = (
+            forced_events
+            if forced_events is not None
+            else await self.get_relevant_events(limit=self.shared_finding_limit)
+        )
         used_event_ids = [event.event_id for event in relevant_events]
         used_at = time.time()
         for event_id in used_event_ids:
@@ -291,7 +297,7 @@ class BaseAgent:
         reactive_reason: str | None = None,
     ) -> str:
         if relevant_events is None:
-            relevant_events = await self.get_relevant_events(limit=8)
+            relevant_events = await self.get_relevant_events(limit=self.shared_finding_limit)
         event_lines = [
             f"- [{event.event_type}] {event.source}: {event.content}"
             for event in relevant_events
@@ -417,7 +423,7 @@ class BaseAgent:
             metadata={"observed_events": len(self.observed_events)},
         )
 
-    async def get_relevant_events(self, limit: int = 10) -> list[AgentEvent]:
+    async def get_relevant_events(self, limit: int = DEFAULT_SHARED_FINDING_LIMIT) -> list[AgentEvent]:
         recent_events = await self.event_streamer.get_recent_events(self.run_id, limit=limit * 2)
         merged: dict[str, AgentEvent] = {}
         for event in [*recent_events, *self.inbox]:

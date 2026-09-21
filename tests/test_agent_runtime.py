@@ -46,6 +46,35 @@ class FakeLLM:
         return FakeResponse("SUMMARY:\nNo-op.\nSHARE_FINDING:\n\nCONFIDENCE:\n0.5\nLOCAL_NOTES:\n")
 
 
+@pytest.mark.asyncio
+async def test_agent_prompt_respects_configured_shared_finding_limit():
+    streamer = InMemoryEventStreamer()
+    agent = ResearchAgent(
+        run_id="run-shared-limit",
+        task="Compare findings.",
+        assigned_subtask="Use recent shared context.",
+        llm=FakeLLM(),
+        event_streamer=streamer,
+        shared_finding_limit=2,
+    )
+    for index in range(4):
+        await streamer.publish(
+            AgentEvent(
+                run_id="run-shared-limit",
+                source=f"Agent{index}",
+                event_type="finding",
+                content=f"finding-{index}",
+            )
+        )
+
+    prompt = await agent.build_prompt(step_index=1)
+
+    assert "finding-0" not in prompt
+    assert "finding-1" not in prompt
+    assert "finding-2" in prompt
+    assert "finding-3" in prompt
+
+
 class ToolLoopLLM:
     def __init__(self) -> None:
         self.prompts: list[str] = []

@@ -5,6 +5,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
+from multi_agent_sync.agents.base import DEFAULT_SHARED_FINDING_LIMIT
 from multi_agent_sync.agents.dynamic_agent import DynamicAgent
 from multi_agent_sync.events.in_memory_streamer import InMemoryEventStreamer
 from multi_agent_sync.graph.nodes import (
@@ -44,6 +45,7 @@ async def run_dynamic_orchestration_workflow(
     llm: Any | None = None,
     benchmark: str = "",
     max_steps_per_agent: int = 3,
+    shared_finding_limit: int = DEFAULT_SHARED_FINDING_LIMIT,
     max_orchestrator_rounds: int = 3,
     total_runtime_timeout: float = 600.0,
     synthesis_timeout: float = 60.0,
@@ -136,6 +138,7 @@ async def run_dynamic_orchestration_workflow(
             decision=decision,
             round_index=round_index,
             max_steps_per_agent=max_steps_per_agent,
+            shared_finding_limit=shared_finding_limit,
             total_runtime_timeout=total_runtime_timeout,
             enable_agent_message_streaming=enable_agent_message_streaming,
             enable_workspace_tools=enable_workspace_tools,
@@ -353,6 +356,7 @@ async def run_dynamic_agent_round(
     decision: dict[str, Any],
     round_index: int,
     max_steps_per_agent: int,
+    shared_finding_limit: int,
     total_runtime_timeout: float,
     enable_agent_message_streaming: bool,
     enable_workspace_tools: bool,
@@ -393,6 +397,7 @@ async def run_dynamic_agent_round(
             "assignment": {**assignment, "orchestration_round": round_index},
             "trace_logger": trace_logger,
             "max_steps": int(assignment.get("max_steps", max_steps_per_agent)),
+            "shared_finding_limit": shared_finding_limit,
             "think_mode": think_mode,
             "enable_message_streaming": enable_agent_message_streaming,
             "workspace_access": assignment.get("workspace_access", "none"),

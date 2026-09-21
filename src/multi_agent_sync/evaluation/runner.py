@@ -29,6 +29,7 @@ from multi_agent_sync.evaluation.baselines import (
     run_plain_llm,
     run_single_agent,
 )
+from multi_agent_sync.agents.base import DEFAULT_SHARED_FINDING_LIMIT
 from multi_agent_sync.evaluation.baselines import multiagent_sync as multiagent_sync_baselines
 from multi_agent_sync.evaluation.baselines.common import (
     add_optional_ints,
@@ -211,6 +212,7 @@ def build_run_config(
             "swebench_instance_ids": getattr(args, "swebench_instance_ids", None),
             "workspace_image": getattr(args, "workspace_image", None),
             "max_steps": args.max_steps,
+            "shared_finding_limit": getattr(args, "shared_finding_limit", DEFAULT_SHARED_FINDING_LIMIT),
             "min_dynamic_subagents": getattr(args, "min_dynamic_subagents", 3),
             "max_dynamic_subagents": getattr(args, "max_dynamic_subagents", 3),
             "max_orchestrator_rounds": getattr(args, "max_orchestrator_rounds", None),
@@ -261,6 +263,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "subagent_mode": method_subagent_mode(method),
         "message_streaming": method_message_streaming(method),
         "max_steps": args.max_steps,
+        "shared_finding_limit": getattr(args, "shared_finding_limit", DEFAULT_SHARED_FINDING_LIMIT),
         "min_dynamic_subagents": getattr(args, "min_dynamic_subagents", 3),
         "max_dynamic_subagents": getattr(args, "max_dynamic_subagents", 3),
         "max_orchestrator_rounds": getattr(args, "max_orchestrator_rounds", None),

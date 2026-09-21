@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from multi_agent_sync.evaluation import runner
-from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
+from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS, DEFAULT_SHARED_FINDING_LIMIT
 from multi_agent_sync.evaluation.benchmarks import chess, gpqa, gsm8k, hotpotqa, ma_proofbench, mmlu_pro, olymmath, swe_bench_verified
 from multi_agent_sync.evaluation import swebench_harness
 from multi_agent_sync.evaluation.resume_helpers import resolve_resume_output_path, load_resume_results
@@ -32,6 +32,13 @@ RANDOM_SEED = 42
 DEFAULT_METHODS = "multiagent_streaming,multiagent_no_streaming,plain_llm"
 EVALUATION_MAX_TOKENS = 16384
 LEAN_VERIFIER_BENCHMARKS = {"ma_proofbench", "olymmath_lean"}
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
 
 
 def get_benchmarks() -> dict[str, BenchmarkSpec]:
@@ -67,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Defaults to 0 for full split.")
     parser.add_argument(
         "--attempts",
-        type=int,
+        type=positive_int,
         default=1,
         help="Number of candidate attempts per example. Currently defaults to Pass@1-style evaluation.",
     )
@@ -214,6 +221,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum stdout/stderr characters retained per Docker workspace command.",
     )
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent for multiagent runs.")
+    parser.add_argument(
+        "--shared-finding-limit",
+        type=int,
+        default=DEFAULT_SHARED_FINDING_LIMIT,
+        help=(
+            "Maximum recent shared events included in each regular agent-step prompt. "
+            f"Defaults to {DEFAULT_SHARED_FINDING_LIMIT}."
+        ),
+    )
     parser.add_argument(
         "--max-orchestrator-rounds",
         type=int,

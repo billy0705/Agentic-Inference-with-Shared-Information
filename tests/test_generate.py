@@ -80,6 +80,7 @@ def test_load_experiment_config_validates_and_deduplicates_lists():
     assert config.repeats == 1
     assert config.resume_repeats is False
     assert config.max_steps is None
+    assert config.shared_finding_limit is None
     assert config.think_mode is None
     assert config.min_dynamic_subagents is None
     assert config.max_dynamic_subagents is None
@@ -165,6 +166,22 @@ def test_build_evaluation_args_passes_configured_olymmath_subset():
     assert args.olymmath_subset == "en-hard"
 
 
+def test_build_evaluation_args_passes_configured_shared_finding_limit():
+    manager = ConfigManagerStub(
+        {
+            "benchmark": ["gsm8k"],
+            "methods": ["multiagent_streaming"],
+            "shared_finding_limit": 10,
+        }
+    )
+    config = generate.load_experiment_config(manager)
+
+    args = generate.build_evaluation_args(config, "gsm8k", "multiagent_streaming", resume_run=None)
+
+    assert config.shared_finding_limit == 10
+    assert args.shared_finding_limit == 10
+
+
 @pytest.mark.parametrize(
     ("expt", "message"),
     [
@@ -176,6 +193,10 @@ def test_build_evaluation_args_passes_configured_olymmath_subset():
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "repeats": 0}, "expt.repeats"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "resume_repeats": "yes"}, "expt.resume_repeats"),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "max_steps": 0}, "expt.max_steps"),
+        (
+            {"benchmark": ["gsm8k"], "methods": ["plain_llm"], "shared_finding_limit": 0},
+            "expt.shared_finding_limit",
+        ),
         ({"benchmark": ["gsm8k"], "methods": ["plain_llm"], "think_mode": "false"}, "expt.think_mode"),
         (
             {
@@ -252,6 +273,48 @@ def write_matching_repeat_config(
         encoding="utf-8",
     )
     return run_dir
+
+
+def test_repeat_matching_treats_missing_legacy_shared_finding_limit_as_eight():
+    legacy_experiment = generate.load_experiment_config(
+        ConfigManagerStub({"benchmark": ["gsm8k"], "methods": ["multiagent_streaming"]})
+    )
+    args = generate.build_evaluation_args(
+        legacy_experiment,
+        "gsm8k",
+        "multiagent_streaming",
+        resume_run=None,
+    )
+    setattr(args, "resolved_model", "model-a")
+    settings = {
+        key: (
+            generate.runner.resolve_model_name(args)
+            if key == "resolved_model"
+            else getattr(args, key, False if key == "local_model" else None)
+        )
+        for key in generate.REPEAT_MATCH_SETTINGS
+        if key != "shared_finding_limit"
+    }
+    run_config = {
+        "benchmark": "gsm8k",
+        "methods": ["multiagent_streaming"],
+        "settings": settings,
+    }
+
+    assert generate.repeat_run_config_matches(
+        run_config,
+        benchmark="gsm8k",
+        methods=("multiagent_streaming",),
+        args=args,
+    )
+
+    args.shared_finding_limit = 10
+    assert not generate.repeat_run_config_matches(
+        run_config,
+        benchmark="gsm8k",
+        methods=("multiagent_streaming",),
+        args=args,
+    )
 
 
 @pytest.mark.asyncio
@@ -385,6 +448,7 @@ def test_print_evaluation_matrix_includes_optional_runtime_args(monkeypatch, cap
             "methods": ["plain_llm"],
             "limit": 1,
             "max_steps": 5,
+            "shared_finding_limit": 10,
             "think_mode": False,
             "min_dynamic_subagents": 3,
             "max_dynamic_subagents": 3,
@@ -400,7 +464,7 @@ def test_print_evaluation_matrix_includes_optional_runtime_args(monkeypatch, cap
     generate.main(["server.yaml", "--print-evaluation-matrix"])
 
     assert capsys.readouterr().out == (
-        "gsm8k\tplain_llm\t1\t/project/output\t-\t5\t3\t3\tfalse\t5\t5\t5\t12000\n"
+        "gsm8k\tplain_llm\t1\t/project/output\t-\t5\t10\t3\t3\tfalse\t5\t5\t5\t12000\n"
     )
 
 

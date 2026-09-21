@@ -12,6 +12,7 @@ from typing import Any
 
 from multi_agent_sync.evaluation import main as evaluation
 from multi_agent_sync.evaluation import runner
+from multi_agent_sync.agents.base import DEFAULT_SHARED_FINDING_LIMIT
 from multi_agent_sync.vllm_server import spinup_server
 
 
@@ -23,6 +24,7 @@ class ExperimentConfig:
     repeats: int
     resume_repeats: bool
     max_steps: int | None
+    shared_finding_limit: int | None
     think_mode: bool | None
     min_dynamic_subagents: int | None
     max_dynamic_subagents: int | None
@@ -170,6 +172,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         raise ValueError("'expt.resume_repeats' must be a boolean")
 
     max_steps = _optional_positive_int(expt, "expt", "max_steps")
+    shared_finding_limit = _optional_positive_int(expt, "expt", "shared_finding_limit")
     think_mode = _optional_bool(expt, "expt", "think_mode")
     min_dynamic_subagents = _optional_positive_int(expt, "expt", "min_dynamic_subagents")
     max_dynamic_subagents = _optional_positive_int(expt, "expt", "max_dynamic_subagents")
@@ -214,6 +217,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         repeats=repeats,
         resume_repeats=resume_repeats,
         max_steps=max_steps,
+        shared_finding_limit=shared_finding_limit,
         think_mode=think_mode,
         min_dynamic_subagents=min_dynamic_subagents,
         max_dynamic_subagents=max_dynamic_subagents,
@@ -267,6 +271,11 @@ def build_evaluation_args(
             "--limit",
             str(experiment.limit),
             *(["--max-steps", str(experiment.max_steps)] if experiment.max_steps is not None else []),
+            *(
+                ["--shared-finding-limit", str(experiment.shared_finding_limit)]
+                if experiment.shared_finding_limit is not None
+                else []
+            ),
             *(["--think-mode"] if experiment.think_mode is True else []),
             *(["--no-think-mode"] if experiment.think_mode is False else []),
             *(
@@ -329,6 +338,7 @@ REPEAT_MATCH_SETTINGS = (
     "swebench_instance_ids",
     "workspace_image",
     "max_steps",
+    "shared_finding_limit",
     "min_dynamic_subagents",
     "max_dynamic_subagents",
     "max_orchestrator_rounds",
@@ -344,6 +354,10 @@ REPEAT_MATCH_SETTINGS = (
     "data_file",
     "save_json_traces",
 )
+
+LEGACY_REPEAT_SETTING_DEFAULTS = {
+    "shared_finding_limit": DEFAULT_SHARED_FINDING_LIMIT,
+}
 
 
 def repeat_run_config_matches(
@@ -369,7 +383,10 @@ def repeat_run_config_matches(
         )
         for key in REPEAT_MATCH_SETTINGS
     }
-    return all(settings.get(key) == expected for key, expected in expected_settings.items())
+    return all(
+        settings.get(key, LEGACY_REPEAT_SETTING_DEFAULTS.get(key)) == expected
+        for key, expected in expected_settings.items()
+    )
 
 
 def find_matching_repeat_runs(
@@ -520,6 +537,11 @@ def main(argv: list[str] | None = None) -> None:
                     output_dir = str(experiment.output_dir) if experiment.output_dir else "-"
                     resume_run = str(experiment.resume_run) if experiment.resume_run else "-"
                     max_steps = str(experiment.max_steps) if experiment.max_steps is not None else "-"
+                    shared_finding_limit = (
+                        str(experiment.shared_finding_limit)
+                        if experiment.shared_finding_limit is not None
+                        else "-"
+                    )
                     think_mode = str(experiment.think_mode).lower() if experiment.think_mode is not None else "-"
                     min_dynamic_subagents = (
                         str(experiment.min_dynamic_subagents)
@@ -541,7 +563,7 @@ def main(argv: list[str] | None = None) -> None:
                     max_tokens = str(experiment.max_tokens) if experiment.max_tokens is not None else "-"
                     print(
                         f"{benchmark}\t{methods}\t{experiment.limit}\t{output_dir}\t{resume_run}\t"
-                        f"{max_steps}\t{min_dynamic_subagents}\t{max_dynamic_subagents}\t"
+                        f"{max_steps}\t{shared_finding_limit}\t{min_dynamic_subagents}\t{max_dynamic_subagents}\t"
                         f"{think_mode}\t"
                         f"{single_agent_min_steps}\t{single_agent_max_steps}\t{debate_rounds}\t{max_tokens}"
                     )
