@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "muffin-agentic-inference"
+version = "0.1.0"
+description = "Muffin shared-memory multi-agent inference and evaluations"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "datasets",
+  "jinja2",
+  "langchain-openai",
+  "langgraph",
+  "pydantic",
+  "rich",
+  "sympy",
+  "tqdm"
+]
+
+[project.scripts]
+muffin-eval = "muffin.evaluation.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/muffin"]

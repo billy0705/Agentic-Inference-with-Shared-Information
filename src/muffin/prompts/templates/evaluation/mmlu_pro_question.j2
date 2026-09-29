@@ -1,0 +1,20 @@
+You are answering a challenging multiple-choice question from MMLU-Pro.
+
+{% if category %}Category: {{ category }}
+
+{% endif -%}
+Choose exactly one option: {{ label_choices }}.
+
+Question:
+{{ question }}
+
+Options:
+{{ option_lines | join("\n") }}
+
+Important:
+- Think carefully.
+- The answer value must be exactly one capital letter from {{ label_choices }}. Do not include option text, punctuation, brackets, or explanation in the answer value.
+- If another wrapper asks you to return JSON, set its answer field to only that one capital letter, for example `"final_answer": "A"`.
+- If you are not returning JSON, end with the final answer in this exact format:
+
+Final Answer: {{ final_answer_format }}
