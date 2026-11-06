@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -10,6 +11,10 @@ from multi_agent_sync.events.event import AgentEvent, EventType
 from multi_agent_sync.events.streamer import EventStreamer
 from multi_agent_sync.prompts import render_prompt
 from multi_agent_sync.token_usage import extract_token_usage
+
+
+def shared_memory_enabled() -> bool:
+    return os.environ.get("SHARED_MEMORY", "1") != "0"
 
 
 MAX_LOCAL_NOTES_CHARS = 500
@@ -86,7 +91,7 @@ class BaseAgent:
     _last_step_trace_data: dict[str, Any] = field(default_factory=dict)
 
     def subscribe(self) -> None:
-        if not self.enable_message_streaming:
+        if not self.enable_message_streaming or not shared_memory_enabled():
             return
         if self._subscribed:
             return
@@ -418,6 +423,8 @@ class BaseAgent:
         )
 
     async def get_relevant_events(self, limit: int = 10) -> list[AgentEvent]:
+        if not shared_memory_enabled():
+            return []
         recent_events = await self.event_streamer.get_recent_events(self.run_id, limit=limit * 2)
         merged: dict[str, AgentEvent] = {}
         for event in [*recent_events, *self.inbox]:

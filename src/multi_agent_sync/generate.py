@@ -34,6 +34,7 @@ class ExperimentConfig:
     resume_run: Path | None
     benchmark_data_dir: Path | None
     output_dir: Path | None
+    shared_memory: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -225,6 +226,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         resume_run=resume_run,
         benchmark_data_dir=benchmark_data_dir,
         output_dir=output_dir,
+        shared_memory=_optional_bool(expt, "expt", "shared_memory"),
     )
 
 
@@ -232,6 +234,8 @@ def environment_values(experiment: ExperimentConfig) -> dict[str, str]:
     values = {}
     if experiment.benchmark_data_dir is not None:
         values["BENCHMARK_DATA_DIR"] = str(experiment.benchmark_data_dir)
+    if experiment.shared_memory is False:
+        values["SHARED_MEMORY"] = "0"
     return values
 
 
