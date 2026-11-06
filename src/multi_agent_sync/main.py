@@ -6,7 +6,7 @@ import os
 
 from rich.console import Console
 
-from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
+from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS, DEFAULT_SHARED_FINDING_LIMIT
 from multi_agent_sync.artifacts import build_token_usage_by_step, format_token_usage_by_step, save_run_artifacts
 from multi_agent_sync.graph.workflow import run_workflow
 from multi_agent_sync.llm import get_llm
@@ -19,11 +19,27 @@ from multi_agent_sync.vllm_server import (
 from multi_agent_sync.workspace.docker import DockerWorkspace
 
 
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the LangGraph multi-agent synchronization prototype.")
     parser.add_argument("task", nargs="+", help="Task to assign to the multi-agent runtime.")
     parser.add_argument("--model", default=None, help="Model name to use for the selected provider.")
     parser.add_argument("--max-steps", type=int, default=3, help="Maximum inference steps per agent.")
+    parser.add_argument(
+        "--shared-finding-limit",
+        type=positive_int,
+        default=DEFAULT_SHARED_FINDING_LIMIT,
+        help=(
+            "Maximum recent shared events included in each regular agent-step prompt. "
+            f"Defaults to {DEFAULT_SHARED_FINDING_LIMIT}."
+        ),
+    )
     parser.add_argument(
         "--allow-agent-early-stop",
         action=argparse.BooleanOptionalAction,
@@ -125,6 +141,7 @@ async def async_main(args: argparse.Namespace) -> None:
             llm=llm,
             subagent_mode=args.subagent_mode,
             max_steps_per_agent=args.max_steps,
+            shared_finding_limit=args.shared_finding_limit,
             min_dynamic_subagents=args.min_dynamic_subagents,
             max_dynamic_subagents=args.max_dynamic_subagents,
             total_runtime_timeout=args.total_runtime_timeout,

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from multi_agent_sync.agents.registry import AGENT_REGISTRY
-from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
+from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS, DEFAULT_SHARED_FINDING_LIMIT
 from multi_agent_sync.agents.dynamic_agent import DynamicAgent
 from multi_agent_sync.debate_prompts import build_debate_round_prompt, debate_prompt_style, render_debate_context
 from multi_agent_sync.events.event import AgentEvent
@@ -166,6 +166,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
     llm = state.get("llm") or get_llm()
     max_steps = state.get("max_steps_per_agent", 3)
+    shared_finding_limit = state.get("shared_finding_limit", DEFAULT_SHARED_FINDING_LIMIT)
     allow_agent_early_stop = bool(state.get("allow_agent_early_stop", False))
     agent_runtime_timeout = state.get("agent_runtime_timeout", DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS)
     enable_agent_message_streaming = state.get("enable_agent_message_streaming", True)
@@ -211,6 +212,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
             "assignment": assignment,
             "trace_logger": trace_logger,
             "max_steps": assignment.get("max_steps", max_steps),
+            "shared_finding_limit": shared_finding_limit,
             "max_runtime_seconds": agent_runtime_timeout,
             "allow_agent_early_stop": allow_agent_early_stop,
             "think_mode": bool(state.get("think_mode", True)),

@@ -131,6 +131,16 @@ def test_evaluation_parser_sets_single_agent_step_defaults():
     assert args.single_agent_max_steps == 7
 
 
+def test_evaluation_parser_sets_shared_finding_limit_default_and_override():
+    default_args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
+    custom_args = evaluation.build_parser().parse_args(
+        ["--benchmark", "gpqa", "--shared-finding-limit", "10"]
+    )
+
+    assert default_args.shared_finding_limit == 8
+    assert custom_args.shared_finding_limit == 10
+
+
 def test_evaluation_parser_sets_dynamic_subagent_defaults_and_override():
     default_args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
     custom_args = evaluation.build_parser().parse_args(
@@ -259,6 +269,15 @@ def test_evaluation_parser_defaults_to_full_benchmark_limit():
     args = evaluation.build_parser().parse_args(["--benchmark", "gpqa"])
 
     assert args.limit == 0
+
+
+def test_evaluation_parser_supports_a_zero_based_start_index():
+    args = evaluation.build_parser().parse_args(
+        ["--benchmark", "gpqa", "--start-index", "50", "--limit", "100"]
+    )
+
+    assert args.start_index == 50
+    assert args.limit == 100
 
 
 def test_parser_accepts_gsm8k_benchmark():
@@ -1691,6 +1710,49 @@ async def test_run_evaluation_updates_results_summary_and_correctness_matrix_inc
     ]
 
 
+@pytest.mark.asyncio
+async def test_run_evaluation_range_preserves_original_indices_in_csv_and_traces(monkeypatch, tmp_path):
+    benchmark = BenchmarkSpec(
+        name="fake",
+        display_name="Fake",
+        default_output_filename="fake.csv",
+        load_items=lambda args: [
+            {"Question": f"Question {index}?", "Correct Answer": "A"}
+            for index in range(4)
+        ],
+        build_prompt=lambda row, rng: (row["Question"], "A"),
+        extract_answer=lambda text: "A",
+    )
+
+    async def fake_run_method(method, prompt, llm, args):
+        return runner.RunResult(raw_output="Final Answer: A", returncode=0, elapsed_seconds=0.1)
+
+    monkeypatch.setattr(evaluation, "get_benchmarks", lambda: {"fake": benchmark})
+    monkeypatch.setattr(evaluation, "get_llm", lambda model=None, **kwargs: "fake-llm")
+    monkeypatch.setattr(runner, "run_method", fake_run_method)
+    monkeypatch.setattr(runner, "progress", lambda items, desc: items)
+    monkeypatch.setattr(runner, "create_run_id", lambda: "run-test")
+    monkeypatch.setattr(runner, "resolve_auto_openai_model_name", lambda: "fake-model")
+
+    args = evaluation.build_parser().parse_args(
+        [
+            "--benchmark", "fake", "--methods", "plain_llm", "--start-index", "1", "--limit", "3",
+            "--output-dir", str(tmp_path),
+        ]
+    )
+    results = await evaluation.run_evaluation(args)
+
+    assert [result["index"] for result in results] == [1, 2]
+    run_root = tmp_path / "fake" / "fake-model" / "run-test"
+    assert (run_root / "examples" / "0001_plain_llm.json").exists()
+    assert (run_root / "examples" / "0002_plain_llm.json").exists()
+    rows = list(csv.DictReader((run_root / "fake.csv").open(newline="", encoding="utf-8")))
+    assert [row["index"] for row in rows] == ["1", "2"]
+    config = json.loads((run_root / "run_config.json").read_text(encoding="utf-8"))
+    assert config["settings"]["start_index"] == 1
+    assert config["comparison"]["scope"]["start_index"] == 1
+
+
 def test_default_output_path_uses_run_id_to_avoid_overwriting():
     benchmark = gpqa.build_benchmark()
     args = evaluation.build_parser().parse_args(["--benchmark", "gpqa", "--model", "openai/gpt-oss-120b"])
@@ -2698,6 +2760,7 @@ async def test_run_method_passes_subagent_mode_and_streaming_to_workflow(
     assert captured_kwargs["agent_runtime_timeout"] == 600.0
     assert captured_kwargs["min_dynamic_subagents"] == 3
     assert captured_kwargs["max_dynamic_subagents"] == 3
+    assert captured_kwargs["shared_finding_limit"] == 8
     assert captured_kwargs["enable_agent_message_streaming"] is expected_streaming
     expected_synthesizer_mode = "summarize_outputs" if method == "multiagent_dynamic_streaming" else "generic"
     assert captured_kwargs["synthesizer_mode"] == expected_synthesizer_mode

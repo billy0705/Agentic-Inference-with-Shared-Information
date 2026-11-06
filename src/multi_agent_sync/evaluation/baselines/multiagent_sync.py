@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS
+from multi_agent_sync.agents.base import DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS, DEFAULT_SHARED_FINDING_LIMIT
 from multi_agent_sync.evaluation.types import BenchmarkWorkflowConfig
 from multi_agent_sync.graph.dynamic_orchestration import run_dynamic_orchestration_workflow
 from multi_agent_sync.graph.workflow import run_workflow
@@ -43,6 +43,7 @@ async def run_multiagent(
             llm=llm,
             subagent_mode=subagent_mode,
             max_steps_per_agent=args.max_steps,
+            shared_finding_limit=getattr(args, "shared_finding_limit", DEFAULT_SHARED_FINDING_LIMIT),
             min_dynamic_subagents=getattr(args, "min_dynamic_subagents", 3),
             max_dynamic_subagents=getattr(args, "max_dynamic_subagents", 3),
             total_runtime_timeout=args.total_runtime_timeout,
@@ -122,6 +123,7 @@ async def run_dynamic_orchestration(
             llm=llm,
             benchmark=str(getattr(args, "benchmark", "") or ""),
             max_steps_per_agent=args.max_steps,
+            shared_finding_limit=getattr(args, "shared_finding_limit", DEFAULT_SHARED_FINDING_LIMIT),
             max_orchestrator_rounds=getattr(args, "max_orchestrator_rounds", 3),
             total_runtime_timeout=args.total_runtime_timeout,
             synthesis_timeout=args.synthesis_timeout,
