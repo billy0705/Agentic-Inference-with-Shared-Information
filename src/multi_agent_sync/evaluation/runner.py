@@ -190,6 +190,7 @@ def build_run_config(
             "model": args.model,
             "resolved_model": resolve_model_name(args),
             "local_model": getattr(args, "local_model", False),
+            "start_index": getattr(args, "start_index", 0),
             "limit": args.limit,
             "attempts": getattr(args, "attempts", 1),
             "ma_proofbench_level": getattr(args, "ma_proofbench_level", None),
@@ -245,6 +246,7 @@ def build_comparison_scope(benchmark: BenchmarkSpec, args: argparse.Namespace) -
     return {
         "benchmark": benchmark.name,
         "resolved_model": resolve_model_name(args),
+        "start_index": getattr(args, "start_index", 0),
         "limit": getattr(args, "limit", 0),
         "seed": getattr(args, "seed", None),
         "data_file": getattr(args, "data_file", None),

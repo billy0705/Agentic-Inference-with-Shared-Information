@@ -21,6 +21,8 @@ expt:
     - gsm8k
   methods:
     - multiagent_dynamic_streaming
+  # Evaluates indices [start_index, limit); e.g. 50 and 100 runs IDs 50 through 99.
+  start_index: 0
   limit: 1
   repeats: 1
   max_steps: 3

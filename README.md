@@ -200,7 +200,7 @@ The evaluation command is:
 uv run evaluation --benchmark <benchmark> --methods <methods>
 ```
 
-By default, evaluation runs the full benchmark split. Add `--limit <n>` to run only the first `n` examples.
+By default, evaluation runs the full benchmark split. `--limit <n>` sets the exclusive ending dataset index. Use `--start-index <n>` to select a range; for example, `--start-index 50 --limit 100` runs IDs 50 through 99. Result CSV rows and per-example trace filenames retain those original IDs.
 
 Supported benchmarks:
 
@@ -281,7 +281,8 @@ uv run evaluation \
 Useful evaluation flags:
 
 - `--model <model>`: model name, or `auto` for OpenAI-compatible model detection
-- `--limit <n>`: number of examples to evaluate; default `0` runs the full split
+- `--start-index <n>`: zero-based inclusive first dataset ID; default `0`
+- `--limit <n>`: exclusive ending dataset ID; default `0` runs the full split. `--start-index 50 --limit 100` runs IDs 50–99.
 - `--output-dir <path>`: output root, default `output`
 - `--output <file-or-path>`: CSV output name/path
 - `--resume-run <path>`: continue an existing run by skipping completed JSON traces

@@ -41,6 +41,13 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed
+
+
 def get_benchmarks() -> dict[str, BenchmarkSpec]:
     benchmarks = [
         hotpotqa.build_benchmark(),
@@ -71,7 +78,23 @@ def build_parser() -> argparse.ArgumentParser:
             "Legacy alias: multiagent."
         ),
     )
-    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Number of examples to evaluate. Defaults to 0 for full split.")
+    parser.add_argument(
+        "--start-index",
+        "--start",
+        dest="start_index",
+        type=non_negative_int,
+        default=0,
+        help="Zero-based, inclusive dataset index at which to start. Defaults to 0.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=non_negative_int,
+        default=DEFAULT_LIMIT,
+        help=(
+            "Exclusive dataset index at which to stop. Defaults to 0 for the full split. "
+            "For example, --start-index 50 --limit 100 evaluates indices 50 through 99."
+        ),
+    )
     parser.add_argument(
         "--attempts",
         type=positive_int,
@@ -312,6 +335,10 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
     setattr(args, "answer_extractor", benchmark.extract_answer)
     setattr(args, "answer_formatter", benchmark.format_answer)
     items = benchmark.load_items(args)
+    start_index = args.start_index
+    # Benchmark loaders already apply ``limit`` as a prefix. Slice that prefix
+    # here so a requested range keeps the original dataset indices.
+    items = items[start_index : args.limit or None]
     rng = random.Random(args.seed)
     resolved_model = runner.resolve_model_name(args)
     setattr(args, "resolved_model", resolved_model)
@@ -341,7 +368,7 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
                 },
             )
 
-    for idx, row in enumerate(runner.progress(items, desc=f"Benchmarking {benchmark.display_name}")):
+    for idx, row in enumerate(runner.progress(items, desc=f"Benchmarking {benchmark.display_name}"), start=start_index):
         row_dict = dict(row)
         prompt, gold = benchmark.build_prompt(row_dict, rng)
         question_context = runner.build_question_context(row_dict)

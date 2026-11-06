@@ -76,6 +76,7 @@ def test_load_experiment_config_validates_and_deduplicates_lists():
 
     assert config.benchmarks == ("gsm8k", "gpqa")
     assert config.methods == ("multiagent_dynamic_streaming", "plain_llm")
+    assert config.start_index == 0
     assert config.limit == 2
     assert config.repeats == 1
     assert config.resume_repeats is False
@@ -464,7 +465,7 @@ def test_print_evaluation_matrix_includes_optional_runtime_args(monkeypatch, cap
     generate.main(["server.yaml", "--print-evaluation-matrix"])
 
     assert capsys.readouterr().out == (
-        "gsm8k\tplain_llm\t1\t/project/output\t-\t5\t10\t3\t3\tfalse\t5\t5\t5\t12000\n"
+        "gsm8k\tplain_llm\t0\t1\t/project/output\t-\t5\t10\t3\t3\tfalse\t5\t5\t5\t12000\n"
     )
 
 

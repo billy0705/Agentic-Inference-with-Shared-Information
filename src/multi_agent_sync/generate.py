@@ -20,6 +20,7 @@ from multi_agent_sync.vllm_server import spinup_server
 class ExperimentConfig:
     benchmarks: tuple[str, ...]
     methods: tuple[str, ...]
+    start_index: int
     limit: int
     repeats: int
     resume_repeats: bool
@@ -159,6 +160,10 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         raise ValueError("'expt.methods' must be a non-empty list of method names")
     normalized_methods = tuple(runner.parse_methods(",".join(methods)))
 
+    start_index = expt.get("start_index", 0)
+    if not isinstance(start_index, int) or isinstance(start_index, bool) or start_index < 0:
+        raise ValueError("'expt.start_index' must be a non-negative integer")
+
     limit = expt.get("limit", 0)
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
         raise ValueError("'expt.limit' must be a non-negative integer")
@@ -213,6 +218,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
     return ExperimentConfig(
         benchmarks=normalized_benchmarks,
         methods=normalized_methods,
+        start_index=start_index,
         limit=limit,
         repeats=repeats,
         resume_repeats=resume_repeats,
@@ -268,6 +274,8 @@ def build_evaluation_args(
             benchmark,
             "--methods",
             methods,
+            "--start-index",
+            str(experiment.start_index),
             "--limit",
             str(experiment.limit),
             *(["--max-steps", str(experiment.max_steps)] if experiment.max_steps is not None else []),
@@ -316,6 +324,7 @@ REPEAT_MATCH_SETTINGS = (
     "model",
     "resolved_model",
     "local_model",
+    "start_index",
     "limit",
     "attempts",
     "ma_proofbench_level",
@@ -562,7 +571,7 @@ def main(argv: list[str] | None = None) -> None:
                     debate_rounds = str(experiment.debate_rounds) if experiment.debate_rounds is not None else "-"
                     max_tokens = str(experiment.max_tokens) if experiment.max_tokens is not None else "-"
                     print(
-                        f"{benchmark}\t{methods}\t{experiment.limit}\t{output_dir}\t{resume_run}\t"
+                        f"{benchmark}\t{methods}\t{experiment.start_index}\t{experiment.limit}\t{output_dir}\t{resume_run}\t"
                         f"{max_steps}\t{shared_finding_limit}\t{min_dynamic_subagents}\t{max_dynamic_subagents}\t"
                         f"{think_mode}\t"
                         f"{single_agent_min_steps}\t{single_agent_max_steps}\t{debate_rounds}\t{max_tokens}"
