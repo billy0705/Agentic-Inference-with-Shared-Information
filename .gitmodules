@@ -1,0 +1,3 @@
+[submodule "third_party/autogen-lts"]
+	path = third_party/autogen-lts
+	url = https://github.com/UCF-CRCV/autogen-lts.git

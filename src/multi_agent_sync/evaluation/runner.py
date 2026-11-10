@@ -31,6 +31,7 @@ from multi_agent_sync.evaluation.baselines import (
 )
 from multi_agent_sync.agents.base import DEFAULT_SHARED_FINDING_LIMIT
 from multi_agent_sync.evaluation.baselines import multiagent_sync as multiagent_sync_baselines
+from multi_agent_sync.evaluation.baselines.lts import LTS_TEAM_COUNT, LTS_VARIANTS, run_lts
 from multi_agent_sync.evaluation.baselines.common import (
     add_optional_ints,
     coerce_int,
@@ -54,6 +55,7 @@ VALID_METHODS = {
     "majority_vote",
     "plain_llm",
     "single_agent",
+    *LTS_VARIANTS,
     }
 
 
@@ -302,6 +304,10 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         settings["debate_rounds"] = getattr(args, "debate_rounds", DEBATE_ROUNDS)
     if method == "majority_vote":
         settings["majority_vote_agents"] = MAJORITY_VOTE_AGENT_COUNT
+    if method in LTS_VARIANTS:
+        settings["lts_teams"] = LTS_TEAM_COUNT
+        settings["lts_template"] = LTS_VARIANTS[method].template
+        settings["lts_use_decision_transformer"] = LTS_VARIANTS[method].use_decision_transformer
     return settings
 
 
@@ -367,11 +373,13 @@ def method_subagent_mode(method: str) -> str:
         return "debate"
     if method == "majority_vote":
         return "majority_vote"
+    if method in LTS_VARIANTS:
+        return "lts"
     return "dynamic" if "dynamic" in method else "fixed"
 
 
 def method_message_streaming(method: str) -> bool | None:
-    if method in {"plain_llm", "single_agent", "multiagent_debate", "majority_vote"}:
+    if method in {"plain_llm", "single_agent", "multiagent_debate", "majority_vote", *LTS_VARIANTS}:
         return None
     return "no_streaming" not in method
 
@@ -628,6 +636,16 @@ async def run_method(
             args,
             workflow_config=workflow_config,
         )
+    elif method in LTS_VARIANTS:
+        raw_output, returncode, trace = await run_lts(
+            prompt,
+            args,
+            method=method,
+            model=resolve_model_name(args),
+            base_url=get_openai_base_url(),
+        )
+        # LTS calls the model from its own subprocess; take token counts from its LLM call log.
+        metered_llm.usage.add(TokenUsage(**trace["token_usage"]))
     else:
         raise ValueError(f"Unknown method: {method}")
 
