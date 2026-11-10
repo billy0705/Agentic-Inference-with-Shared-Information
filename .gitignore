@@ -25,3 +25,5 @@ datasets/
 *.yaml
 benchmark-data/
 tmp/
+# LTS baseline (scripts/setup_lts.sh)
+third_party/lts-weights/

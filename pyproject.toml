@@ -24,11 +24,28 @@ dependencies = [
 vllm-server = [
     "vllm-server-launcher @ git+ssh://git@github.com/machinelearningnuremberg/vllm-server.git@dev-server-suman",
 ]
+# LTS baselines (third_party/autogen-lts submodule); see README "LTS Baselines".
+lts = [
+    "autogen-core",
+    "autogen-agentchat",
+    "autogen-ext[openai,magentic-one]",
+    "huggingface-hub",
+    "peft",
+    "pyyaml",
+    "tiktoken",
+    "torch",
+    "transformers",
+]
 
 [project.scripts]
 evaluation = "multi_agent_sync.evaluation.main:main"
 generate-experiments = "multi_agent_sync.generate:main"
 multi-agent-sync = "multi_agent_sync.main:main"
+
+[tool.uv.sources]
+autogen-core = { path = "third_party/autogen-lts/python/packages/autogen-core", editable = true }
+autogen-agentchat = { path = "third_party/autogen-lts/python/packages/autogen-agentchat", editable = true }
+autogen-ext = { path = "third_party/autogen-lts/python/packages/autogen-ext", editable = true }
 
 [build-system]
 requires = ["hatchling"]

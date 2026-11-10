@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Comma-separated methods to compare. Supported: multiagent_streaming, "
             "multiagent_no_streaming, multiagent_dynamic_streaming, "
             "multiagent_dynamic_no_streaming, dynamic_orchestration, multiagent_debate, "
-            "majority_vote, single_agent, plain_llm. "
+            "majority_vote, single_agent, plain_llm, lts, lts_llm, lts_addall. "
             "Legacy alias: multiagent."
         ),
     )

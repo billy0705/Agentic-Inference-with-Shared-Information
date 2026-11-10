@@ -11,6 +11,7 @@ The project intentionally does not use AutoGen.
 - [Environment Variables](#environment-variables)
 - [Run the Multi-Agent CLI](#run-the-multi-agent-cli)
 - [Run Evaluations](#run-evaluations)
+- [LTS Baselines](#lts-baselines)
 - [Lean / MA-ProofBench / OlymMATH-LEAN](#lean--ma-proofbench--olymmath-lean)
 - [SWE-bench Verified](#swe-bench-verified)
 - [Artifacts](#artifacts)
@@ -294,6 +295,55 @@ Useful evaluation flags:
 - `--total-runtime-timeout <seconds>`: per-example multi-agent timeout
 - `--synthesis-timeout <seconds>`: synthesizer timeout
 - `--seed <n>`: answer shuffle seed
+
+## LTS Baselines
+
+`lts`, `lts_llm`, and `lts_addall` run the authors' code for *Learning to Share*
+(Fioresi et al., ICML 2026, [arXiv:2602.05965](https://arxiv.org/abs/2602.05965)) from the
+`third_party/autogen-lts` submodule. Their AutoGen fork is installed into the project
+environment through the optional `lts` extra. Each example runs the upstream scenario script as a
+subprocess with the same interpreter, so the `multi_agent_sync` code itself does not import AutoGen.
+
+| Method | Upstream template | Shared-memory admission |
+|---|---|---|
+| `lts` | `LLMVerifiedMemoryParallelAgents` | released decision transformer (`jfioresi/lts-decision-transformer`) |
+| `lts_llm` | `LLMVerifiedMemoryParallelAgents` | LLM verifier |
+| `lts_addall` | `MemoryParallelAgents` | every step is stored |
+
+Setup (once per machine). This checks out the submodule, runs `uv sync --extra lts`, and downloads
+the decision-transformer checkpoint:
+
+```bash
+scripts/setup_lts.sh
+```
+
+The `lts` extra needs the submodule checked out. A plain `uv sync` removes the LTS packages again, so
+use `uv sync --extra lts` from then on (plain `uv run` keeps them).
+
+Run them like any other method; they use the same `OPENAI_BASE_URL` / `--model`:
+
+```bash
+uv run evaluation --benchmark gpqa --methods multiagent_streaming,lts,lts_llm,lts_addall
+```
+
+Notes:
+
+- Each run uses 3 parallel teams (Orchestrator, Coder, ComputerTerminal, FileSurfer), as in the paper.
+  WebSurfer is removed because the benchmarks are closed-book. The only edits to the upstream
+  scripts are listed in `prepare_scenario_source` in `src/multi_agent_sync/evaluation/baselines/lts.py`.
+- The decision transformer is used as released (not retrained), with the authors' evaluation
+  template, which has no epsilon exploration. Its `Qwen/Qwen3-0.6B` backbone downloads from
+  Hugging Face on first use.
+- The Coder's code runs locally, without a sandbox, inside the per-example work dir
+  `<output-dir>/lts_workdirs/`. That directory also keeps the upstream logs (`log.jsonl`,
+  `console_log_*.txt`, `memory_events.jsonl`).
+- `elapsed_seconds` is per-example wall-clock time, including subprocess start-up and the
+  decision-transformer load. The trace also stores `lts_runtime_seconds` as reported by the
+  scenario. Token counts are summed from the upstream LLM call log.
+- The model is configured without function calling, so vLLM needs no tool-calling flags. Only
+  FileSurfer would use tools, and the questions have no attached files.
+- Environment overrides: `LTS_PYTHON` (defaults to the current interpreter), `LTS_REPO_DIR`,
+  `DECISION_TRANSFORMER_WEIGHTS`.
 
 ## Lean / MA-ProofBench / OlymMATH-LEAN
 
