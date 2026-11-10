@@ -310,15 +310,17 @@ subprocess with the same interpreter, so the `multi_agent_sync` code itself does
 | `lts_llm` | `LLMVerifiedMemoryParallelAgents` | LLM verifier |
 | `lts_addall` | `MemoryParallelAgents` | every step is stored |
 
-Setup (once per machine). This checks out the submodule, runs `uv sync --extra lts`, and downloads
-the decision-transformer checkpoint:
+Setup (once per machine). This checks out the submodule, runs `uv sync --inexact --extra lts`
+(which keeps already-installed extras such as `vllm-server`), and downloads the decision-transformer
+checkpoint:
 
 ```bash
 scripts/setup_lts.sh
 ```
 
-To check out the submodule by hand, use `GIT_LFS_SKIP_SMUDGE=1 git submodule update --init --depth 1 third_party/autogen-lts`; some of the fork's LFS images return 404, and no code is stored in LFS. The `lts` extra needs the submodule checked out. A plain `uv sync` removes the LTS packages again, so
-use `uv sync --extra lts` from then on (plain `uv run` keeps them).
+To check out the submodule by hand, use `GIT_LFS_SKIP_SMUDGE=1 git submodule update --init --depth 1 third_party/autogen-lts`; some of the fork's LFS images return 404, and no code is stored in LFS. The `lts` extra needs the submodule checked out. `uv sync` removes every extra it is not given, so
+with both the managed vLLM server and LTS, sync with `uv sync --extra vllm-server --extra lts`
+(plain `uv run` and `./generate.sh` keep installed packages).
 
 Run them like any other method; they use the same `OPENAI_BASE_URL` / `--model`:
 
