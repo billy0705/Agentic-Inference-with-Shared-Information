@@ -154,9 +154,8 @@ def parse_final_answer(stdout: str) -> str | None:
     matches = _AGGREGATED_ANSWER_RE.findall(stdout) or _TEAM_ANSWER_RE.findall(stdout)
     if not matches:
         return None
+    # Kept verbatim: brackets can be part of the answer (e.g. the interval [-1/8, 1/8]).
     answer = matches[-1].strip()
-    if answer.startswith("[") and answer.endswith("]"):
-        answer = answer[1:-1].strip()
     return answer or None
 
 
@@ -272,7 +271,9 @@ async def run_lts(
     returncode, stdout, timed_out = await run_scenario(python, task_dir, env, getattr(args, "total_runtime_timeout", None))
 
     final_answer = parse_final_answer(stdout)
-    raw_output = f"Final Answer: {final_answer}" if final_answer is not None else stdout[-4000:]
+    # Without a final answer the run failed: leave the output empty so it is scored
+    # as invalid, rather than letting the extractor read an error message as a prediction.
+    raw_output = f"Final Answer: {final_answer}" if final_answer is not None else ""
     usage = parse_token_usage(task_dir / "log.jsonl")
     lts_metrics = read_json(task_dir / "first_vs_aggregated_metrics.json")
     return raw_output, returncode, {

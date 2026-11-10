@@ -37,9 +37,10 @@ def test_patch_fails_loudly_when_upstream_changes():
 
 
 def test_parse_final_answer_prefers_aggregated_answer():
-    stdout = "FINAL ANSWER: B\nFINAL ANSWER: C\nFINAL AGGREGATED ANSWER: [C]\nSharedMemory: FINAL keep rate: 3/5 (60.0%)\n"
+    stdout = "FINAL ANSWER: B\nFINAL ANSWER: C\nFINAL AGGREGATED ANSWER: C\nSharedMemory: FINAL keep rate: 3/5 (60.0%)\n"
 
     assert lts.parse_final_answer(stdout) == "C"
+    assert lts.parse_final_answer("FINAL AGGREGATED ANSWER: [-1/8, 1/8]") == "[-1/8, 1/8]"
     assert lts.parse_final_answer("Team said FINAL ANSWER: 42") == "42"
     assert lts.parse_final_answer("no answer here") is None
 
@@ -127,6 +128,7 @@ async def test_lts_timeout_kills_subprocess(tmp_path, monkeypatch):
     assert result.returncode == 124
     assert result.trace["timed_out"] is True
     assert result.trace["final_answer"] is None
+    assert result.raw_output == ""
 
 
 def test_lts_methods_are_registered():
