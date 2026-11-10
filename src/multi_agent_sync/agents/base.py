@@ -17,6 +17,45 @@ def shared_memory_enabled() -> bool:
     return os.environ.get("SHARED_MEMORY", "1") != "0"
 
 
+def sync_steps_enabled() -> bool:
+    return os.environ.get("SYNC_STEPS", "0") == "1"
+
+
+class StepBarrier:
+    """Lockstep barrier: every active agent must finish step k before any starts step k+1."""
+
+    def __init__(self, parties: int) -> None:
+        self.active = parties
+        self.arrived = 0
+        self.generation = 0
+        self.cond = asyncio.Condition()
+
+    async def _release_if_ready(self) -> None:
+        if self.active > 0 and self.arrived >= self.active:
+            self.arrived = 0
+            self.generation += 1
+            self.cond.notify_all()
+
+    async def wait(self) -> None:
+        async with self.cond:
+            generation = self.generation
+            self.arrived += 1
+            await self._release_if_ready()
+            await self.cond.wait_for(lambda: self.generation != generation)
+
+    async def leave(self) -> None:
+        async with self.cond:
+            self.active -= 1
+            await self._release_if_ready()
+
+
+def attach_step_barrier(agents: list[Any]) -> None:
+    if sync_steps_enabled() and agents:
+        barrier = StepBarrier(len(agents))
+        for agent in agents:
+            agent.step_barrier = barrier
+
+
 MAX_LOCAL_NOTES_CHARS = 500
 DEFAULT_AGENT_RUNTIME_TIMEOUT_SECONDS = 600.0
 DEFAULT_SHARED_FINDING_LIMIT = 10
@@ -91,6 +130,7 @@ class BaseAgent:
     reactive_steps_used: int = 0
     _subscribed: bool = False
     _last_step_trace_data: dict[str, Any] = field(default_factory=dict)
+    step_barrier: StepBarrier | None = None
 
     def subscribe(self) -> None:
         if not self.enable_message_streaming or not shared_memory_enabled():
@@ -161,19 +201,25 @@ class BaseAgent:
         final_response_received = False
         step_index = 1
         final_guard_extra_steps = 0
-        while step_index <= self.max_steps + final_guard_extra_steps:
-            if time.monotonic() - started_at > self.max_runtime_seconds:
-                await self.publish_warning("Agent runtime limit reached before all steps completed.")
-                break
+        try:
+            while step_index <= self.max_steps + final_guard_extra_steps:
+                if time.monotonic() - started_at > self.max_runtime_seconds:
+                    await self.publish_warning("Agent runtime limit reached before all steps completed.")
+                    break
 
-            result = await self.run_step_and_record(step_index)
-            last_step_index = step_index
-            if result.status == "final" and (self.allow_agent_early_stop or step_index >= self.max_steps):
-                final_response_received = True
-                break
-            if self.is_final_guard_retry(result) and final_guard_extra_steps == 0:
-                final_guard_extra_steps = self.final_guard_retry_steps
-            step_index += 1
+                result = await self.run_step_and_record(step_index)
+                last_step_index = step_index
+                if result.status == "final" and (self.allow_agent_early_stop or step_index >= self.max_steps):
+                    final_response_received = True
+                    break
+                if self.is_final_guard_retry(result) and final_guard_extra_steps == 0:
+                    final_guard_extra_steps = self.final_guard_retry_steps
+                step_index += 1
+                if self.step_barrier is not None:
+                    await self.step_barrier.wait()
+        finally:
+            if self.step_barrier is not None:
+                await self.step_barrier.leave()
 
         if not final_response_received:
             await self.maybe_run_reactive_steps(started_at, last_step_index)

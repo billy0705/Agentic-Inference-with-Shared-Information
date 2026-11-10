@@ -38,6 +38,7 @@ class ExperimentConfig:
     benchmark_data_dir: Path | None
     output_dir: Path | None
     shared_memory: bool | None = None
+    sync_steps: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,7 @@ def load_experiment_config(manager: Any) -> ExperimentConfig:
         benchmark_data_dir=benchmark_data_dir,
         output_dir=output_dir,
         shared_memory=_optional_bool(expt, "expt", "shared_memory"),
+        sync_steps=_optional_bool(expt, "expt", "sync_steps"),
     )
 
 
@@ -246,6 +248,8 @@ def environment_values(experiment: ExperimentConfig) -> dict[str, str]:
         values["BENCHMARK_DATA_DIR"] = str(experiment.benchmark_data_dir)
     if experiment.shared_memory is False:
         values["SHARED_MEMORY"] = "0"
+    if experiment.sync_steps:
+        values["SYNC_STEPS"] = "1"
     return values
 
 

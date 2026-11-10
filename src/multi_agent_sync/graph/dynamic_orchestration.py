@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from multi_agent_sync.agents.base import attach_step_barrier
 from typing import Any
 from uuid import uuid4
 
@@ -413,6 +414,7 @@ async def run_dynamic_agent_round(
                 agent_kwargs[reactive_field] = assignment[reactive_field]
         agents.append(DynamicAgent(**agent_kwargs))
 
+    attach_step_barrier(agents)
     for agent in agents:
         agent.subscribe()
 

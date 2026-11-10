@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from multi_agent_sync.agents.base import attach_step_barrier
 from collections import Counter
 from collections.abc import Callable
 from typing import Any
@@ -240,6 +241,7 @@ async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
                 agent_kwargs[reactive_field] = assignment[reactive_field]
         agents.append(agent_class(**agent_kwargs))
 
+    attach_step_barrier(agents)
     for agent in agents:
         agent.subscribe()
 
