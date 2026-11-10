@@ -13,7 +13,9 @@ WEIGHTS_DIR="${LTS_WEIGHTS_DIR:-$ROOT/third_party/lts-weights}"
 
 cd "$ROOT"
 if [ ! -d third_party/autogen-lts/python/packages/autogen-agentchat ]; then
-  git submodule update --init --depth 1 third_party/autogen-lts
+  # The fork's Git LFS files are only images, and some are missing on the LFS
+  # server (404), which breaks checkout. Skip LFS downloads; no code is in LFS.
+  GIT_LFS_SKIP_SMUDGE=1 git submodule update --init --depth 1 third_party/autogen-lts
 fi
 
 uv sync --extra lts "$@"

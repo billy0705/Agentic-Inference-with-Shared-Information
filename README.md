@@ -317,7 +317,7 @@ the decision-transformer checkpoint:
 scripts/setup_lts.sh
 ```
 
-The `lts` extra needs the submodule checked out. A plain `uv sync` removes the LTS packages again, so
+To check out the submodule by hand, use `GIT_LFS_SKIP_SMUDGE=1 git submodule update --init --depth 1 third_party/autogen-lts`; some of the fork's LFS images return 404, and no code is stored in LFS. The `lts` extra needs the submodule checked out. A plain `uv sync` removes the LTS packages again, so
 use `uv sync --extra lts` from then on (plain `uv run` keeps them).
 
 Run them like any other method; they use the same `OPENAI_BASE_URL` / `--model`:
