@@ -1,0 +1,55 @@
+# Mixed-size setup: Gemma 4 31B runs the orchestrator + summarizer,
+# Gemma 4 E4B runs every subagent. Two vLLM servers share one 4-GPU node.
+#   bash generate.sh server.gemma-31b-4b.yaml.example
+
+# Orchestrator / summarizer (large model).
+vllm:
+  model_name: google/gemma-4-31B-it
+  sif_path: ../vllm-server/vllm.sif
+  port: 8000
+  log_path: vllm-server.log
+  engine_ready_timeout: 1800
+  cuda_visible_devices: "0,1"
+  tensor_parallel_size: 2
+  max_model_len: 21000
+  gpu_memory_utilization: 0.90
+
+# Subagents (small model). Omit this section to use one model for everything.
+# sif_path and engine_ready_timeout are inherited from `vllm` when not set.
+vllm_subagent:
+  model_name: google/gemma-4-E4B-it
+  port: 8001
+  log_path: vllm-server-subagent.log
+  cuda_visible_devices: "2,3"
+  tensor_parallel_size: 2
+  max_model_len: 21000
+  gpu_memory_utilization: 0.90
+
+helma:
+  job_name: gemma-31b-4b
+  nodes: 1
+  gres: "gpu:4"
+  partition: h100
+  output: out_gemma_31b_4b.out
+  time: "4:00:00"
+
+expt:
+  benchmark:
+    - gsm8k
+  # Only the multi-agent methods split work between the two models;
+  # plain_llm / single_agent / debate / majority_vote run on the 31B model only.
+  methods:
+    - multiagent_dynamic_streaming
+  # Evaluates indices [start_index, limit); e.g. 50 and 100 runs IDs 50 through 99.
+  start_index: 0
+  limit: 1
+  repeats: 1
+  max_steps: 3
+  shared_finding_limit: 8
+  think_mode: true
+  debate_rounds: 2
+  max_tokens: 16384
+  benchmark_data_dir: data
+  # Results land in output/<benchmark>/gemma-4-31B-it__sub-gemma-4-E4B-it/
+  output_dir: output
+  resume_run: null

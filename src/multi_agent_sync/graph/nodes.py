@@ -165,7 +165,8 @@ def build_dynamic_direct_debate_prompt(*, task: str, first_prompt: str, first_an
 
 async def run_multi_agent_runtime_node(state: GraphState) -> GraphState:
     streamer = state.get("event_streamer") or InMemoryEventStreamer()
-    llm = state.get("llm") or get_llm()
+    # Subagents may run on a smaller model; orchestrator/summarizer keep ``llm``.
+    llm = state.get("subagent_llm") or state.get("llm") or get_llm()
     max_steps = state.get("max_steps_per_agent", 3)
     shared_finding_limit = state.get("shared_finding_limit", DEFAULT_SHARED_FINDING_LIMIT)
     allow_agent_early_stop = bool(state.get("allow_agent_early_stop", False))

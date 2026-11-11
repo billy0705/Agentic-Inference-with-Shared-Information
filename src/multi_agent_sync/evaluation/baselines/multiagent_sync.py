@@ -18,6 +18,7 @@ async def run_multiagent(
     enable_agent_message_streaming: bool = True,
     subagent_mode: str = "fixed",
     workflow_config: BenchmarkWorkflowConfig | None = None,
+    subagent_llm: Any | None = None,
 ) -> tuple[str, int, dict[str, Any]]:
     docker_workspace = None
     try:
@@ -41,6 +42,7 @@ async def run_multiagent(
         state = await run_workflow(
             task=prompt,
             llm=llm,
+            subagent_llm=subagent_llm,
             subagent_mode=subagent_mode,
             max_steps_per_agent=args.max_steps,
             shared_finding_limit=getattr(args, "shared_finding_limit", DEFAULT_SHARED_FINDING_LIMIT),
@@ -98,6 +100,7 @@ async def run_dynamic_orchestration(
     args: argparse.Namespace,
     *,
     workflow_config: BenchmarkWorkflowConfig | None = None,
+    subagent_llm: Any | None = None,
 ) -> tuple[str, int, dict[str, Any]]:
     docker_workspace = None
     try:
@@ -121,6 +124,7 @@ async def run_dynamic_orchestration(
         state = await run_dynamic_orchestration_workflow(
             task=prompt,
             llm=llm,
+            subagent_llm=subagent_llm,
             benchmark=str(getattr(args, "benchmark", "") or ""),
             max_steps_per_agent=args.max_steps,
             shared_finding_limit=getattr(args, "shared_finding_limit", DEFAULT_SHARED_FINDING_LIMIT),

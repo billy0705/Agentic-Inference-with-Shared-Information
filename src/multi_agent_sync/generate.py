@@ -13,6 +13,7 @@ from typing import Any
 from multi_agent_sync.evaluation import main as evaluation
 from multi_agent_sync.evaluation import runner
 from multi_agent_sync.agents.base import DEFAULT_SHARED_FINDING_LIMIT
+from multi_agent_sync.llm import get_subagent_model_name
 from multi_agent_sync.vllm_server import spinup_server
 
 
@@ -331,6 +332,7 @@ def resolve_args_model(args: argparse.Namespace) -> argparse.Namespace:
 REPEAT_MATCH_SETTINGS = (
     "model",
     "resolved_model",
+    "subagent_model",
     "local_model",
     "start_index",
     "limit",
@@ -396,6 +398,8 @@ def repeat_run_config_matches(
         key: (
             runner.resolve_model_name(args)
             if key == "resolved_model"
+            else get_subagent_model_name()
+            if key == "subagent_model"
             else getattr(args, key, False if key == "local_model" else None)
         )
         for key in REPEAT_MATCH_SETTINGS
@@ -517,7 +521,7 @@ async def run_experiments(config_path: str | Path) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run configured evaluations with one vLLM server.")
+    parser = argparse.ArgumentParser(description="Run configured evaluations with the configured vLLM server(s).")
     parser.add_argument("config", type=Path, help="Combined vLLM and experiment YAML configuration")
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument(

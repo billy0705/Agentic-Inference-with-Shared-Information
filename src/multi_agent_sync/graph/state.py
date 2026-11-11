@@ -27,6 +27,7 @@ class GraphState(TypedDict):
     event_streamer: NotRequired[EventStreamer]
     trace_logger: NotRequired[Any]
     llm: NotRequired[Any]
+    subagent_llm: NotRequired[Any]
     max_steps_per_agent: NotRequired[int]
     shared_finding_limit: NotRequired[int]
     min_dynamic_subagents: NotRequired[int]

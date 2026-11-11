@@ -46,6 +46,7 @@ def build_workflow():
 async def run_workflow(
     task: str,
     llm: Any | None = None,
+    subagent_llm: Any | None = None,
     subagent_mode: str = "fixed",
     max_steps_per_agent: int = 3,
     shared_finding_limit: int = DEFAULT_SHARED_FINDING_LIMIT,
@@ -104,6 +105,8 @@ async def run_workflow(
     }
     if llm is not None:
         initial_state["llm"] = llm
+    if subagent_llm is not None:
+        initial_state["subagent_llm"] = subagent_llm
     if docker_workspace is not None:
         initial_state["docker_workspace"] = docker_workspace
     if feedback_tool is not None:

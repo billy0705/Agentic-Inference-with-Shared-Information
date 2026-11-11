@@ -44,6 +44,7 @@ async def run_dynamic_orchestration_workflow(
     *,
     task: str,
     llm: Any | None = None,
+    subagent_llm: Any | None = None,
     benchmark: str = "",
     max_steps_per_agent: int = 3,
     shared_finding_limit: int = DEFAULT_SHARED_FINDING_LIMIT,
@@ -134,7 +135,7 @@ async def run_dynamic_orchestration_workflow(
         round_state = await run_dynamic_agent_round(
             task=task,
             run_id=run_id,
-            llm=model,
+            llm=subagent_llm or model,
             streamer=streamer,
             decision=decision,
             round_index=round_index,

@@ -40,7 +40,7 @@ from multi_agent_sync.evaluation.baselines.common import (
     most_frequent_present_answer,
 )
 from multi_agent_sync.evaluation.types import BenchmarkScore, BenchmarkSpec, BenchmarkWorkflowConfig
-from multi_agent_sync.llm import get_openai_base_url
+from multi_agent_sync.llm import get_openai_base_url, get_subagent_model_name
 
 
 DEFAULT_OUTPUT_DIR = Path("output")
@@ -131,6 +131,10 @@ def safe_filename(value: str) -> str:
 def resolve_model_output_name(args: argparse.Namespace) -> str:
     resolved_model = resolve_model_name(args)
     model_name = resolved_model.rstrip("/").rsplit("/", 1)[-1]
+    subagent_model = get_subagent_model_name()
+    if subagent_model:
+        # Keep mixed-model runs apart from single-model runs of the same orchestrator.
+        model_name = f"{model_name}__sub-{subagent_model.rstrip('/').rsplit('/', 1)[-1]}"
     return safe_filename(model_name)
 
 
@@ -191,6 +195,7 @@ def build_run_config(
         "settings": {
             "model": args.model,
             "resolved_model": resolve_model_name(args),
+            "subagent_model": get_subagent_model_name(),
             "local_model": getattr(args, "local_model", False),
             "start_index": getattr(args, "start_index", 0),
             "limit": args.limit,
@@ -248,6 +253,7 @@ def build_comparison_scope(benchmark: BenchmarkSpec, args: argparse.Namespace) -
     return {
         "benchmark": benchmark.name,
         "resolved_model": resolve_model_name(args),
+        "subagent_model": get_subagent_model_name(),
         "start_index": getattr(args, "start_index", 0),
         "limit": getattr(args, "limit", 0),
         "seed": getattr(args, "seed", None),
@@ -263,6 +269,7 @@ def build_method_settings(method: str, args: argparse.Namespace) -> dict[str, An
         "method": method,
         "model": args.model,
         "resolved_model": resolve_model_name(args),
+        "subagent_model": get_subagent_model_name(),
         "local_model": getattr(args, "local_model", False),
         "subagent_mode": method_subagent_mode(method),
         "message_streaming": method_message_streaming(method),
@@ -580,8 +587,13 @@ async def run_method(
     args: argparse.Namespace,
     *,
     workflow_config: BenchmarkWorkflowConfig | None = None,
+    subagent_llm: Any | None = None,
 ) -> RunResult:
     metered_llm = MeteredLLM(llm)
+    # Only the multi-agent methods route subagent calls to ``subagent_llm``;
+    # every other method runs entirely on the main model.
+    metered_subagent_llm = MeteredLLM(subagent_llm) if subagent_llm is not None else None
+    subagent_kwargs = {"subagent_llm": metered_subagent_llm} if metered_subagent_llm is not None else {}
     started_at = time.perf_counter()
     trace: dict[str, Any] | None = None
     if method == "plain_llm":
@@ -598,6 +610,7 @@ async def run_method(
             prompt,
             metered_llm,
             args,
+            **subagent_kwargs,
             enable_agent_message_streaming=True,
             subagent_mode="fixed",
             workflow_config=workflow_config,
@@ -607,6 +620,7 @@ async def run_method(
             prompt,
             metered_llm,
             args,
+            **subagent_kwargs,
             enable_agent_message_streaming=False,
             subagent_mode="fixed",
             workflow_config=workflow_config,
@@ -616,6 +630,7 @@ async def run_method(
             prompt,
             metered_llm,
             args,
+            **subagent_kwargs,
             enable_agent_message_streaming=True,
             subagent_mode="dynamic",
             workflow_config=workflow_config,
@@ -625,6 +640,7 @@ async def run_method(
             prompt,
             metered_llm,
             args,
+            **subagent_kwargs,
             enable_agent_message_streaming=False,
             subagent_mode="dynamic",
             workflow_config=workflow_config,
@@ -634,6 +650,7 @@ async def run_method(
             prompt,
             metered_llm,
             args,
+            **subagent_kwargs,
             workflow_config=workflow_config,
         )
     elif method in LTS_VARIANTS:
@@ -650,6 +667,13 @@ async def run_method(
         raise ValueError(f"Unknown method: {method}")
 
     elapsed_seconds = time.perf_counter() - started_at
+    if metered_subagent_llm is not None:
+        if isinstance(trace, dict):
+            trace["token_usage_by_role"] = {
+                "orchestrator_and_summarizer": metered_llm.usage.as_dict(),
+                "subagents": metered_subagent_llm.usage.as_dict(),
+            }
+        metered_llm.usage.add(metered_subagent_llm.usage)
     return RunResult(
         raw_output=raw_output,
         returncode=returncode,

@@ -19,7 +19,7 @@ from multi_agent_sync.evaluation.kimina_docker import (
     KiminaDockerServer,
 )
 from multi_agent_sync.evaluation.types import BenchmarkSpec
-from multi_agent_sync.llm import get_llm
+from multi_agent_sync.llm import get_llm, get_subagent_llm
 from multi_agent_sync.vllm_server import (
     add_spinup_server_arguments,
     resolve_server_config,
@@ -343,6 +343,8 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
     resolved_model = runner.resolve_model_name(args)
     setattr(args, "resolved_model", resolved_model)
     llm = get_llm(resolved_model, openai=not getattr(args, "local_model", False), max_tokens=args.max_tokens)
+    subagent_llm = get_subagent_llm(max_tokens=args.max_tokens)
+    subagent_kwargs = {"subagent_llm": subagent_llm} if subagent_llm is not None else {}
     resume_root = Path(args.resume_run) if getattr(args, "resume_run", None) else None
     run_id = resume_root.name if resume_root is not None else runner.create_run_id()
     output_path = resolve_resume_output_path(resume_root, benchmark, args, run_id)
@@ -380,9 +382,11 @@ async def run_evaluation_body(args: argparse.Namespace, benchmark: BenchmarkSpec
             try:
                 workflow_config = build_method_workflow_config(benchmark, row_dict, method, args)
                 if workflow_config is None:
-                    run_result = await runner.run_method(method, prompt, llm, args)
+                    run_result = await runner.run_method(method, prompt, llm, args, **subagent_kwargs)
                 else:
-                    run_result = await runner.run_method(method, prompt, llm, args, workflow_config=workflow_config)
+                    run_result = await runner.run_method(
+                        method, prompt, llm, args, workflow_config=workflow_config, **subagent_kwargs
+                    )
                 raw_output = run_result.raw_output
                 returncode = run_result.returncode
                 elapsed_seconds = run_result.elapsed_seconds

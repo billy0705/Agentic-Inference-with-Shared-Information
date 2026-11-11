@@ -30,3 +30,27 @@ def get_llm(model: str | None = None, openai: bool = True, max_tokens: int = 409
             num_predict=max_tokens,
         )
     return llm
+
+
+def get_subagent_model_name() -> str | None:
+    """Model served for subagents, when a separate subagent server is configured."""
+    value = os.getenv("OPENAI_SUBAGENT_MODEL", "").strip()
+    return value or None
+
+
+def get_subagent_llm(max_tokens: int = 4096) -> Any | None:
+    """Return a client for the subagent model, or None to reuse the main model.
+
+    Set by ``spinup_server`` when the YAML has a ``vllm_subagent`` section, or
+    manually via OPENAI_SUBAGENT_MODEL / OPENAI_SUBAGENT_BASE_URL.
+    """
+    model = get_subagent_model_name()
+    if model is None:
+        return None
+    return ChatOpenAI(
+        model=model,
+        base_url=os.getenv("OPENAI_SUBAGENT_BASE_URL", get_openai_base_url()).rstrip("/"),
+        api_key="EMPTY",
+        temperature=0,
+        max_completion_tokens=max_tokens,
+    )
