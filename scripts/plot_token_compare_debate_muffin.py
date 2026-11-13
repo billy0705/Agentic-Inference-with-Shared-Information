@@ -116,21 +116,8 @@ def write_csv(means: Means, path: Path) -> None:
             ])
 
 
-def plot(means: Means, title: str, out_stem: Path) -> None:
-    fig, axes = plt.subplots(2, 2, figsize=(13, 8.5))
-    width = 0.4
-    plot_buckets = [b for b in all_buckets(means) if b != "React."]
-    x = list(range(len(plot_buckets)))
-    for ax, metric in zip(axes.flat[:3], METRICS):
-        for k, (m, (name, color)) in enumerate(METHODS.items()):
-            vals = [value(means, m, b, metric) for b in plot_buckets]
-            ax.bar([xi + (k - 0.5) * width for xi in x], vals, width=width, color=color, label=name)
-        ax.set_xticks(x, plot_buckets, fontsize=9)
-        ax.set_title(f"{metric.capitalize()} tokens per step", fontsize=11)
-        ax.set_xlabel("Step")
-        ax.set_ylabel("Mean tokens per task (all agents)")
-
-    ax = axes.flat[3]
+def draw_totals(ax, means: Means, width: float = 0.4) -> None:
+    """Per-task totals (input / output / total), Debate vs MUFFIN, with % difference."""
     for k, (m, (name, color)) in enumerate(METHODS.items()):
         vals = [overall(means, m, mt) for mt in METRICS]
         bars = ax.bar([i + (k - 0.5) * width for i in range(3)], vals, width=width, color=color, label=name)
@@ -149,19 +136,54 @@ def plot(means: Means, title: str, out_stem: Path) -> None:
     ax.set_title("Total per task (sum over all steps)", fontsize=11)
     ax.set_ylabel("Mean tokens per task")
 
+
+def style_ax(ax) -> None:
+    ax.yaxis.set_major_formatter(KFMT)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
+
+
+def save(fig, out_stem: Path, **kw) -> None:
+    out_stem.parent.mkdir(parents=True, exist_ok=True)
+    for ext in ("png", "pdf"):
+        fig.savefig(out_stem.parent / f"{out_stem.name}.{ext}", dpi=200, **kw)
+    plt.close(fig)
+
+
+def plot_totals(means: Means, title: str, out_stem: Path) -> None:
+    """Only the per-task totals panel, as a standalone figure."""
+    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    draw_totals(ax, means)
+    style_ax(ax)
+    ax.set_title(title, fontsize=11)
+    ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1.01, 1.0))
+    save(fig, out_stem, bbox_inches="tight")
+
+
+def plot(means: Means, title: str, out_stem: Path) -> None:
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8.5))
+    width = 0.4
+    plot_buckets = [b for b in all_buckets(means) if b != "React."]
+    x = list(range(len(plot_buckets)))
+    for ax, metric in zip(axes.flat[:3], METRICS):
+        for k, (m, (name, color)) in enumerate(METHODS.items()):
+            vals = [value(means, m, b, metric) for b in plot_buckets]
+            ax.bar([xi + (k - 0.5) * width for xi in x], vals, width=width, color=color, label=name)
+        ax.set_xticks(x, plot_buckets, fontsize=9)
+        ax.set_title(f"{metric.capitalize()} tokens per step", fontsize=11)
+        ax.set_xlabel("Step")
+        ax.set_ylabel("Mean tokens per task (all agents)")
+
+    draw_totals(axes.flat[3], means)
+
     for ax in axes.flat:
-        ax.yaxis.set_major_formatter(KFMT)
-        ax.spines[["top", "right"]].set_visible(False)
-        ax.grid(axis="y", alpha=0.3)
-        ax.set_axisbelow(True)
+        style_ax(ax)
     handles, labels = axes.flat[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper right", ncol=2, frameon=False)
     fig.suptitle(title, fontsize=13, x=0.02, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.95))
-    out_stem.parent.mkdir(parents=True, exist_ok=True)
-    for ext in ("png", "pdf"):
-        fig.savefig(out_stem.parent / f"{out_stem.name}.{ext}", dpi=200)
-    plt.close(fig)
+    save(fig, out_stem)
 
 
 def main() -> None:
@@ -181,6 +203,7 @@ def main() -> None:
     means, n_runs = average_runs(per_run)
     write_csv(means, out_dir / f"{args.stem}.csv")
     plot(means, f"Debate vs MUFFIN token usage — {bench}, {model}", out_dir / args.stem)
+    plot_totals(means, f"Total tokens per task — {bench}, {model}", out_dir / f"{args.stem}_total")
     d, u = overall(means, DEB, "total"), overall(means, MUF, "total")
     print(f"{model}: runs={n_runs} debate={d:.2f} muffin={u:.2f} reduction={(1 - u / d) * 100:.2f}%")
 

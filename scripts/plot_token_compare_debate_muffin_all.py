@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plot_token_compare_debate_muffin import (  # noqa: E402
-    DEB, METRICS, MUF, Means, average_runs, overall, plot, run_means, write_csv,
+    DEB, METRICS, MUF, Means, average_runs, overall, plot, plot_totals, run_means, write_csv,
 )
 
 BENCH_ORDER = ["olymmath", "olymmath-hard", "gpqa", "mmlu_pro", "chess"]
@@ -135,6 +135,8 @@ def main() -> None:
     write_csv(all_means, args.out / "overall" / "all.csv")
     plot(all_means, f"Debate vs MUFFIN token usage — average over {len(benches)} benchmarks × "
          f"{len(models)} models", args.out / "overall" / "all")
+    plot_totals(all_means, f"Total tokens per task — average over {len(benches)} benchmarks × "
+                f"{len(models)} models", args.out / "overall" / "all_total")
     avg_rows.append(avg_row("ALL", "AVERAGE", list(cells.values()), summary_rows))
 
     # summary.csv
